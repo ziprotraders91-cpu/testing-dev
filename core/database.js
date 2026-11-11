@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - ENTERPRISE AUTO-POLLING & LIVE REALTIME ENGINE (ALL MODULES)
    File: core/database.js • Developed by Farhan Jawed
-   Architecture: Cross-Device Instant Sync (Mobile + PC) • Multi-Tenant Isolation
+   Architecture: Auto-Split Jobwork • Saree Stock Generator • Full Table Sync
 ============================================================================ */
 
 (() => {
@@ -106,7 +106,7 @@
         if (k.includes('material_transfer') || k.includes('transfer')) return 'material_transfers';
         if (k.includes('dukan')) return 'dukan_challans';
 
-        // 8. Job Work Sheets
+        // 8. Job Work Sheets (History)
         if (k.includes('jobwork_sheets_') || k.includes('jw_sheet_')) {
             const workerId = k.replace(/.*jobwork_sheets_/, '').replace(/.*jw_sheet_/, '');
             let workers = [];
@@ -124,7 +124,9 @@
         }
 
         // 9. Job Workers Directory
-        if (k.includes('jobwork_workers')) return 'JOBWORK_WORKERS_SPECIAL';
+        if (k.includes('jobwork_workers') || k.includes('cutting_workers') || k.includes('calender_workers')) {
+            return 'JOBWORK_WORKERS_SPECIAL';
+        }
 
         // 10. Job Work Bills & Payments
         if (k.includes('jw_bill') || k.includes('jobwork_bill') || k.includes('jw_payment') || k.includes('jobwork')) {
@@ -206,23 +208,18 @@
         }, 50);
     };
 
-    /**
-     * ⭐ SMART APPLY: Mobile aur PC dono ke LocalStorage me sahi prefix key se data dalta hai
-     */
     const smartApplyRemoteData = (targetKey, rowData) => {
         if (!targetKey || rowData === undefined || rowData === null) return false;
 
         const uid = getSafeUserId();
         const sess = getActiveSessionVal();
 
-        // 1. Direct short key
         let shortKey = targetKey;
         const prefix = `${uid}_${sess}_`;
         if (shortKey.startsWith(prefix)) {
             shortKey = shortKey.replace(prefix, '');
         }
 
-        // 2. Storage Engine ke memory cache aur localStorage dono me store karein
         const fullStorageKey = (typeof window.getStorageKey === 'function') 
             ? window.getStorageKey(shortKey) 
             : `${uid}_${sess}_${shortKey}`;
@@ -244,7 +241,7 @@
     };
 
     /**
-     * 🚀 CLOUD WRITE
+     * 🚀 CLOUD WRITE (CUTTING & CALENDER SPLITTER + SAREE STOCK AUTO-GENERATOR)
      */
     const cloudWrite = async (fullKey, data) => {
         if (!supabaseClient) return false;
@@ -260,6 +257,7 @@
         showSyncStatus('syncing');
 
         try {
+            // ⭐ 1. Jobwork Workers ko Cutting aur Calender me alag-alag daalo
             if (targetTable === 'JOBWORK_WORKERS_SPECIAL') {
                 const workers = Array.isArray(data) ? data : [];
                 const cuttingWorkers = workers.filter(w => String(w?.type || '').toLowerCase() === 'cutting');
@@ -291,6 +289,7 @@
                 return true;
             }
 
+            // ⭐ 2. Normal Table Save
             const cleanKey = String(fullKey).replace(`${uid}_${sess}_`, '').replace(`${uid}_`, '');
             const recordId = `${uid}_${sess}_${cleanKey}`;
 
@@ -313,6 +312,23 @@
                 return false;
             }
 
+            // ⭐ 3. Agar Saree History update hui hai, to Saree Stock table ko bhi auto-update karein!
+            if (targetTable === 'saree_history' && Array.isArray(data)) {
+                try {
+                    let groupedStock = [];
+                    if (typeof window.groupSareeStockByTab === 'function') {
+                        groupedStock = window.groupSareeStockByTab(data, 'fresh', 'all') || [];
+                    }
+                    if (groupedStock.length > 0) {
+                        await supabaseClient.from('saree_stock').upsert({
+                            id: `${uid}_${sess}_saree_stock`,
+                            user_id: uid, tenant_id: tid, session: sess,
+                            data: groupedStock, updated_at: new Date().toISOString()
+                        }, { onConflict: 'id' });
+                    }
+                } catch (_) {}
+            }
+
             isConnectedToCloud = true;
             showSyncStatus('online');
             return true;
@@ -324,7 +340,39 @@
     };
 
     /**
-     * 📥 CLOUD PULL: Mobile khulte hi Supabase se sara data lekar mobile screen par bharta hai
+     * 🌟 FORCE INITIAL PUSH: LocalStorage me maujood Cutting & Calender workers ko turant bhejein
+     */
+    const forceSyncLocalToCloudIfEmpty = async () => {
+        if (!supabaseClient || !navigator.onLine) return;
+        const uid = getSafeUserId();
+        const sess = getActiveSessionVal();
+
+        try {
+            let localWorkers = [];
+            if (typeof window.getStore === 'function') {
+                localWorkers = window.getStore('jobwork_workers') || [];
+            }
+            if (!localWorkers.length) {
+                localWorkers = JSON.parse(localStorage.getItem('jobwork_workers') || '[]');
+            }
+            if (localWorkers.length > 0) {
+                await cloudWrite(`${uid}_${sess}_jobwork_workers`, localWorkers);
+            }
+        } catch (_) {}
+
+        try {
+            let sHistory = [];
+            if (typeof window.getStore === 'function') {
+                sHistory = window.getStore('saree_history') || [];
+            }
+            if (sHistory.length > 0) {
+                await cloudWrite(`${uid}_${sess}_saree_history`, sHistory);
+            }
+        } catch (_) {}
+    };
+
+    /**
+     * 📥 CLOUD PULL
      */
     const pullAllCloudData = async (silent = true) => {
         if (!supabaseClient || !navigator.onLine) return;
@@ -391,6 +439,9 @@
             hasNewData = true;
         }
 
+        // Local me jo cutting/calender pehle se hai use turant Supabase me push karein
+        await forceSyncLocalToCloudIfEmpty();
+
         triggerSmartUIRepaint();
         showSyncStatus('online');
     };
@@ -420,7 +471,6 @@
                     }
                 });
 
-            // Pehli baar khulte hi turant pura cloud data pull karein
             pullAllCloudData(false);
         } catch (err) {
             console.warn('[CloudEngine] Realtime setup:', err);
@@ -458,6 +508,7 @@
         switchSessionListeners,
         cloudWrite,
         pullAllCloudData,
+        forceSyncLocalToCloudIfEmpty,
         triggerSmartUIRepaint
     };
 
