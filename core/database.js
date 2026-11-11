@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - ENTERPRISE AUTO-POLLING & LIVE REALTIME ENGINE (ALL MODULES)
    File: core/database.js • Developed by Farhan Jawed
-   Architecture: Clean Dynamic Routing • Multi-Tenant Privacy • Zero-Data-Loss
+   Architecture: Intelligent Auto-Split (Cutting & Calender) • Multi-Tenant Privacy
 ============================================================================ */
 
 (() => {
@@ -131,10 +131,8 @@
             return 'cutting_history'; // Default Cutting History
         }
 
-        // 9. Job Work Workers Directory
-        if (k.includes('jobwork_workers')) return 'cutting';
-        if (k.includes('calender_workers')) return 'calender';
-        if (k.includes('embroidery_workers')) return 'embroidery';
+        // 9. Job Workers List (Cutting vs Calender Auto-Splitter)
+        if (k.includes('jobwork_workers')) return 'JOBWORK_WORKERS_SPECIAL';
 
         // 10. Job Work Bills & Payments
         if (k.includes('jw_bill') || k.includes('jobwork_bill') || k.includes('jw_payment') || k.includes('jobwork')) {
@@ -152,7 +150,6 @@
 
         if (k.includes('sancha_list') || tableName === 'sancha_list') return 'sancha_items';
         if (k.includes('karigers') || tableName === 'karigers') return 'kariger_list';
-        if (tableName === 'cutting' && k.includes('jobwork_workers')) return 'jobwork_workers';
         if (tableName === 'job_work_bills' && k.includes('jw_bills_list')) return 'jw_bills_list';
         if (tableName === 'job_work_bills' && k.includes('jw_payments_list')) return 'jw_payments_list';
 
@@ -222,20 +219,17 @@
             if (bSec && bSec.style.display !== 'none') {
                 if (typeof window.renderBanaTable === 'function') window.renderBanaTable();
                 if (typeof window.applyPassbookFilters === 'function') window.applyPassbookFilters();
-                else if (typeof window.renderBanaPassbookRows === 'function') window.renderBanaPassbookRows();
             }
 
             const zSec = document.getElementById('zari-section');
             if (zSec && zSec.style.display !== 'none') {
                 if (typeof window.renderZariTable === 'function') window.renderZariTable();
                 if (typeof window.applyZariPassbookFilters === 'function') window.applyZariPassbookFilters();
-                else if (typeof window.renderZariPassbookRows === 'function') window.renderZariPassbookRows();
             }
 
             const sSec = document.getElementById('saree-section');
             if (sSec && sSec.style.display !== 'none') {
                 if (typeof window.renderSareeTable === 'function') window.renderSareeTable();
-                if (typeof window.applySareePassbookFilters === 'function') window.applySareePassbookFilters();
             }
 
             const sanchaSec = document.getElementById('sancha-section');
@@ -251,15 +245,8 @@
                 if (typeof window.updateJobWorkHubBadges === 'function') window.updateJobWorkHubBadges();
             }
 
-            if (typeof window.renderDashboardDayBook === 'function') {
-                window.renderDashboardDayBook();
-            }
-            if (typeof window.updateDashboardBadgeTotals === 'function') {
-                window.updateDashboardBadgeTotals();
-            }
-            if (typeof window.triggerActiveSectionRefresh === 'function') {
-                window.triggerActiveSectionRefresh();
-            }
+            if (typeof window.renderDashboardDayBook === 'function') window.renderDashboardDayBook();
+            if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
         }, 50);
     };
 
@@ -276,11 +263,6 @@
         } catch (_) {}
 
         if (Array.isArray(localData) && Array.isArray(rowData)) {
-            if (localData.length > 0 && rowData.length === 0) {
-                cloudWrite(targetKey, localData);
-                return false;
-            }
-
             const map = new Map();
             rowData.forEach((item) => {
                 if (!item) return;
@@ -318,7 +300,7 @@
     };
 
     /**
-     * 🚀 SECURE WRITE: Local Data ko sahi Supabase Cloud Table me Save karta hai
+     * 🚀 CLOUD WRITE (CUTTING & CALENDER LIST AUTO-SPLITTER)
      */
     const cloudWrite = async (fullKey, data) => {
         if (!supabaseClient) return false;
@@ -330,17 +312,49 @@
         const tid = getSafeTenantId();
         const sess = getActiveSessionVal();
 
-        if (!uid || uid === 'null' || uid === 'undefined') {
-            console.warn('[CloudEngine] Write blocked: User ID missing!');
-            return false;
-        }
-
+        if (!uid) return false;
         showSyncStatus('syncing');
 
-        const cleanKey = String(fullKey).replace(`${uid}_${sess}_`, '').replace(`${uid}_`, '');
-        const recordId = `${uid}_${sess}_${cleanKey}`;
-
         try {
+            // ⭐ SPECIAL CASE: Jobwork Workers ko Cutting aur Calender alag-alag tables me baanto
+            if (targetTable === 'JOBWORK_WORKERS_SPECIAL') {
+                const workers = Array.isArray(data) ? data : [];
+                const cuttingWorkers = workers.filter(w => String(w?.type || '').toLowerCase() === 'cutting');
+                const calenderWorkers = workers.filter(w => String(w?.type || '').toLowerCase() === 'calender');
+                const embroideryWorkers = workers.filter(w => String(w?.type || '').toLowerCase() === 'embroidery');
+
+                const now = new Date().toISOString();
+
+                // Save to cutting table
+                await supabaseClient.from('cutting').upsert({
+                    id: `${uid}_${sess}_cutting_workers`,
+                    user_id: uid, tenant_id: tid, session: sess,
+                    data: cuttingWorkers, updated_at: now
+                }, { onConflict: 'id' });
+
+                // Save to calender table
+                await supabaseClient.from('calender').upsert({
+                    id: `${uid}_${sess}_calender_workers`,
+                    user_id: uid, tenant_id: tid, session: sess,
+                    data: calenderWorkers, updated_at: now
+                }, { onConflict: 'id' });
+
+                // Save to embroidery table
+                await supabaseClient.from('embroidery').upsert({
+                    id: `${uid}_${sess}_embroidery_workers`,
+                    user_id: uid, tenant_id: tid, session: sess,
+                    data: embroideryWorkers, updated_at: now
+                }, { onConflict: 'id' });
+
+                isConnectedToCloud = true;
+                showSyncStatus('online');
+                return true;
+            }
+
+            // Normal tables write
+            const cleanKey = String(fullKey).replace(`${uid}_${sess}_`, '').replace(`${uid}_`, '');
+            const recordId = `${uid}_${sess}_${cleanKey}`;
+
             const payload = {
                 id: recordId,
                 user_id: uid,
@@ -355,7 +369,7 @@
                 .upsert(payload, { onConflict: 'id' });
 
             if (error) {
-                console.error(`❌ [Supabase Error in ${targetTable}]:`, error.message, error.details);
+                console.error(`❌ [Supabase Error in ${targetTable}]:`, error.message);
                 showSyncStatus('error');
                 return false;
             }
@@ -371,11 +385,10 @@
     };
 
     /**
-     * 📥 SECURE PULL: 🔒 Sabhi Tables Se Live Data Lata Hai
+     * 📥 CLOUD PULL (MERGING CUTTING & CALENDER BACK TO LOCAL)
      */
     const pullAllCloudData = async (silent = true) => {
         if (!supabaseClient || !navigator.onLine) return;
-
         const uid = getSafeUserId();
         if (!uid) return;
 
@@ -394,6 +407,7 @@
         ];
 
         let hasNewData = false;
+        const collectedWorkersMap = new Map();
 
         for (const tbl of tables) {
             try {
@@ -412,18 +426,30 @@
                             localKey = localKey.replace(prefix, '');
                         }
 
-                        const mappedLocalKey = mapCloudKeyToLocalKey(localKey, tbl);
+                        // Workers merging logic (Cutting + Calender + Embroidery -> jobwork_workers)
+                        if (tbl === 'cutting' || tbl === 'calender' || tbl === 'embroidery') {
+                            if (Array.isArray(row.data)) {
+                                row.data.forEach(w => {
+                                    if (w && w.id) collectedWorkersMap.set(String(w.id), w);
+                                });
+                            }
+                        }
 
+                        const mappedLocalKey = mapCloudKeyToLocalKey(localKey, tbl);
                         if (mappedLocalKey && row.data !== undefined) {
                             const updated = smartApplyRemoteData(mappedLocalKey, row.data);
-                            if (mappedLocalKey !== localKey) {
-                                smartApplyRemoteData(localKey, row.data);
-                            }
                             if (updated) hasNewData = true;
                         }
                     });
                 }
             } catch (_) {}
+        }
+
+        // Agar cutting/calender se workers mile hain to unhe jobwork_workers me daalo
+        if (collectedWorkersMap.size > 0) {
+            const allWorkers = Array.from(collectedWorkersMap.values());
+            const updated = smartApplyRemoteData('jobwork_workers', allWorkers);
+            if (updated) hasNewData = true;
         }
 
         if (hasNewData || !silent) {
@@ -435,7 +461,6 @@
     const initSupabaseRealtime = () => {
         if (!supabaseClient) return;
         detachSupabaseRealtime();
-
         const uid = getSafeUserId();
 
         try {
@@ -447,20 +472,7 @@
                         if (typeof window.isBackupPreviewMode !== 'undefined' && window.isBackupPreviewMode) return;
                         const row = payload.new;
                         if (row && row.user_id === uid && row.id && row.data !== undefined) {
-                            let localKey = row.id;
-                            const sess = getActiveSessionVal();
-                            const prefix = `${uid}_${sess}_`;
-
-                            if (localKey.startsWith(prefix)) {
-                                localKey = localKey.replace(prefix, '');
-                            }
-                            const mappedLocalKey = mapCloudKeyToLocalKey(localKey, payload.table);
-                            smartApplyRemoteData(mappedLocalKey, row.data);
-                            if (mappedLocalKey !== localKey) {
-                                smartApplyRemoteData(localKey, row.data);
-                            }
-                            triggerSmartUIRepaint();
-                            showSyncStatus('online');
+                            pullAllCloudData(true);
                         }
                     }
                 )
@@ -486,20 +498,14 @@
         } catch (_) {}
     };
 
-    const switchSessionListeners = () => {
-        pullAllCloudData(false);
-    };
+    const switchSessionListeners = () => { pullAllCloudData(false); };
 
     document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && navigator.onLine) {
-            pullAllCloudData(false);
-        }
+        if (!document.hidden && navigator.onLine) pullAllCloudData(false);
     });
 
     window.addEventListener('focus', () => {
-        if (navigator.onLine) {
-            pullAllCloudData(false);
-        }
+        if (navigator.onLine) pullAllCloudData(false);
     });
 
     const publicCloudAPI = {
@@ -522,10 +528,6 @@
     window.showSyncStatus = showSyncStatus;
     window.initSupabaseRealtime = initSupabaseRealtime;
     window.detachSupabaseRealtime = detachSupabaseRealtime;
-    window.initFirebaseLiveListeners = initSupabaseRealtime;
-    window.detachFirebaseLiveListeners = detachSupabaseRealtime;
-    window.switchSessionListeners = switchSessionListeners;
-    window.triggerSmartUIRepaint = triggerSmartUIRepaint;
     window.CloudEngine = publicCloudAPI;
     window.cloudWrite = cloudWrite;
     window.pullAllCloudData = pullAllCloudData;
