@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - ENTERPRISE AUTO-POLLING & LIVE REALTIME ENGINE (ALL MODULES)
    File: core/database.js • Developed by Farhan Jawed
-   Architecture: Loop-Protected Realtime • Smooth Repaint • 100% Reliable Sync
+   Architecture: App Settings & Session Sync to app_store • Multi-Device
 ============================================================================ */
 
 (() => {
@@ -136,29 +136,45 @@
         }
     };
 
+    /**
+     * ⭐ ROUTER: Session aur App Settings ko app_store me bhejein
+     */
     const resolveTargetTable = (fullKey) => {
         const k = String(fullKey).toLowerCase();
 
+        // 1. Session & Global Settings -> app_store
+        if (k.includes('session') || k.includes('app_store') || k.includes('info_ledger') || k.includes('karkhana_list')) {
+            return 'app_store';
+        }
+
+        // 2. Saree Module
         if (k.includes('saree_history')) return 'saree_history';
         if (k.includes('saree_stock') || k.includes('saree_items') || k.includes('saree')) return 'saree_stock';
 
+        // 3. Zari Module
         if (k.includes('zari_history')) return 'zari_history';
         if (k.includes('zari_stock') || k.includes('zari')) return 'zari_stock';
 
+        // 4. Bana Module
         if (k.includes('bana_history')) return 'bana_history';
         if (k.includes('bana_stock') || k.includes('bana')) return 'bana_stock';
 
+        // 5. Sancha Module
         if (k.includes('sancha_history')) return 'sancha_history';
         if (k.includes('sancha_items') || k.includes('sancha_list') || k.includes('sancha')) return 'sancha_list';
 
+        // 6. Karigers & Sheets
         if (k.includes('kariger_sheet') || k.includes('tani_sheet') || k.includes('tani_sheets')) return 'tani_sheets';
         if (k.includes('kariger_list') || k.includes('karigers') || k.includes('kariger')) return 'karigers';
 
+        // 7. Payments Module
         if (k.includes('payments') || k.includes('payment_list') || k.includes('kharcha')) return 'payments';
 
+        // 8. Godown & Dukan
         if (k.includes('material_transfer') || k.includes('transfer')) return 'material_transfers';
         if (k.includes('dukan')) return 'dukan_challans';
 
+        // 9. Job Work Sheets (History)
         if (k.includes('jobwork_sheets_') || k.includes('jw_sheet_')) {
             const workerId = k.replace(/.*jobwork_sheets_/, '').replace(/.*jw_sheet_/, '');
             const workers = getAllLocalWorkers();
@@ -170,15 +186,17 @@
             return 'cutting_history';
         }
 
+        // 10. Job Workers List
         if (k.includes('jobwork_workers') || k.includes('cutting_workers') || k.includes('calender_workers')) {
             return 'WORKERS_SPLIT_ACTION';
         }
 
+        // 11. Job Work Bills & Payments
         if (k.includes('jw_bill') || k.includes('jobwork_bill') || k.includes('jw_payment') || k.includes('jobwork')) {
             return 'job_work_bills';
         }
 
-        return null;
+        return 'app_store';
     };
 
     const mapCloudKeyToLocalKey = (cloudKey, tableName) => {
@@ -231,7 +249,6 @@
         }
     };
 
-    // ⭐ SMOOTH DEBOUNCED REPAINT (Screen bar-bar nahi hilegi)
     const triggerSmartUIRepaint = () => {
         const activeEl = document.activeElement;
         const isUserTyping = activeEl && ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeEl.tagName);
@@ -273,7 +290,7 @@
         try {
             const currentStr = localStorage.getItem(fullStorageKey);
             const newStr = JSON.stringify(rowData);
-            if (currentStr === newStr) return false; // Koi badlaav nahi to repaint mat karo
+            if (currentStr === newStr) return false;
 
             if (window.APP_MEMORY_CACHE) {
                 window.APP_MEMORY_CACHE[fullStorageKey] = rowData;
@@ -321,6 +338,12 @@
                 updated_at: new Date().toISOString()
             };
 
+            // app_store ke liye extra columns
+            if (targetTable === 'app_store') {
+                payload.key = String(fullKey);
+                payload.value = data;
+            }
+
             const { error } = await supabaseClient
                 .from(targetTable)
                 .upsert(payload, { onConflict: 'id' });
@@ -358,7 +381,7 @@
     };
 
     /**
-     * 📥 CLOUD PULL (LOOP GUARDED)
+     * 📥 CLOUD PULL
      */
     const pullAllCloudData = async (silent = true) => {
         if (!supabaseClient || !navigator.onLine || isSyncingInProgress) return;
@@ -369,6 +392,7 @@
         if (!silent) showSyncStatus('syncing');
 
         const tables = [
+            'app_store',
             'saree_stock', 'saree_history',
             'zari_stock', 'zari_history',
             'bana_stock', 'bana_history',
@@ -394,11 +418,11 @@
 
                 if (!error && data && data.length > 0) {
                     data.forEach((row) => {
-                        let localKey = row.id;
+                        let localKey = row.id || row.key;
                         const sess = getActiveSessionVal();
                         const prefix = `${uid}_${sess}_`;
 
-                        if (localKey.startsWith(prefix)) {
+                        if (localKey && localKey.startsWith(prefix)) {
                             localKey = localKey.replace(prefix, '');
                         }
 
@@ -411,8 +435,10 @@
                         }
 
                         const mappedLocalKey = mapCloudKeyToLocalKey(localKey, tbl);
-                        if (mappedLocalKey && row.data !== undefined) {
-                            const updated = smartApplyRemoteData(mappedLocalKey, row.data);
+                        const rowData = row.data !== undefined ? row.data : (row.value !== undefined ? row.value : row);
+
+                        if (mappedLocalKey && rowData !== undefined) {
+                            const updated = smartApplyRemoteData(mappedLocalKey, rowData);
                             if (updated) hasNewData = true;
                         }
                     });
@@ -426,7 +452,6 @@
             if (updated) hasNewData = true;
         }
 
-        // Pehli baar khulne par hi push karo, bar-bar loop me nahi
         if (!hasInitialPushed) {
             hasInitialPushed = true;
             await syncWorkersDirectToCuttingAndCalender();
@@ -453,7 +478,6 @@
                     (payload) => {
                         if (typeof window.isBackupPreviewMode !== 'undefined' && window.isBackupPreviewMode) return;
                         const row = payload.new;
-                        // Dusre device ka event aane par hi pull karo, khud ke loop ko roko
                         if (row && row.user_id === uid && !isSyncingInProgress) {
                             pullAllCloudData(true);
                         }
