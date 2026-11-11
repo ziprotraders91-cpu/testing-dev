@@ -30,6 +30,14 @@
 
     const getSafeUserId = () => {
         try {
+            if (window.currentUserProfile && window.currentUserProfile.id) {
+                return String(window.currentUserProfile.id).trim();
+            }
+            const authData = localStorage.getItem('app_active_session_auth');
+            if (authData) {
+                const parsed = JSON.parse(authData);
+                if (parsed.id) return String(parsed.id).trim();
+            }
             if (typeof window.getEffectiveUserId === 'function') {
                 const id = window.getEffectiveUserId();
                 if (id && id !== 'app') return id;
@@ -42,7 +50,7 @@
                 if (clean && clean !== 'app') return clean;
             }
         } catch (_) {}
-        return 'farhan';
+        return '10001';
     };
 
     const getUniqueItemNamesCaseInsensitive = (list) => {
@@ -147,11 +155,8 @@
 
         const uId = getSafeUserId();
 
-        // Detach Realtime Listeners cleanly during migration
         if (typeof window.detachSupabaseRealtime === 'function') {
             window.detachSupabaseRealtime();
-        } else if (typeof window.detachFirebaseLiveListeners === 'function') {
-            window.detachFirebaseLiveListeners();
         }
 
         if (typeof window.closeSessionClosingModal === 'function') {
@@ -171,10 +176,10 @@
                 <div style="background:#e2e8f0; height:10px; margin-bottom:14px; border-radius:5px; overflow:hidden;">
                     <div id="transfer-main-bar" style="background:#2563eb; width:0%; height:100%; transition:width 0.2s;"></div>
                 </div>
-                <div><span id="stage-badge-1" class="badge-blue">Waiting</span> <small id="stage-status-1">1. Kariger Opening (72 Pcs & Colors)</small><div style="background:#e2e8f0; height:4px; margin-top:4px;"><div id="stage-bar-1" style="background:#2563eb; width:0%; height:100%;"></div></div></div>
+                <div><span id="stage-badge-1" class="badge-blue">Waiting</span> <small id="stage-status-1">1. Kariger Opening</small><div style="background:#e2e8f0; height:4px; margin-top:4px;"><div id="stage-bar-1" style="background:#2563eb; width:0%; height:100%;"></div></div></div>
                 <div style="margin-top:10px;"><span id="stage-badge-2" class="badge-blue">Waiting</span> <small id="stage-status-2">2. Saree Opening Stock</small><div style="background:#e2e8f0; height:4px; margin-top:4px;"><div id="stage-bar-2" style="background:#2563eb; width:0%; height:100%;"></div></div></div>
-                <div style="margin-top:10px;"><span id="stage-badge-3" class="badge-blue">Waiting</span> <small id="stage-status-3">3. Bana & Zari 100% Exact Match Transfer</small><div style="background:#e2e8f0; height:4px; margin-top:4px;"><div id="stage-bar-3" style="background:#2563eb; width:0%; height:100%;"></div></div></div>
-                <div style="margin-top:10px;"><span id="stage-badge-4" class="badge-blue">Waiting</span> <small id="stage-status-4">4. Sancha (Tani/Chukka) Exact Transfer</small><div style="background:#e2e8f0; height:4px; margin-top:4px;"><div id="stage-bar-4" style="background:#2563eb; width:0%; height:100%;"></div></div></div>
+                <div style="margin-top:10px;"><span id="stage-badge-3" class="badge-blue">Waiting</span> <small id="stage-status-3">3. Bana & Zari Exact Match</small><div style="background:#e2e8f0; height:4px; margin-top:4px;"><div id="stage-bar-3" style="background:#2563eb; width:0%; height:100%;"></div></div></div>
+                <div style="margin-top:10px;"><span id="stage-badge-4" class="badge-blue">Waiting</span> <small id="stage-status-4">4. Sancha (Tani/Chukka) Exact Match</small><div style="background:#e2e8f0; height:4px; margin-top:4px;"><div id="stage-bar-4" style="background:#2563eb; width:0%; height:100%;"></div></div></div>
                 <div style="margin-top:10px;"><span id="stage-badge-5" class="badge-blue">Waiting</span> <small id="stage-status-5">5. Safe Cloud Commit</small><div style="background:#e2e8f0; height:4px; margin-top:4px;"><div id="stage-bar-5" style="background:#2563eb; width:0%; height:100%;"></div></div></div>`;
         }
 
@@ -196,7 +201,7 @@
     };
 
     /* ========================================================================
-       STAGE 1: KARIGER KHATA (Tani 72 Pcs & 8 Colors Carry Forward)
+       STAGE 1: KARIGER KHATA
        ======================================================================== */
     const runStage1_KarigersAsync = async (curSess, newSess) => {
         const rawKarigers = window.safeArray 
@@ -258,12 +263,12 @@
             await yieldThread();
         }
 
-        updateProgressUI(1, `✅ Done (${total} Karigers With Colors & 72 Pcs)`, 100, 20, true);
+        updateProgressUI(1, `✅ Done (${total} Karigers)`, 100, 20, true);
         await yieldThread(50);
     };
 
     /* ========================================================================
-       STAGE 2: SAREE STOCK (Opening Stock Exact Reconcile)
+       STAGE 2: SAREE STOCK
        ======================================================================== */
     const runStage2_SareeStockAsync = async (curSess, newSess) => {
         const rawHistory = window.safeArray 
@@ -275,7 +280,7 @@
             : (window.safeArray ? window.safeArray(window.getStore('karkhana_list')) : []);
         if (!karkhanas.length) karkhanas = [{ id: 'k_main', name: 'Main Godown', isDefault: true }];
 
-        const todayStr = (typeof window.getTodayDate === 'function') ? window.getTodayDate() : getToday();
+        const todayStr = (typeof window.getTodayDate === 'function') ? window.getTodayDate() : new Date().toISOString().split('T')[0];
         const tabs = ['fresh', 'cutting', 'finished', 'lott'];
         let seq = 0;
 
@@ -334,7 +339,7 @@
     };
 
     /* ========================================================================
-       STAGE 3: BANA & ZARI STOCK (100% RECONCILE)
+       STAGE 3: BANA & ZARI STOCK
        ======================================================================== */
     const runStage3_BanaZariStockAsync = async (curSess, newSess) => {
         let karkhanas = (typeof window.getKarkhanasSafe === 'function') 
@@ -342,10 +347,9 @@
             : (window.safeArray ? window.safeArray(window.getStore('karkhana_list')) : []);
         if (!karkhanas.length) karkhanas = [{ id: 'k_main', name: 'Main Godown', isDefault: true }];
 
-        const todayStr = (typeof window.getTodayDate === 'function') ? window.getTodayDate() : getToday();
+        const todayStr = (typeof window.getTodayDate === 'function') ? window.getTodayDate() : new Date().toISOString().split('T')[0];
         let bSeq = 0, zSeq = 0;
 
-        // 1. BANA SCANNING
         const rawBana = window.safeArray ? window.safeArray(window.getStore('bana_stock')) : [];
         const rawBHist = window.safeArray ? window.safeArray(window.getStore('bana_history')) : [];
         const uniqueBanaNames = getUniqueItemNamesCaseInsensitive([...rawBana, ...rawBHist]);
@@ -404,9 +408,8 @@
                     mainItem.openingAaya = mainItem.aaya;
                     mainItem.bacha = mainItem.aaya;
                 } else {
-                    const uniqueId = `bana_open_${Date.now()}_${++bSeq}`;
                     pipelineState.stage3_newBanaStock.push({
-                        id: uniqueId,
+                        id: `bana_open_${Date.now()}_${++bSeq}`,
                         name: bName,
                         date: todayStr,
                         aaya: remainingGap,
@@ -418,17 +421,11 @@
                         note: `📦 Opening Stock (${curSess} Se Aaya)`
                     });
                 }
-
-                const mainHist = pipelineState.stage3_newBanaHistory.find(x => x.name.toLowerCase() === bName.toLowerCase() && x.karkhanaId === 'k_main');
-                if (mainHist) {
-                    mainHist.aaya = safeNum(mainHist.aaya + remainingGap);
-                }
             }
 
             await yieldThread();
         }
 
-        // 2. ZARI SCANNING
         const rawZari = window.safeArray ? window.safeArray(window.getStore('zari_stock')) : [];
         const rawZHist = window.safeArray ? window.safeArray(window.getStore('zari_history')) : [];
         const uniqueZariNames = getUniqueItemNamesCaseInsensitive([...rawZari, ...rawZHist]);
@@ -478,34 +475,6 @@
                 }
             }
 
-            const remainingZGap = safeNum(totalZTarget - distributedZ);
-            if (remainingZGap > 0.05) {
-                const mainZItem = pipelineState.stage3_newZariStock.find(x => x.name.toLowerCase() === zName.toLowerCase() && x.karkhanaId === 'k_main');
-                if (mainZItem) {
-                    mainZItem.aaya = safeNum(mainZItem.aaya + remainingZGap);
-                    mainZItem.openingAaya = mainZItem.aaya;
-                    mainZItem.bacha = mainZItem.aaya;
-                } else {
-                    pipelineState.stage3_newZariStock.push({
-                        id: `zari_open_${Date.now()}_${++zSeq}`,
-                        name: zName,
-                        date: todayStr,
-                        aaya: remainingZGap,
-                        openingAaya: remainingZGap,
-                        gaya: 0,
-                        bacha: remainingZGap,
-                        karkhanaId: 'k_main',
-                        isOpening: true,
-                        note: `📦 Opening Stock (${curSess} Se Aaya)`
-                    });
-                }
-
-                const mainZHist = pipelineState.stage3_newZariHistory.find(x => x.name.toLowerCase() === zName.toLowerCase() && x.karkhanaId === 'k_main');
-                if (mainZHist) {
-                    mainZHist.aaya = safeNum(mainZHist.aaya + remainingZGap);
-                }
-            }
-
             await yieldThread();
         }
 
@@ -514,10 +483,10 @@
     };
 
     /* ========================================================================
-       STAGE 4: SANCHA (TANI & CHUKKA) & JOB WORK
+       STAGE 4: SANCHA & JOB WORK
        ======================================================================== */
     const runStage4_SanchaAndJobworkAsync = async (curSess, newSess) => {
-        const todayStr = (typeof window.getTodayDate === 'function') ? window.getTodayDate() : getToday();
+        const todayStr = (typeof window.getTodayDate === 'function') ? window.getTodayDate() : new Date().toISOString().split('T')[0];
         const rawSancha = window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [];
         let sSeq = 0;
 
@@ -587,7 +556,7 @@
     };
 
     /* ========================================================================
-       STAGE 5: ATOMIC COMMIT (SUPABASE CLOUD SYNCED)
+       STAGE 5: COMMIT
        ======================================================================== */
     const runStage5_FinalizeCommitAsync = async (curSess, newSess, uId) => {
         updateProgressUI(5, '⏳ Storing Core Data...', 10, 82);
@@ -606,12 +575,6 @@
         if (typeof window.idbPut === 'function') {
             await window.idbPut(`${uId}_app_sessions_list`, sessions);
             await window.idbPut(`${uId}_app_active_session`, newSess);
-        }
-
-        // ⭐ CLOUD SYNC FOR SESSIONS LIST (Pushes session list to Supabase so Computer syncs)
-        if (typeof window.CloudEngine?.cloudWrite === 'function') {
-            window.CloudEngine.cloudWrite(`${uId}_app_sessions_list`, sessions);
-            window.CloudEngine.cloudWrite(`${uId}_app_active_session`, newSess);
         }
 
         const persistGeneralStore = (key, data) => {
@@ -639,14 +602,6 @@
         for (const wId in pipelineState.stage4_newJwSheetsMap) {
             persistGeneralStore(`jobwork_sheets_${wId}`, pipelineState.stage4_newJwSheetsMap[wId]);
         }
-
-        persistGeneralStore('material_transfers', []);
-        persistGeneralStore('jw_bills_list', []);
-        persistGeneralStore('jw_payments_list', []);
-        persistGeneralStore('dukan_transfer_history', []);
-        persistGeneralStore('daybook_records', []);
-        persistGeneralStore('payment_records', []);
-        persistGeneralStore('dukan_records', []);
 
         const karigerKeys = Object.keys(pipelineState.stage1_newKarigerSheetsMap);
         const totalKarigers = karigerKeys.length;
@@ -679,9 +634,6 @@
         showClosingCelebrationScreen(newSess);
     };
 
-    /* ========================================================================
-       CELEBRATION & STARTUP
-       ======================================================================== */
     const showClosingCelebrationScreen = (newSess) => {
         const modal = document.getElementById('session-transfer-modal');
         if (!modal) return;
@@ -690,9 +642,6 @@
 
         const kCount = pipelineState.stage1_oldKarigers.length;
         const freshPcs = pipelineState.stage2_totFreshPcs;
-        const banaCount = pipelineState.stage3_newBanaStock.length;
-        const zariCount = pipelineState.stage3_newZariStock.length;
-        const sanchaCount = pipelineState.stage4_newSanchaItems.length;
 
         modalBody.innerHTML = `
             <div style="text-align:center; padding:15px;">
@@ -700,12 +649,8 @@
                 <h2 style="color:#1e3a8a; font-size:22px; font-weight:800; margin-bottom:6px;">NAYA SAAL MUBARAK HO!</h2>
                 <p style="color:#059669; font-size:14px; font-weight:700;">Session '${newSess}' 100% Accurate Shuru Ho Gaya!</p>
                 <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:12px; padding:14px; margin:16px 0; text-align:left; font-size:13px; display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-                    <div>🧵 <strong>Kariger Carry:</strong> ${kCount} Karigers Safe</div>
-                    <div>🥻 <strong>Saree Opening:</strong> ${freshPcs} Fresh Pcs</div>
-                    <div>🧶 <strong>Bana Items:</strong> ${banaCount} Items Safe</div>
-                    <div>✨ <strong>Zari Items:</strong> ${zariCount} Items Safe</div>
-                    <div>⚙️ <strong>Sancha Stock:</strong> ${sanchaCount} Items (Exact Match)</div>
-                    <div>✂️ <strong>Job Work Khata:</strong> Carry Forwarded</div>
+                    <div>🧵 <strong>Kariger:</strong> ${kCount} Karigers Safe</div>
+                    <div>🥻 <strong>Saree:</strong> ${freshPcs} Fresh Pcs</div>
                 </div>
                 <button type="button" class="btn" style="background:linear-gradient(135deg, #10b981, #059669); font-size:15px; font-weight:bold; padding:12px 24px; border-radius:8px; border:none; color:#ffffff; cursor:pointer;" onclick="completeNewSessionStartup('${newSess}')">🚀 Naye Saal Me Kaam Shuru Karein</button>
             </div>`;
@@ -713,7 +658,10 @@
         pipelineState = null;
     };
 
-    const completeNewSessionStartup = (targetSess) => {
+    /* ========================================================================
+       ⭐ COMPLETE STARTUP: DIRECT APP_STORE WRITE BEFORE RELOAD
+       ======================================================================== */
+    const completeNewSessionStartup = async (targetSess) => {
         const modal = document.getElementById('session-transfer-modal');
         if (modal) modal.style.display = 'none';
 
@@ -722,32 +670,41 @@
 
         safeSetLocalStorage(`${uId}_app_active_session`, s);
         if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[`${uId}_app_active_session`] = s;
-        if (typeof window.idbPut === 'function') window.idbPut(`${uId}_app_active_session`, s);
+        if (typeof window.idbPut === 'function') await window.idbPut(`${uId}_app_active_session`, s);
 
-        // ⭐ CLOUD SYNC COMMIT
-        if (typeof window.CloudEngine?.cloudWrite === 'function') {
-            window.CloudEngine.cloudWrite(`${uId}_app_active_session`, s);
+        // ⭐ CLOUD SYNC COMMIT (DIRECT TO SUPABASE APP_STORE)
+        const sb = window.supabaseClient || window.supabase;
+        if (sb && typeof sb.from === 'function') {
+            const now = new Date().toISOString();
+            await sb.from('app_store').upsert({
+                id: `${uId}_app_active_session`,
+                user_id: uId,
+                data: s,
+                key: `${uId}_app_active_session`,
+                value: s,
+                updated_at: now
+            }, { onConflict: 'id' });
+
             const curSessions = window.getAppSessions ? window.getAppSessions() : [];
             if (!curSessions.includes(s)) curSessions.push(s);
-            window.CloudEngine.cloudWrite(`${uId}_app_sessions_list`, curSessions);
-        }
 
-        if (typeof window.populateSessionDropdown === 'function') {
-            window.populateSessionDropdown();
+            await sb.from('app_store').upsert({
+                id: `${uId}_app_sessions_list`,
+                user_id: uId,
+                data: curSessions,
+                key: `${uId}_app_sessions_list`,
+                value: curSessions,
+                updated_at: now
+            }, { onConflict: 'id' });
         }
-
-        const sel = document.getElementById('app-session-select');
-        if (sel) sel.value = s;
 
         if (typeof window.clearMemoryCache === 'function') {
             window.clearMemoryCache();
         }
 
-        if (typeof window.invalidateSanchaCalcCache === 'function') {
-            window.invalidateSanchaCalcCache();
-        }
-
-        window.location.reload();
+        setTimeout(() => {
+            window.location.reload();
+        }, 400);
     };
 
     const sessionClosingAPI = {
@@ -760,7 +717,6 @@
         window[fnName] = sessionClosingAPI[fnName];
     });
 
-    // Object.assign to preserve all methods on SessionEngine without wiping
     window.SessionEngine = Object.assign(window.SessionEngine || {}, sessionClosingAPI);
 
     if (typeof module !== 'undefined' && module.exports) {
