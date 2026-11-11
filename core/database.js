@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - ENTERPRISE AUTO-POLLING & LIVE REALTIME ENGINE (ALL MODULES)
    File: core/database.js • Developed by Farhan Jawed
-   Architecture: Auto-Split Jobwork • Saree Stock Generator • Full Table Sync
+   Architecture: Direct Workers Synchronizer (Cutting + Calender) • 100% Reliable
 ============================================================================ */
 
 (() => {
@@ -76,45 +76,115 @@
         return '2026-2027';
     };
 
+    /**
+     * ⭐ LOCALSTORAGE DIRECT WORKERS SCANNER
+     */
+    const getAllLocalWorkers = () => {
+        let workers = [];
+        try {
+            if (typeof window.getStore === 'function') {
+                const w = window.getStore('jobwork_workers');
+                if (Array.isArray(w) && w.length > 0) return w;
+            }
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && k.includes('jobwork_workers')) {
+                    const parsed = JSON.parse(localStorage.getItem(k) || '[]');
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        return parsed;
+                    }
+                }
+            }
+        } catch (_) {}
+        return [];
+    };
+
+    /**
+     * ⭐ DIRECT PUSH: Cutting aur Calender ko sidhe unki tables me daalo
+     */
+    const syncWorkersDirectToCuttingAndCalender = async () => {
+        if (!supabaseClient || !navigator.onLine) return;
+
+        const uid = getSafeUserId();
+        const tid = getSafeTenantId();
+        const sess = getActiveSessionVal();
+        const now = new Date().toISOString();
+
+        const allWorkers = getAllLocalWorkers();
+        if (!allWorkers || allWorkers.length === 0) return;
+
+        const cuttingWorkers = allWorkers.filter(w => String(w?.type || '').toLowerCase() === 'cutting');
+        const calenderWorkers = allWorkers.filter(w => String(w?.type || '').toLowerCase() === 'calender');
+        const embroideryWorkers = allWorkers.filter(w => String(w?.type || '').toLowerCase() === 'embroidery');
+
+        // 1. Push Cutting
+        if (cuttingWorkers.length > 0) {
+            const { error: cErr } = await supabaseClient.from('cutting').upsert({
+                id: `${uid}_${sess}_cutting_workers`,
+                user_id: uid, tenant_id: tid, session: sess,
+                data: cuttingWorkers, updated_at: now
+            }, { onConflict: 'id' });
+
+            if (cErr) console.error("❌ [Cutting Push Error]:", cErr);
+            else console.log(`🟢 [Sync] Cutting table updated with ${cuttingWorkers.length} Kariger!`);
+        }
+
+        // 2. Push Calender
+        if (calenderWorkers.length > 0) {
+            const { error: calErr } = await supabaseClient.from('calender').upsert({
+                id: `${uid}_${sess}_calender_workers`,
+                user_id: uid, tenant_id: tid, session: sess,
+                data: calenderWorkers, updated_at: now
+            }, { onConflict: 'id' });
+
+            if (calErr) console.error("❌ [Calender Push Error]:", calErr);
+            else console.log(`🟢 [Sync] Calender table updated with ${calenderWorkers.length} Kariger!`);
+        }
+
+        // 3. Push Embroidery
+        if (embroideryWorkers.length > 0) {
+            await supabaseClient.from('embroidery').upsert({
+                id: `${uid}_${sess}_embroidery_workers`,
+                user_id: uid, tenant_id: tid, session: sess,
+                data: embroideryWorkers, updated_at: now
+            }, { onConflict: 'id' });
+        }
+    };
+
     const resolveTargetTable = (fullKey) => {
         const k = String(fullKey).toLowerCase();
 
-        // 1. Saree Module
+        // Saree
         if (k.includes('saree_history')) return 'saree_history';
         if (k.includes('saree_stock') || k.includes('saree_items') || k.includes('saree')) return 'saree_stock';
 
-        // 2. Zari Module
+        // Zari
         if (k.includes('zari_history')) return 'zari_history';
         if (k.includes('zari_stock') || k.includes('zari')) return 'zari_stock';
 
-        // 3. Bana Module
+        // Bana
         if (k.includes('bana_history')) return 'bana_history';
         if (k.includes('bana_stock') || k.includes('bana')) return 'bana_stock';
 
-        // 4. Sancha Module
+        // Sancha
         if (k.includes('sancha_history')) return 'sancha_history';
         if (k.includes('sancha_items') || k.includes('sancha_list') || k.includes('sancha')) return 'sancha_list';
 
-        // 5. Karigers & Sheets
+        // Karigers
         if (k.includes('kariger_sheet') || k.includes('tani_sheet') || k.includes('tani_sheets')) return 'tani_sheets';
         if (k.includes('kariger_list') || k.includes('karigers') || k.includes('kariger')) return 'karigers';
 
-        // 6. Payments Module
+        // Payments
         if (k.includes('payments') || k.includes('payment_list') || k.includes('kharcha')) return 'payments';
 
-        // 7. Godown & Dukan
+        // Transfers
         if (k.includes('material_transfer') || k.includes('transfer')) return 'material_transfers';
         if (k.includes('dukan')) return 'dukan_challans';
 
-        // 8. Job Work Sheets (History)
+        // Monthly Sheets History (Cutting vs Calender)
         if (k.includes('jobwork_sheets_') || k.includes('jw_sheet_')) {
             const workerId = k.replace(/.*jobwork_sheets_/, '').replace(/.*jw_sheet_/, '');
-            let workers = [];
-            try {
-                if (typeof window.getStore === 'function') workers = window.getStore('jobwork_workers') || [];
-                if (!workers.length) workers = JSON.parse(localStorage.getItem('jobwork_workers') || '[]');
-            } catch (_) {}
-
+            const workers = getAllLocalWorkers();
             const found = workers.find(w => w && String(w.id).toLowerCase() === workerId.toLowerCase());
             const wType = String(found?.type || '').toLowerCase();
 
@@ -123,12 +193,12 @@
             return 'cutting_history';
         }
 
-        // 9. Job Workers Directory
+        // Job Workers List
         if (k.includes('jobwork_workers') || k.includes('cutting_workers') || k.includes('calender_workers')) {
-            return 'JOBWORK_WORKERS_SPECIAL';
+            return 'WORKERS_SPLIT_ACTION';
         }
 
-        // 10. Job Work Bills & Payments
+        // Bills
         if (k.includes('jw_bill') || k.includes('jobwork_bill') || k.includes('jw_payment') || k.includes('jobwork')) {
             return 'job_work_bills';
         }
@@ -241,13 +311,19 @@
     };
 
     /**
-     * 🚀 CLOUD WRITE (CUTTING & CALENDER SPLITTER + SAREE STOCK AUTO-GENERATOR)
+     * 🚀 CLOUD WRITE
      */
     const cloudWrite = async (fullKey, data) => {
         if (!supabaseClient) return false;
 
         const targetTable = resolveTargetTable(fullKey);
         if (!targetTable) return false;
+
+        // Workers ko split karke direct cutting/calender me daalo
+        if (targetTable === 'WORKERS_SPLIT_ACTION') {
+            await syncWorkersDirectToCuttingAndCalender();
+            return true;
+        }
 
         const uid = getSafeUserId();
         const tid = getSafeTenantId();
@@ -257,39 +333,6 @@
         showSyncStatus('syncing');
 
         try {
-            // ⭐ 1. Jobwork Workers ko Cutting aur Calender me alag-alag daalo
-            if (targetTable === 'JOBWORK_WORKERS_SPECIAL') {
-                const workers = Array.isArray(data) ? data : [];
-                const cuttingWorkers = workers.filter(w => String(w?.type || '').toLowerCase() === 'cutting');
-                const calenderWorkers = workers.filter(w => String(w?.type || '').toLowerCase() === 'calender');
-                const embroideryWorkers = workers.filter(w => String(w?.type || '').toLowerCase() === 'embroidery');
-
-                const now = new Date().toISOString();
-
-                await supabaseClient.from('cutting').upsert({
-                    id: `${uid}_${sess}_cutting_workers`,
-                    user_id: uid, tenant_id: tid, session: sess,
-                    data: cuttingWorkers, updated_at: now
-                }, { onConflict: 'id' });
-
-                await supabaseClient.from('calender').upsert({
-                    id: `${uid}_${sess}_calender_workers`,
-                    user_id: uid, tenant_id: tid, session: sess,
-                    data: calenderWorkers, updated_at: now
-                }, { onConflict: 'id' });
-
-                await supabaseClient.from('embroidery').upsert({
-                    id: `${uid}_${sess}_embroidery_workers`,
-                    user_id: uid, tenant_id: tid, session: sess,
-                    data: embroideryWorkers, updated_at: now
-                }, { onConflict: 'id' });
-
-                isConnectedToCloud = true;
-                showSyncStatus('online');
-                return true;
-            }
-
-            // ⭐ 2. Normal Table Save
             const cleanKey = String(fullKey).replace(`${uid}_${sess}_`, '').replace(`${uid}_`, '');
             const recordId = `${uid}_${sess}_${cleanKey}`;
 
@@ -312,7 +355,7 @@
                 return false;
             }
 
-            // ⭐ 3. Agar Saree History update hui hai, to Saree Stock table ko bhi auto-update karein!
+            // Saree Stock Auto-Update
             if (targetTable === 'saree_history' && Array.isArray(data)) {
                 try {
                     let groupedStock = [];
@@ -337,38 +380,6 @@
             showSyncStatus('error');
             return false;
         }
-    };
-
-    /**
-     * 🌟 FORCE INITIAL PUSH: LocalStorage me maujood Cutting & Calender workers ko turant bhejein
-     */
-    const forceSyncLocalToCloudIfEmpty = async () => {
-        if (!supabaseClient || !navigator.onLine) return;
-        const uid = getSafeUserId();
-        const sess = getActiveSessionVal();
-
-        try {
-            let localWorkers = [];
-            if (typeof window.getStore === 'function') {
-                localWorkers = window.getStore('jobwork_workers') || [];
-            }
-            if (!localWorkers.length) {
-                localWorkers = JSON.parse(localStorage.getItem('jobwork_workers') || '[]');
-            }
-            if (localWorkers.length > 0) {
-                await cloudWrite(`${uid}_${sess}_jobwork_workers`, localWorkers);
-            }
-        } catch (_) {}
-
-        try {
-            let sHistory = [];
-            if (typeof window.getStore === 'function') {
-                sHistory = window.getStore('saree_history') || [];
-            }
-            if (sHistory.length > 0) {
-                await cloudWrite(`${uid}_${sess}_saree_history`, sHistory);
-            }
-        } catch (_) {}
     };
 
     /**
@@ -439,8 +450,8 @@
             hasNewData = true;
         }
 
-        // Local me jo cutting/calender pehle se hai use turant Supabase me push karein
-        await forceSyncLocalToCloudIfEmpty();
+        // ⭐ Sabhi local workers ko turant Cutting aur Calender me push karein
+        await syncWorkersDirectToCuttingAndCalender();
 
         triggerSmartUIRepaint();
         showSyncStatus('online');
@@ -508,7 +519,7 @@
         switchSessionListeners,
         cloudWrite,
         pullAllCloudData,
-        forceSyncLocalToCloudIfEmpty,
+        syncWorkersDirectToCuttingAndCalender,
         triggerSmartUIRepaint
     };
 
