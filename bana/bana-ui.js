@@ -10,12 +10,12 @@
     window.currentBanaKarkhanaFilter = 'all';
     window.currentPassbookBanaItem = '';
 
-    // 📱 PAGINATION STATE
+    // 📱 PAGINATION STATE - PASSBOOK TABLE (20 Items / Page)
     let passbookCurrentPage = 1;
     const PASSBOOK_PAGE_SIZE = 20;
     let filteredPassbookCache = [];
 
-    // Main Bana Stock Table Pagination State
+    // 📱 PAGINATION STATE - MAIN BANA TABLE (15 Items / Page)
     let banaStockCurrentPage = 1;
     const BANA_STOCK_PAGE_SIZE = 15;
     let currentBanaFilteredRowsCache = [];
@@ -43,8 +43,7 @@
 
     /* ========================================================================
        1. NAVIGATION & TABS
-       ------------------------------------------------------------------------
-    ======================================================================== */
+       ======================================================================== */
     const openBanaModule = () => {
         setDisplay('dashboard-view', 'none');
         setDisplay('bana-section', 'block');
@@ -92,8 +91,7 @@
 
     /* ========================================================================
        2. INWARD PURCHASE ENGINE
-       ------------------------------------------------------------------------
-    ======================================================================== */
+       ======================================================================== */
     const toggleBanaForm = () => {
         const f = document.getElementById('add-bana-form');
         if (!f) return;
@@ -191,7 +189,6 @@
         alert(`✅ ${qty.toFixed(2)} Kg Bana Stock me jama ho gaya!`);
     };
 
-    // 🔍 LIVE SEARCH BINDER
     const bindBanaSearchInput = () => {
         const searchInp = document.getElementById('search-bana-input');
         if (searchInp && !searchInp.dataset.bound) {
@@ -209,9 +206,8 @@
     };
 
     /* ========================================================================
-       3. MAIN BANA TABLE RENDERER
-       ------------------------------------------------------------------------
-    ======================================================================== */
+       3. MAIN BANA TABLE RENDERER (WITH COMPLETE PAGINATION)
+       ======================================================================== */
     const renderBanaTable = () => {
         bindBanaSearchInput();
 
@@ -284,6 +280,7 @@
             tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:20px; color:#888;'>Koi Bana Stock nahi mila.</td></tr>";
             if (pager) pager.innerHTML = '';
         } else {
+            // ⭐ पेजिनेशन कैलकुलेशन
             const totalPages = Math.ceil(totalEntries / BANA_STOCK_PAGE_SIZE) || 1;
             if (banaStockCurrentPage > totalPages) banaStockCurrentPage = totalPages;
             if (banaStockCurrentPage < 1) banaStockCurrentPage = 1;
@@ -339,8 +336,7 @@
 
     /* ========================================================================
        4. INTER-GODOWN TRANSFER POPUP
-       ------------------------------------------------------------------------
-    ======================================================================== */
+       ======================================================================== */
     const openBanaTransferModal = (safeName, availableBacha) => {
         const itemName = decodeURIComponent(safeName);
         const existingModal = document.getElementById('bana-transfer-popup-modal');
@@ -437,9 +433,8 @@
     };
 
     /* ========================================================================
-       5. 📱 PAGINATED BANA PASSBOOK ENGINE (WITH A6 PRINT)
-       ------------------------------------------------------------------------
-    ======================================================================== */
+       5. 📱 PAGINATED BANA PASSBOOK ENGINE (WITH COMPLETE PAGINATION)
+       ======================================================================== */
     const openBanaPassbook = (safeName) => {
         window.currentPassbookBanaItem = decodeURIComponent(safeName);
         passbookCurrentPage = 1;
@@ -543,6 +538,7 @@
             return;
         }
 
+        // ⭐ पेजिनेशन कैलकुलेशन (Passbook)
         const totalPages = Math.ceil(totalEntries / PASSBOOK_PAGE_SIZE);
         if (passbookCurrentPage > totalPages) passbookCurrentPage = totalPages;
         if (passbookCurrentPage < 1) passbookCurrentPage = 1;
@@ -617,8 +613,7 @@
 
     /* ========================================================================
        6. A6 PAPER & THERMAL PRINTER PRINT ENGINES
-       ------------------------------------------------------------------------
-    ======================================================================== */
+       ======================================================================== */
     const getKarkhanaPrintName = (kId) => {
         if (!kId || kId === 'all') return 'Sabhi Karkhane (All Units)';
         if (typeof window.getKarkhanaNameById === 'function') {
@@ -899,8 +894,7 @@
 
     /* ========================================================================
        7. DELETE & EDIT ENGINES
-       ------------------------------------------------------------------------
-    ======================================================================== */
+       ======================================================================== */
     const deleteBanaHistoryEntry = (histId) => {
         if (!confirm('Kya aap sach me ye entry DELETE karna chahte hain?\nStock balance wapas sahi settle ho jayega.')) return;
 
@@ -1069,8 +1063,7 @@
 
     /* ========================================================================
        8. GLOBAL EXPORTS
-       ------------------------------------------------------------------------
-    ======================================================================== */
+       ======================================================================== */
     const banaUIAPI = {
         openBanaModule,
         renderBanaKarkhanaTabs,
