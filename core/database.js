@@ -1,13 +1,12 @@
 /* ============================================================================
    SIMPLICITY ERP - ENTERPRISE AUTO-POLLING & LIVE REALTIME ENGINE (ALL MODULES)
    File: core/database.js • Developed by Farhan Jawed
-   Architecture: App Settings & Session Sync to app_store • Multi-Device
+   Architecture: Cross-Device Realtime Session Lock • Multi-Device Isolation
 ============================================================================ */
 
 (() => {
     'use strict';
 
-    // 🚀 SUPABASE CONFIGURATION
     const SUPABASE_CONFIG = Object.freeze({
         url: "https://mvbejtoylowskerlgfxs.supabase.co",
         anonKey: "sb_publishable_NhTU4xzRMi0gtKH4CzVf_Q_lRfzjg3c"
@@ -44,9 +43,7 @@
                 const id = window.getEffectiveUserId();
                 if (id && id !== 'app') return id;
             }
-            const stored = localStorage.getItem('currentUserId') || 
-                           localStorage.getItem('app_current_user_id') || 
-                           sessionStorage.getItem('currentUserId');
+            const stored = localStorage.getItem('app_current_user_id') || localStorage.getItem('currentUserId');
             if (stored) {
                 const clean = String(stored).trim().replace(/[^a-zA-Z0-9_@-]/g, '');
                 if (clean && clean !== 'app') return clean;
@@ -58,8 +55,7 @@
     const getSafeTenantId = () => {
         try {
             if (window.currentTenantId) return String(window.currentTenantId).trim();
-            const stored = localStorage.getItem('app_current_tenant_id') || 
-                           localStorage.getItem('tenantId');
+            const stored = localStorage.getItem('app_current_tenant_id') || localStorage.getItem('tenantId');
             if (stored) return String(stored).trim();
         } catch (_) {}
         return getSafeUserId();
@@ -71,8 +67,7 @@
                 return window.getActiveFinancialSession();
             }
             const uId = getSafeUserId();
-            const stored = localStorage.getItem(`${uId}_app_active_session`) || 
-                           localStorage.getItem('app_active_session');
+            const stored = localStorage.getItem(`${uId}_app_active_session`) || localStorage.getItem('app_active_session');
             if (stored) return String(stored).replace(/['"]+/g, '').trim();
         } catch (_) {}
         return '2026-2027';
@@ -136,45 +131,33 @@
         }
     };
 
-    /**
-     * ⭐ ROUTER: Session aur App Settings ko app_store me bhejein
-     */
     const resolveTargetTable = (fullKey) => {
         const k = String(fullKey).toLowerCase();
 
-        // 1. Session & Global Settings -> app_store
         if (k.includes('session') || k.includes('app_store') || k.includes('info_ledger') || k.includes('karkhana_list')) {
             return 'app_store';
         }
 
-        // 2. Saree Module
         if (k.includes('saree_history')) return 'saree_history';
         if (k.includes('saree_stock') || k.includes('saree_items') || k.includes('saree')) return 'saree_stock';
 
-        // 3. Zari Module
         if (k.includes('zari_history')) return 'zari_history';
         if (k.includes('zari_stock') || k.includes('zari')) return 'zari_stock';
 
-        // 4. Bana Module
         if (k.includes('bana_history')) return 'bana_history';
         if (k.includes('bana_stock') || k.includes('bana')) return 'bana_stock';
 
-        // 5. Sancha Module
         if (k.includes('sancha_history')) return 'sancha_history';
         if (k.includes('sancha_items') || k.includes('sancha_list') || k.includes('sancha')) return 'sancha_list';
 
-        // 6. Karigers & Sheets
         if (k.includes('kariger_sheet') || k.includes('tani_sheet') || k.includes('tani_sheets')) return 'tani_sheets';
         if (k.includes('kariger_list') || k.includes('karigers') || k.includes('kariger')) return 'karigers';
 
-        // 7. Payments Module
         if (k.includes('payments') || k.includes('payment_list') || k.includes('kharcha')) return 'payments';
 
-        // 8. Godown & Dukan
         if (k.includes('material_transfer') || k.includes('transfer')) return 'material_transfers';
         if (k.includes('dukan')) return 'dukan_challans';
 
-        // 9. Job Work Sheets (History)
         if (k.includes('jobwork_sheets_') || k.includes('jw_sheet_')) {
             const workerId = k.replace(/.*jobwork_sheets_/, '').replace(/.*jw_sheet_/, '');
             const workers = getAllLocalWorkers();
@@ -186,12 +169,10 @@
             return 'cutting_history';
         }
 
-        // 10. Job Workers List
         if (k.includes('jobwork_workers') || k.includes('cutting_workers') || k.includes('calender_workers')) {
             return 'WORKERS_SPLIT_ACTION';
         }
 
-        // 11. Job Work Bills & Payments
         if (k.includes('jw_bill') || k.includes('jobwork_bill') || k.includes('jw_payment') || k.includes('jobwork')) {
             return 'job_work_bills';
         }
@@ -329,6 +310,25 @@
             const cleanKey = String(fullKey).replace(`${uid}_${sess}_`, '').replace(`${uid}_`, '');
             const recordId = `${uid}_${sess}_${cleanKey}`;
 
+            // app_store ke liye Safe Write (Delete + Insert)
+            if (targetTable === 'app_store') {
+                await supabaseClient.from('app_store').delete().eq('id', recordId);
+                const { error: appErr } = await supabaseClient.from('app_store').insert({
+                    id: recordId,
+                    user_id: uid,
+                    tenant_id: tid,
+                    session: sess,
+                    data: data,
+                    key: String(fullKey),
+                    value: data,
+                    updated_at: new Date().toISOString()
+                });
+                if (appErr) console.error("❌ app_store write error:", appErr);
+                isConnectedToCloud = true;
+                showSyncStatus('online');
+                return true;
+            }
+
             const payload = {
                 id: recordId,
                 user_id: uid,
@@ -337,12 +337,6 @@
                 data: data,
                 updated_at: new Date().toISOString()
             };
-
-            // app_store ke liye extra columns
-            if (targetTable === 'app_store') {
-                payload.key = String(fullKey);
-                payload.value = data;
-            }
 
             const { error } = await supabaseClient
                 .from(targetTable)
@@ -380,9 +374,6 @@
         }
     };
 
-    /**
-     * 📥 CLOUD PULL
-     */
     const pullAllCloudData = async (silent = true) => {
         if (!supabaseClient || !navigator.onLine || isSyncingInProgress) return;
         const uid = getSafeUserId();
@@ -448,8 +439,8 @@
 
         if (collectedWorkersMap.size > 0) {
             const allWorkers = Array.from(collectedWorkersMap.values());
-            const updated = smartApplyRemoteData('jobwork_workers', allWorkers);
-            if (updated) hasNewData = true;
+            smartApplyRemoteData('jobwork_workers', allWorkers);
+            hasNewData = true;
         }
 
         if (!hasInitialPushed) {
@@ -465,6 +456,9 @@
         showSyncStatus('online');
     };
 
+    /**
+     * ⭐ LIVE REALTIME: Dusre device par session badalte hi turant pakad kar switch karega
+     */
     const initSupabaseRealtime = () => {
         if (!supabaseClient) return;
         detachSupabaseRealtime();
@@ -478,7 +472,25 @@
                     (payload) => {
                         if (typeof window.isBackupPreviewMode !== 'undefined' && window.isBackupPreviewMode) return;
                         const row = payload.new;
-                        if (row && row.user_id === uid && !isSyncingInProgress) {
+                        if (!row || row.user_id !== uid) return;
+
+                        // ⭐ 1. LIVE CROSS-DEVICE ACTIVE SESSION SWITCH
+                        const rKey = String(row.key || row.id || '');
+                        if (rKey.includes('app_active_session')) {
+                            const cloudActiveSess = String(row.data !== undefined ? row.data : row.value).replace(/['"]+/g, '').trim();
+                            const currentLocalSess = getActiveSessionVal();
+
+                            if (/^\d{4}-\d{4}$/.test(cloudActiveSess) && cloudActiveSess !== currentLocalSess) {
+                                console.log(`[CrossDeviceRealtime] Active Session changed on another device: ${cloudActiveSess}`);
+                                localStorage.setItem(`${uid}_app_active_session`, cloudActiveSess);
+                                if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[`${uid}_app_active_session`] = cloudActiveSess;
+                                window.location.reload();
+                                return;
+                            }
+                        }
+
+                        // ⭐ 2. Normal Data Sync
+                        if (!isSyncingInProgress) {
                             pullAllCloudData(true);
                         }
                     }
