@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - HIGH-PERFORMANCE ROZANA DAY-BOOK & DASHBOARD ENGINE
    File: daybook/daybook.js • Developed by Farhan Jawed
-   (Universal Section Isolation + Pagination + Clean Tabs & A6 Print)
+   (Dynamic Store Aggregation + 15-Item Pagination + Zero Extra Tables + A6 Print)
 ============================================================================ */
 
 (() => {
@@ -11,6 +11,7 @@
     window.currentDashboardKarkhanaFilter = 'all';
     window.badgeCalculationTimer = null;
 
+    // 📱 PAGINATION STATE (15 Entries / Page)
     let daybookCurrentPage = 1;
     const DAYBOOK_PAGE_SIZE = 15;
     let currentDaybookFilteredRowsCache = [];
@@ -141,7 +142,7 @@
     };
 
     /* ========================================================================
-       DAY-BOOK RENDER ENGINE
+       DAY-BOOK RENDER ENGINE (DYNAMIC READ FROM SOURCE STORES)
        ======================================================================== */
     const renderDashboardDayBook = () => {
         const d = document.getElementById('dash-day-date')?.value || getToday();
@@ -173,6 +174,7 @@
         const searchInp = document.getElementById('dash-daybook-search') || document.getElementById('search-daybook-input');
         const searchTxt = searchInp ? searchInp.value.toLowerCase().trim() : '';
 
+        // 1. BANA & ZARI STOCK INWARD
         let bIn = 0, bOut = 0, zIn = 0, zOut = 0, pIn = 0, pOut = 0;
         const bStock = window.safeArray ? window.safeArray(window.getStore('bana_stock')) : [];
         const zStock = window.safeArray ? window.safeArray(window.getStore('zari_stock')) : [];
@@ -189,6 +191,7 @@
             }
         });
 
+        // 2. WEAVER CONSUMPTION & WAGE PAYMENTS (Tani Sheets)
         const karList = (typeof window.sanitizeKarigerList === 'function') 
             ? window.sanitizeKarigerList() 
             : (window.safeArray ? window.safeArray(window.getStore('kariger_list')) : []);
@@ -217,6 +220,7 @@
             });
         });
 
+        // 3. MATERIAL TRANSFERS
         const transfers = (window.safeArray ? window.safeArray(window.getStore('material_transfers')) : [])
             .filter((t) => t?.date === d);
 
@@ -234,20 +238,22 @@
             }
         });
 
-        const dbEntries = (window.safeArray ? window.safeArray(window.getStore('daybook_entries')) : [])
+        // 4. ⭐ DEDICATED PAYMENTS STORE READ (Separated from Daybook)
+        const payRecords = (window.safeArray ? window.safeArray(window.getStore('payment_records')) : [])
             .filter((x) => x?.date === d);
 
-        dbEntries.forEach((e) => {
+        payRecords.forEach((e) => {
             if (!matchesGodown(e.karkhanaId, targetKid)) return;
-
             const amt = safeNum(e.amount);
-            if (e.type === 'receipt') {
+
+            if (e.type === 'cash_transfer_in' || e.type === 'receipt') {
                 pIn += amt;
-            } else if (e.type === 'payment' && !e.karigerId) {
+            } else if ((e.type === 'cash_transfer_out' || e.type === 'payment') && !e.karigerId) {
                 pOut += amt;
             }
         });
 
+        // 5. SAREE MOVEMENTS
         const rawSareeHistory = window.safeArray ? window.safeArray(window.getStore('saree_history')) : [];
         const sH = [];
 
@@ -298,6 +304,7 @@
             sOut += safeInt(h.gai);
         });
 
+        // 6. SANCHA MOVEMENTS
         const sanchaHist = (window.safeArray ? window.safeArray(window.getStore('sancha_history')) : [])
             .filter((h) => h?.date === d && matchesGodown(h.karkhanaId, targetKid));
 
@@ -307,6 +314,7 @@
             sanchaOut += safeNum(h.gaya);
         });
 
+        // Subtitle badges update
         setElementText('sub-day-bana', `In: +${bIn.toFixed(1)} | Out: -${bOut.toFixed(1)}`);
         setElementText('sub-day-zari', `In: +${zIn.toFixed(1)} | Out: -${zOut.toFixed(1)}`);
         setElementText('sub-day-saree', `In: +${sIn} | Out: -${sOut}`);
@@ -487,11 +495,12 @@
             sRows.forEach(h => { curIn += safeInt(h.aai); curOut += safeInt(h.gai); });
             tfoot.innerHTML = `<tr><td colspan='2'><strong>Kul Saree:</strong></td><td><strong style='color:#059669;'>+${curIn} Pcs</strong></td><td><strong style='color:#dc2626;'>-${curOut} Pcs</strong></td><td>-</td></tr>`;
 
-        // ================= TAB 4: PAYMENT =================
+        // ================= TAB 4: PAYMENT (DIRECT FROM PAYMENT_RECORDS) =================
         } else if (window.currentDayBookTab === 'payment') {
             thead.innerHTML = "<tr style='background:#7c3aed; color:white;'><th>Party / Kariger</th><th>Vivran / Khata</th><th>📥 Aamad (In)</th><th>📤 Diya (Out)</th></tr>";
             let pRows = [];
 
+            // 1. Kariger Tani Sheets Wages
             karList.forEach((k) => {
                 if (!matchesGodown(k.karkhanaId, targetKid)) return;
 
@@ -511,14 +520,16 @@
                 });
             });
 
-            dbEntries.forEach((e) => {
-                if (!matchesGodown(e.karkhanaId, targetKid) || e.karigerId) return;
+            // 2. Dedicated Payments Store (Cash Transfers & Standalone Receipts/Payments)
+            payRecords.forEach((e) => {
+                if (!matchesGodown(e.karkhanaId, targetKid)) return;
+                if (e.karigerId) return; // Skip duplicate if already in sheet rows
 
                 const amt = safeNum(e.amount);
-                if (e.type === 'receipt') {
-                    pRows.push({ party: e.party || 'Cash Inward', desc: e.remarks || e.category, inAmt: amt, outAmt: 0 });
+                if (e.type === 'cash_transfer_in' || e.type === 'receipt') {
+                    pRows.push({ party: e.party || 'Cash Inward', desc: e.remarks || e.category || 'Cash Transfer', inAmt: amt, outAmt: 0 });
                 } else {
-                    pRows.push({ party: e.party || 'Cash Payment', desc: e.remarks || e.category, inAmt: 0, outAmt: amt });
+                    pRows.push({ party: e.party || 'Cash Outward', desc: e.remarks || e.category || 'Cash Transfer', inAmt: 0, outAmt: amt });
                 }
             });
 
@@ -900,7 +911,7 @@
     };
 
     /* ========================================================================
-       🔹 SPA VIEW TOGGLING (DAYBOOK ISOLATION)
+       SPA VIEW TOGGLING
        ======================================================================== */
     const hideAllSections = () => {
         document.querySelectorAll('.module-section').forEach((el) => {
