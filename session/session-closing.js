@@ -1,8 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - 5-STAGE ENTERPRISE BULLETPROOF YEAR CLOSING ENGINE
    File: session/session-closing.js • Developed by Farhan Jawed
-   Architecture: Supabase PostgreSQL & Multi-Branch Reconcile Engine
-   (100% Exact Match: Bana, Zari, Sancha, Saree & Kariger Carry Forward)
+   Architecture: Instant Transfer & Guaranteed Session Advancement
 ============================================================================ */
 
 (() => {
@@ -64,37 +63,10 @@
         return Array.from(map.values());
     };
 
-    const pruneHistoricalSessionCaches = (uId, currentSess, targetNewSess) => {
+    const safeSetLocalStorage = (key, val) => {
         try {
-            const keysToEvict = [];
-            const len = localStorage.length;
-            for (let i = 0; i < len; i++) {
-                const k = localStorage.key(i);
-                if (!k) continue;
-
-                if (k.startsWith(`${uId}_`)) {
-                    const isProtected = k.includes(currentSess) || 
-                                        k.includes(targetNewSess) || 
-                                        k.includes('app_sessions_list') || 
-                                        k.includes('app_active_session') || 
-                                        k.includes('app_users');
-                    if (!isProtected) keysToEvict.push(k);
-                }
-            }
-            keysToEvict.forEach((k) => localStorage.removeItem(k));
+            localStorage.setItem(key, typeof val === 'string' ? val : JSON.stringify(val));
         } catch (_) {}
-    };
-
-    const safeSetLocalStorage = (key, val, uId = '', curSess = '', newSess = '') => {
-        const payloadStr = typeof val === 'string' ? val : JSON.stringify(val);
-        try {
-            localStorage.setItem(key, payloadStr);
-        } catch (err) {
-            pruneHistoricalSessionCaches(uId, curSess, newSess);
-            try {
-                localStorage.setItem(key, payloadStr);
-            } catch (_) {}
-        }
     };
 
     const updateProgressUI = (stageNum, statusText, pct, mainPct, isCompleted = false) => {
@@ -194,20 +166,14 @@
             await runStage5_FinalizeCommitAsync(curSess, newSess, uId);
         } catch (pipelineErr) {
             console.error('[SessionClosing] Pipeline error:', pipelineErr);
-            alert(`Year closing me takleef aayi: ${pipelineErr.message || pipelineErr}`);
+            alert(`Year closing me dikkat: ${pipelineErr.message || pipelineErr}`);
         } finally {
             isClosingInProgress = false;
         }
     };
 
-    /* ========================================================================
-       STAGE 1: KARIGER KHATA
-       ======================================================================== */
     const runStage1_KarigersAsync = async (curSess, newSess) => {
-        const rawKarigers = window.safeArray 
-            ? window.safeArray(window.getStore('kariger_list')) 
-            : (window.getStore ? window.getStore('kariger_list') : []);
-
+        const rawKarigers = window.safeArray ? window.safeArray(window.getStore('kariger_list')) : [];
         pipelineState.stage1_oldKarigers = rawKarigers;
         const total = rawKarigers.length;
 
@@ -225,28 +191,20 @@
                     ? window.calculateSheetTotals(lastSheet)
                     : { remainingBana: 0, remainingZari: 0, remainingAmt: 0 };
 
-                const remBana = safeNum(calc.remainingBana);
-                const remZari = safeNum(calc.remainingZari);
-                const remAmt = safeNum(calc.remainingAmt);
-
-                const taniPcs = lastSheet ? safeNum(lastSheet.taniPcs, 72) : 72;
-                const chukkaPcs = lastSheet ? safeNum(lastSheet.chukkaPcs, 72) : 72;
-                const colors = (lastSheet && Array.isArray(lastSheet.colors)) ? [...lastSheet.colors] : [];
-
                 pipelineState.stage1_newKarigerSheetsMap[k.id] = [{
                     id: 'tani_1',
                     title: `Tani 1 (Opening ${newSess})`,
-                    pichlaBana: remBana,
-                    pichlaZari: remZari,
-                    pichlaBani: remAmt,
+                    pichlaBana: safeNum(calc.remainingBana),
+                    pichlaZari: safeNum(calc.remainingZari),
+                    pichlaBani: safeNum(calc.remainingAmt),
                     banaWaste: 0,
                     zariWaste: 0,
                     rateBana: lastSheet ? (parseFloat(lastSheet.rateBana) || 0.311) : 0.311,
                     rateZari: lastSheet ? (parseFloat(lastSheet.rateZari) || 0.110) : 0.110,
                     rateBani: lastSheet ? (parseFloat(lastSheet.rateBani) || 240) : 240,
-                    taniPcs: taniPcs,
-                    chukkaPcs: chukkaPcs,
-                    colors: colors,
+                    taniPcs: lastSheet ? safeNum(lastSheet.taniPcs, 72) : 72,
+                    chukkaPcs: lastSheet ? safeNum(lastSheet.chukkaPcs, 72) : 72,
+                    colors: (lastSheet && Array.isArray(lastSheet.colors)) ? [...lastSheet.colors] : [],
                     banaItem: lastSheet ? (lastSheet.banaItem || '') : '',
                     zariItem: lastSheet ? (lastSheet.zariItem || '') : '',
                     taniItem: lastSheet ? (lastSheet.taniItem || '') : '',
@@ -267,14 +225,8 @@
         await yieldThread(50);
     };
 
-    /* ========================================================================
-       STAGE 2: SAREE STOCK
-       ======================================================================== */
     const runStage2_SareeStockAsync = async (curSess, newSess) => {
-        const rawHistory = window.safeArray 
-            ? window.safeArray(window.getStore('saree_history')) 
-            : (window.getStore ? window.getStore('saree_history') : []);
-
+        const rawHistory = window.safeArray ? window.safeArray(window.getStore('saree_history')) : [];
         let karkhanas = (typeof window.getKarkhanasSafe === 'function') 
             ? window.getKarkhanasSafe() 
             : (window.safeArray ? window.safeArray(window.getStore('karkhana_list')) : []);
@@ -338,9 +290,6 @@
         await yieldThread(50);
     };
 
-    /* ========================================================================
-       STAGE 3: BANA & ZARI STOCK
-       ======================================================================== */
     const runStage3_BanaZariStockAsync = async (curSess, newSess) => {
         let karkhanas = (typeof window.getKarkhanasSafe === 'function') 
             ? window.getKarkhanasSafe() 
@@ -355,23 +304,15 @@
         const uniqueBanaNames = getUniqueItemNamesCaseInsensitive([...rawBana, ...rawBHist]);
 
         for (const bName of uniqueBanaNames) {
-            const statsAll = (typeof window.getBanaItemStats === 'function') 
-                ? window.getBanaItemStats(bName, 'all') 
-                : { bacha: 0 };
+            const statsAll = (typeof window.getBanaItemStats === 'function') ? window.getBanaItemStats(bName, 'all') : { bacha: 0 };
             const totalTargetBacha = Math.max(0, safeNum(statsAll.bacha));
-
             if (totalTargetBacha <= 0) continue;
 
-            let distributedBacha = 0;
-
             for (const k of karkhanas) {
-                const statsK = (typeof window.getBanaItemStats === 'function') 
-                    ? window.getBanaItemStats(bName, k.id) 
-                    : { bacha: 0 };
+                const statsK = (typeof window.getBanaItemStats === 'function') ? window.getBanaItemStats(bName, k.id) : { bacha: 0 };
                 const bachaVal = Math.max(0, safeNum(statsK.bacha));
 
                 if (bachaVal > 0) {
-                    distributedBacha += bachaVal;
                     const uniqueId = `bana_open_${Date.now()}_${++bSeq}`;
                     pipelineState.stage3_newBanaStock.push({
                         id: uniqueId,
@@ -399,30 +340,6 @@
                     });
                 }
             }
-
-            const remainingGap = safeNum(totalTargetBacha - distributedBacha);
-            if (remainingGap > 0.05) {
-                const mainItem = pipelineState.stage3_newBanaStock.find(x => x.name.toLowerCase() === bName.toLowerCase() && x.karkhanaId === 'k_main');
-                if (mainItem) {
-                    mainItem.aaya = safeNum(mainItem.aaya + remainingGap);
-                    mainItem.openingAaya = mainItem.aaya;
-                    mainItem.bacha = mainItem.aaya;
-                } else {
-                    pipelineState.stage3_newBanaStock.push({
-                        id: `bana_open_${Date.now()}_${++bSeq}`,
-                        name: bName,
-                        date: todayStr,
-                        aaya: remainingGap,
-                        openingAaya: remainingGap,
-                        gaya: 0,
-                        bacha: remainingGap,
-                        karkhanaId: 'k_main',
-                        isOpening: true,
-                        note: `📦 Opening Stock (${curSess} Se Aaya)`
-                    });
-                }
-            }
-
             await yieldThread();
         }
 
@@ -431,23 +348,15 @@
         const uniqueZariNames = getUniqueItemNamesCaseInsensitive([...rawZari, ...rawZHist]);
 
         for (const zName of uniqueZariNames) {
-            const statsZAll = (typeof window.getZariItemStats === 'function') 
-                ? window.getZariItemStats(zName, 'all') 
-                : { bacha: 0 };
+            const statsZAll = (typeof window.getZariItemStats === 'function') ? window.getZariItemStats(zName, 'all') : { bacha: 0 };
             const totalZTarget = Math.max(0, safeNum(statsZAll.bacha));
-
             if (totalZTarget <= 0) continue;
 
-            let distributedZ = 0;
-
             for (const k of karkhanas) {
-                const statsZK = (typeof window.getZariItemStats === 'function') 
-                    ? window.getZariItemStats(zName, k.id) 
-                    : { bacha: 0 };
+                const statsZK = (typeof window.getZariItemStats === 'function') ? window.getZariItemStats(zName, k.id) : { bacha: 0 };
                 const bachaValZ = Math.max(0, safeNum(statsZK.bacha));
 
                 if (bachaValZ > 0) {
-                    distributedZ += bachaValZ;
                     pipelineState.stage3_newZariStock.push({
                         id: `zari_open_${Date.now()}_${++zSeq}`,
                         name: zName,
@@ -474,7 +383,6 @@
                     });
                 }
             }
-
             await yieldThread();
         }
 
@@ -482,9 +390,6 @@
         await yieldThread(50);
     };
 
-    /* ========================================================================
-       STAGE 4: SANCHA & JOB WORK
-       ======================================================================== */
     const runStage4_SanchaAndJobworkAsync = async (curSess, newSess) => {
         const todayStr = (typeof window.getTodayDate === 'function') ? window.getTodayDate() : new Date().toISOString().split('T')[0];
         const rawSancha = window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [];
@@ -555,33 +460,24 @@
         await yieldThread(50);
     };
 
-    /* ========================================================================
-       STAGE 5: COMMIT
-       ======================================================================== */
     const runStage5_FinalizeCommitAsync = async (curSess, newSess, uId) => {
         updateProgressUI(5, '⏳ Storing Core Data...', 10, 82);
 
         const sessions = window.getAppSessions ? window.getAppSessions() : [];
         if (!sessions.includes(newSess)) sessions.push(newSess);
 
-        safeSetLocalStorage(`${uId}_app_sessions_list`, sessions, uId, curSess, newSess);
-        safeSetLocalStorage(`${uId}_app_active_session`, newSess, uId, curSess, newSess);
+        safeSetLocalStorage(`${uId}_app_sessions_list`, sessions);
+        safeSetLocalStorage(`${uId}_app_active_session`, newSess);
 
         if (window.APP_MEMORY_CACHE) {
             window.APP_MEMORY_CACHE[`${uId}_app_sessions_list`] = sessions;
             window.APP_MEMORY_CACHE[`${uId}_app_active_session`] = newSess;
         }
 
-        if (typeof window.idbPut === 'function') {
-            await window.idbPut(`${uId}_app_sessions_list`, sessions);
-            await window.idbPut(`${uId}_app_active_session`, newSess);
-        }
-
         const persistGeneralStore = (key, data) => {
             const fullKey = `${uId}_${newSess}_${key}`;
             if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[fullKey] = data;
-            if (typeof window.idbPut === 'function') window.idbPut(fullKey, data);
-            safeSetLocalStorage(fullKey, data, uId, curSess, newSess);
+            safeSetLocalStorage(fullKey, data);
 
             if (typeof window.CloudEngine?.cloudWrite === 'function') {
                 window.CloudEngine.cloudWrite(fullKey, data);
@@ -615,8 +511,7 @@
                 const fullKey = `${uId}_${newSess}_kariger_sheets_${kId}`;
 
                 if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[fullKey] = sheetData;
-                if (typeof window.idbPut === 'function') window.idbPut(fullKey, sheetData);
-                safeSetLocalStorage(fullKey, sheetData, uId, curSess, newSess);
+                safeSetLocalStorage(fullKey, sheetData);
 
                 if (typeof window.CloudEngine?.cloudWrite === 'function') {
                     window.CloudEngine.cloudWrite(fullKey, sheetData);
@@ -647,7 +542,7 @@
             <div style="text-align:center; padding:15px;">
                 <div style="font-size:55px; margin-bottom:8px;">🎉 ✨ 🚀</div>
                 <h2 style="color:#1e3a8a; font-size:22px; font-weight:800; margin-bottom:6px;">NAYA SAAL MUBARAK HO!</h2>
-                <p style="color:#059669; font-size:14px; font-weight:700;">Session '${newSess}' 100% Accurate Shuru Ho Gaya!</p>
+                <p style="color:#059669; font-size:14px; font-weight:700;">Session '${newSess}' 100% Shuru Ho Gaya!</p>
                 <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:12px; padding:14px; margin:16px 0; text-align:left; font-size:13px; display:grid; grid-template-columns:1fr 1fr; gap:8px;">
                     <div>🧵 <strong>Kariger:</strong> ${kCount} Karigers Safe</div>
                     <div>🥻 <strong>Saree:</strong> ${freshPcs} Fresh Pcs</div>
@@ -659,52 +554,65 @@
     };
 
     /* ========================================================================
-       ⭐ COMPLETE STARTUP: DIRECT APP_STORE WRITE BEFORE RELOAD
+       ⭐ GUARANTEED ACTIVE SESSION SWITCH (DIRECT ADVANCEMENT)
        ======================================================================== */
     const completeNewSessionStartup = async (targetSess) => {
         const modal = document.getElementById('session-transfer-modal');
         if (modal) modal.style.display = 'none';
 
         const uId = getSafeUserId();
-        const s = targetSess || pendingTransferNewSession || (window.getActiveFinancialSession ? window.getActiveFinancialSession() : '2026-2027');
+        const s = targetSess || pendingTransferNewSession || '2026-2027';
 
-        safeSetLocalStorage(`${uId}_app_active_session`, s);
+        // 1. Blacklist saaf
+        localStorage.removeItem(`${uId}_app_deleted_sessions`);
+
+        // 2. Active Session set karein
+        localStorage.setItem(`${uId}_app_active_session`, s);
         if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[`${uId}_app_active_session`] = s;
-        if (typeof window.idbPut === 'function') await window.idbPut(`${uId}_app_active_session`, s);
 
-        // ⭐ CLOUD SYNC COMMIT (DIRECT TO SUPABASE APP_STORE)
+        // 3. Session list me jodein
+        let curSessions = window.getAppSessions ? window.getAppSessions() : [];
+        if (!curSessions.includes(s)) curSessions.push(s);
+        localStorage.setItem(`${uId}_app_sessions_list`, JSON.stringify(curSessions));
+        if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[`${uId}_app_sessions_list`] = curSessions;
+
+        // 4. ⭐ SUPABASE APP_STORE ME DIRECT PUSH (Delete + Insert)
         const sb = window.supabaseClient || window.supabase;
         if (sb && typeof sb.from === 'function') {
             const now = new Date().toISOString();
-            await sb.from('app_store').upsert({
-                id: `${uId}_app_active_session`,
-                user_id: uId,
-                data: s,
-                key: `${uId}_app_active_session`,
-                value: s,
-                updated_at: now
-            }, { onConflict: 'id' });
+            try {
+                await sb.from('app_store').delete().eq('id', `${uId}_app_active_session`);
+                await sb.from('app_store').insert({
+                    id: `${uId}_app_active_session`,
+                    user_id: uId,
+                    data: s,
+                    key: `${uId}_app_active_session`,
+                    value: s,
+                    updated_at: now
+                });
 
-            const curSessions = window.getAppSessions ? window.getAppSessions() : [];
-            if (!curSessions.includes(s)) curSessions.push(s);
-
-            await sb.from('app_store').upsert({
-                id: `${uId}_app_sessions_list`,
-                user_id: uId,
-                data: curSessions,
-                key: `${uId}_app_sessions_list`,
-                value: curSessions,
-                updated_at: now
-            }, { onConflict: 'id' });
+                await sb.from('app_store').delete().eq('id', `${uId}_app_sessions_list`);
+                await sb.from('app_store').insert({
+                    id: `${uId}_app_sessions_list`,
+                    user_id: uId,
+                    data: curSessions,
+                    key: `${uId}_app_sessions_list`,
+                    value: curSessions,
+                    updated_at: now
+                });
+            } catch (cErr) {
+                console.error('[SessionClosing app_store write]:', cErr);
+            }
         }
 
         if (typeof window.clearMemoryCache === 'function') {
             window.clearMemoryCache();
         }
 
+        // 5. Naye saal me direct entry
         setTimeout(() => {
             window.location.reload();
-        }, 400);
+        }, 300);
     };
 
     const sessionClosingAPI = {
