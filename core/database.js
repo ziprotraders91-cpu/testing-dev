@@ -7,9 +7,10 @@
 (() => {
     'use strict';
 
+    // 🚀 NAYE SUPABASE PROJECT KI CONFIGURATION
     const SUPABASE_CONFIG = Object.freeze({
-        url: "https://wzmnfofhhhaxrrymnekd.supabase.co",
-        anonKey: "sb_publishable_D5KwPAwT3xumFJCVGSDj0A_loySGNhg"
+        url: "https://mvbejtoylowskerlgfxs.supabase.co",
+        anonKey: "sb_publishable_NhTU4xzRMi0gtKH4CzVf_Q_lRfzjg3c"
     });
 
     let supabaseClient = null;
@@ -22,7 +23,7 @@
         if (typeof window.supabase !== 'undefined' && typeof window.supabase.createClient === 'function') {
             supabaseClient = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
             window.supabaseClient = supabaseClient;
-            console.log('✅ [CloudEngine] Supabase Realtime Engine Initialized.');
+            console.log('✅ [CloudEngine] Supabase Realtime Engine Initialized (test-dav).');
         }
     } catch (initErr) {
         console.error('❌ [CloudEngine] Supabase Init failure:', initErr);
@@ -76,25 +77,52 @@
         return '2026-2027';
     };
 
+    /**
+     * ⭐ SMART TRAFFIC POLICE (ROUTER)
+     * Har data ko uski sahi Supabase table me route karta hai
+     */
     const resolveTargetTable = (fullKey) => {
         const k = String(fullKey).toLowerCase();
 
-        if (k.includes('saree_stock') || k.includes('saree_history') || k.includes('saree')) return 'saree_stock';
+        // 1. Saree Module (Separate Stock & History)
+        if (k.includes('saree_history')) return 'saree_history';
+        if (k.includes('saree_stock') || k.includes('saree')) return 'saree_stock';
+
+        // 2. Zari Module
         if (k.includes('zari_history')) return 'zari_history';
         if (k.includes('zari_stock') || k.includes('zari')) return 'zari_stock';
+
+        // 3. Bana Module
         if (k.includes('bana_history')) return 'bana_history';
         if (k.includes('bana_stock') || k.includes('bana')) return 'bana_stock';
+
+        // 4. Sancha (Tani / Chukka)
         if (k.includes('sancha_history')) return 'sancha_history';
         if (k.includes('sancha')) return 'sancha_list';
+
+        // 5. Kariger & Tani Sheets
         if (k.includes('kariger_sheet') || k.includes('tani_sheet')) return 'tani_sheets';
         if (k.includes('kariger') || k.includes('karigers')) return 'karigers';
+
+        // 6. Godown & Logistics
         if (k.includes('karkhana') || k.includes('godown')) return 'karkhanas';
         if (k.includes('material_transfers') || k.includes('transfer')) return 'material_transfers';
         if (k.includes('dukan')) return 'dukan_challans';
 
-        if (k.includes('jw_bill') || k.includes('jobwork_bill')) return 'job_work_bills';
-        if (k.includes('jobwork') || k.includes('job_work') || k.includes('jw_payment')) return 'job_workers';
+        // 7. Job Work Departments (ALAG-ALAG TABLES ME)
+        if (k.includes('cutting_history') || k.includes('cutting_sheet')) return 'cutting_history';
+        if (k.includes('cutting')) return 'cutting';
 
+        if (k.includes('embroidery_history') || k.includes('embroidery_sheet')) return 'embroidery_history';
+        if (k.includes('embroidery')) return 'embroidery';
+
+        if (k.includes('calender_history') || k.includes('calender_sheet')) return 'calender_history';
+        if (k.includes('calender')) return 'calender';
+
+        // 8. Job Work Bills & Payments (EK HI CENTRAL TABLE ME)
+        if (k.includes('jw_bill') || k.includes('jobwork_bill') || k.includes('jw_payment')) return 'job_work_bills';
+
+        // 9. App Settings & Session fallback
         return 'app_store';
     };
 
@@ -196,10 +224,6 @@
         }, 30);
     };
 
-    /**
-     * ⭐ SMART BIDIRECTIONAL MERGE (PREVENTS LOCAL DATA OVERWRITE)
-     * Yeh function ensure karta hai ki cloud ka purana data local nayi entry ko delete na kare!
-     */
     const smartApplyRemoteData = (targetKey, rowData) => {
         if (!targetKey) return false;
 
@@ -212,23 +236,18 @@
             }
         } catch (_) {}
 
-        // Agar dono Array hain (jaise saree_history, kariger_list, etc.)
         if (Array.isArray(localData) && Array.isArray(rowData)) {
-            // Local me data hai par cloud me khali hai to local ko safe rakho aur cloud par bhejo
             if (localData.length > 0 && rowData.length === 0) {
                 cloudWrite(targetKey, localData);
                 return false;
             }
 
-            // Dono ko merge karo: ID / refId ke hisaab se
             const map = new Map();
-            // Pehle cloud ke items dalo
             rowData.forEach((item) => {
                 if (!item) return;
                 const itemId = String(item.id || item.refId || JSON.stringify(item));
                 map.set(itemId, item);
             });
-            // Phir local ke items dalo taaki nayi local entries hamesha bachi rahein
             localData.forEach((item) => {
                 if (!item) return;
                 const itemId = String(item.id || item.refId || JSON.stringify(item));
@@ -245,7 +264,6 @@
             return true;
         }
 
-        // Object ya String data
         if (rowData !== undefined && rowData !== null) {
             if (JSON.stringify(localData) !== JSON.stringify(rowData)) {
                 if (typeof window.setRemoteStore === 'function') {
@@ -260,9 +278,6 @@
         return false;
     };
 
-    /**
-     * 🚀 CLOUD WRITE (DIRECT & BULLETPROOF)
-     */
     const cloudWrite = async (fullKey, data) => {
         if (!supabaseClient) return false;
         showSyncStatus('syncing');
@@ -323,16 +338,22 @@
     };
 
     /**
-     * 📥 SMART CLOUD PULL (PROTECTED MERGE - NO BLIND OVERWRITE)
+     * 📥 CLOUD PULL - Sabhi 21+ Tables Se Live Data Lata Hai
      */
     const pullAllCloudData = async (silent = true) => {
         if (!supabaseClient || !navigator.onLine) return;
 
         const tables = [
-            'saree_stock', 'zari_stock', 'zari_history', 'bana_stock', 'bana_history',
-            'sancha_list', 'sancha_history', 'karigers', 'tani_sheets', 
+            'saree_stock', 'saree_history',
+            'zari_stock', 'zari_history',
+            'bana_stock', 'bana_history',
+            'sancha_list', 'sancha_history',
+            'karigers', 'tani_sheets', 
             'material_transfers', 'karkhanas', 'dukan_challans', 
-            'job_workers', 'job_work_bills', 'app_store'
+            'cutting', 'cutting_history',
+            'embroidery', 'embroidery_history',
+            'calender', 'calender_history',
+            'job_work_bills', 'app_store'
         ];
 
         let hasNewData = false;
@@ -348,7 +369,6 @@
                         const targetKey = row.id || row.key;
                         const rowData = row.data !== undefined ? row.data : (row.value !== undefined ? row.value : row);
                         if (targetKey) {
-                            // ⭐ Smart Merge use karo taaki local data overwrite na ho
                             const updated = smartApplyRemoteData(targetKey, rowData);
                             if (updated) hasNewData = true;
                         }
@@ -363,9 +383,6 @@
         }
     };
 
-    /**
-     * ⚡ 5-SECOND LIVE HEARTBEAT
-     */
     const startLiveAutoSyncHeartbeat = () => {
         if (autoSyncIntervalTimer) clearInterval(autoSyncIntervalTimer);
 
@@ -379,9 +396,6 @@
         }, 5000);
     };
 
-    /**
-     * ⚡ REALTIME LISTENER
-     */
     const initSupabaseRealtime = () => {
         if (!supabaseClient) return;
         detachSupabaseRealtime();
