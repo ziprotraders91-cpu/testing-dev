@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - HIGH-SCALE FINANCIAL YEAR SESSION CONTROLLER
    File: session/session.js • Developed by Farhan Jawed
-   Architecture: Permanent Session Deletion (Local + Cloud Purge) • app_store Sync
+   Architecture: Global Cloud Active Session Lock (Phone & Laptop 100% Lock)
 ============================================================================ */
 
 (() => {
@@ -44,9 +44,6 @@
         return [];
     };
 
-    /**
-     * Sabhi valid sessions ki list nikaalta hai
-     */
     const getAppSessions = () => {
         const uId = getEffectiveUserId();
         const userKey = `${uId}_app_sessions_list`;
@@ -124,9 +121,6 @@
         });
     };
 
-    /**
-     * ⭐ SAFE WRITE TO APP_STORE (Delete then Insert - No 400 Constraint Error)
-     */
     const saveToAppStoreSafe = async (key, value) => {
         const sb = window.supabaseClient || window.supabase;
         if (!sb || typeof sb.from !== 'function') return;
@@ -149,6 +143,9 @@
         }
     };
 
+    /**
+     * ⭐ GLOBAL ACTIVE SESSION SYNC (App start hone par Cloud ka Active Session check karta hai)
+     */
     const initCloudSessionSync = async () => {
         const uId = getEffectiveUserId();
         const sessionsKey = `${uId}_app_sessions_list`;
@@ -164,17 +161,23 @@
                         const rKey = row.key || row.id;
                         const rVal = row.data !== undefined ? row.data : row.value;
 
-                        if (rKey.includes('app_active_session') && rVal) {
-                            const cleanActive = String(rVal).replace(/['"]+/g, '').trim();
-                            if (/^\d{4}-\d{4}$/.test(cleanActive)) {
-                                localStorage.setItem(activeKey, cleanActive);
-                            }
-                        }
+                        // 1. Session list sync
                         if (rKey.includes('app_sessions_list') && Array.isArray(rVal)) {
                             localStorage.setItem(sessionsKey, JSON.stringify(rVal));
                         }
-                        if (rKey.includes('app_deleted_sessions') && Array.isArray(rVal)) {
-                            localStorage.setItem(deletedKey, JSON.stringify(rVal));
+
+                        // 2. ⭐ CROSS-DEVICE ACTIVE SESSION ENFORCEMENT
+                        if (rKey.includes('app_active_session') && rVal) {
+                            const cloudActiveSess = String(rVal).replace(/['"]+/g, '').trim();
+                            const currentLocalSess = getActiveFinancialSession();
+
+                            if (/^\d{4}-\d{4}$/.test(cloudActiveSess) && cloudActiveSess !== currentLocalSess) {
+                                console.log(`[CrossDeviceSync] Cloud par Active Session '${cloudActiveSess}' hai. Device ko align kar rahe hain...`);
+                                localStorage.setItem(activeKey, cloudActiveSess);
+                                if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[activeKey] = cloudActiveSess;
+                                window.location.reload();
+                                return;
+                            }
                         }
                     });
                 }
@@ -186,13 +189,13 @@
     };
 
     /* ========================================================================
-       ⭐ SESSION SWITCH: APP_STORE ME SAVE HOKE REFRESH HOGA
+       ⭐ SESSION SWITCH: TURANT SUPABASE ME BHEJTA HAI TAHO DUSRA DEVICE BHI UPDATE HO
        ======================================================================== */
     const switchAppFinancialSession = async (targetSession) => {
         const activeSess = getActiveFinancialSession();
         if (!targetSession || targetSession === activeSess) return;
 
-        if (!confirm(`Kya aap Session badal kar '${targetSession}' me jana chahte hain?`)) {
+        if (!confirm(`Kya aap Session badal kar '${targetSession}' me jana chahte hain?\nYe aapke sabhi devices (Phone aur Laptop) par turant activate ho jayega.`)) {
             populateSessionDropdown();
             return;
         }
@@ -206,7 +209,7 @@
                 window.APP_MEMORY_CACHE[`${uId}_app_active_session`] = cleanTarget;
             }
 
-            // ⭐ app_store me direct safe write
+            // ⭐ Cloud app_store me likho taaki laptop/phone ko pata chale
             await saveToAppStoreSafe(`${uId}_app_active_session`, cleanTarget);
             await saveToAppStoreSafe(`${uId}_app_sessions_list`, getAppSessions());
 
@@ -259,9 +262,6 @@
         modal.style.display = 'none';
     };
 
-    /* ========================================================================
-       🗑️ PERMANENT SESSION DELETE (WIPES LOCALSTORAGE + ALL SUPABASE TABLES)
-       ======================================================================== */
     const confirmAndDeleteSessionWithAuth = async () => {
         const delSel = document.getElementById('session-delete-select');
         const targetSess = delSel ? delSel.value : '';
@@ -273,7 +273,6 @@
 
         const uId = getEffectiveUserId();
 
-        // 1. Password Verification
         let authenticated = false;
         try {
             const authRaw = localStorage.getItem('app_active_session_auth');
@@ -299,24 +298,16 @@
             return alert('❌ Aakhri bacha hua Session delete nahi ho sakta!');
         }
 
-        if (!confirm(`⚠️ KYA AAP SACH ME '${targetSess}' KA PURA DATA DELETE KARNA CHAHTE HAIN?\nIs saal ka sara hisab Cloud aur Local dono se hamesha ke liye mit jayega!`)) {
+        if (!confirm(`⚠️ KYA AAP SACH ME '${targetSess}' KA PURA DATA DELETE KARNA CHAHTE HAIN?\nIs saal ka hisab Cloud aur Local dono se hamesha ke liye mit jayega!`)) {
             return;
         }
 
-        const delBtn = document.querySelector("#session-closing-modal button[onclick*='confirmAndDeleteSessionWithAuth']");
-        if (delBtn) {
-            delBtn.disabled = true;
-            delBtn.textContent = '⏳ Deleting from Cloud & Local...';
-        }
-
         try {
-            // A. Update local session list
             sessions = sessions.filter((s) => s !== targetSess);
             if (sessions.length === 0) sessions = [DEFAULT_BOOTSTRAP_SESSION];
 
             localStorage.setItem(`${uId}_app_sessions_list`, JSON.stringify(sessions));
 
-            // B. Add to blacklist
             const delKey = `${uId}_app_deleted_sessions`;
             let delList = getDeletedSessionsList();
             if (!delList.includes(targetSess)) {
@@ -324,7 +315,6 @@
             }
             localStorage.setItem(delKey, JSON.stringify(delList));
 
-            // C. Switch active session if active was deleted
             const cur = getActiveFinancialSession();
             let nextActive = cur;
             if (cur === targetSess) {
@@ -332,7 +322,7 @@
                 localStorage.setItem(`${uId}_app_active_session`, nextActive);
             }
 
-            // D. ⭐ WIPE FROM ALL 21 SUPABASE TABLES PERMANENTLY
+            // Wipe from Supabase
             const sb = window.supabaseClient || window.supabase;
             if (sb && typeof sb.from === 'function') {
                 const tables = [
@@ -356,19 +346,15 @@
                     } catch (_) {}
                 }
 
-                // Delete from app_store
                 try {
                     await sb.from('app_store').delete().eq('user_id', uId).like('id', `%${targetSess}%`);
                 } catch (_) {}
 
-                // Update app_store with new session state
                 await saveToAppStoreSafe(`${uId}_app_sessions_list`, sessions);
                 await saveToAppStoreSafe(`${uId}_app_active_session`, nextActive);
                 await saveToAppStoreSafe(delKey, delList);
             }
 
-            // E. Clean LocalStorage & Memory Cache
-            const prefix = `${uId}_${targetSess}_`;
             const keysToRemove = [];
             for (let i = 0; i < localStorage.length; i++) {
                 const k = localStorage.key(i);
@@ -388,8 +374,7 @@
             window.location.reload();
 
         } catch (err) {
-            console.error('[SessionDelete] Fatal error:', err);
-            alert('Delete complete ho gaya, page reload ho raha hai.');
+            console.error('[SessionDelete] Error:', err);
             window.location.reload();
         }
     };
