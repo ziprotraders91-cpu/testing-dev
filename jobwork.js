@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - HIGH-PERFORMANCE JOB WORK HUB, BATCH & BILLING ENGINE
-   File: jobwork.js • Developed by Farhan Jawed (Item-Level Stock Source Locking)
-   Processes: Cutting (Fresh) | Embroidery (Fresh/Cutting) | Calender (Fresh/Cutting/Embroidery) | Dukan
+   File: jobwork.js • Developed by Farhan Jawed (Standalone Modular Edition)
+   Processes: Cutting (Fresh) | Calender (Fresh/Cutting) | Dukan Inward/Outward
 ============================================================================ */
 
 (() => {
@@ -41,6 +41,9 @@
         }
         if (typeof window.invalidateCuttingCalcCache === 'function') {
             window.invalidateCuttingCalcCache();
+        }
+        if (typeof window.invalidateEmbroideryCalcCache === 'function') {
+            window.invalidateEmbroideryCalcCache();
         }
     };
 
@@ -138,10 +141,15 @@
     };
 
     const openJobWorkSubSection = (mode) => {
+        if (mode === 'embroidery' && window.EmbroideryUIEngine && typeof window.EmbroideryUIEngine.openEmbroideryModule === 'function') {
+            window.EmbroideryUIEngine.openEmbroideryModule();
+            return;
+        }
+
         window.currentJobWorkMode = mode;
         setDisplay('jw-hub-view', 'none');
 
-        if (mode === 'cutting' || mode === 'embroidery' || mode === 'calender') {
+        if (mode === 'cutting' || mode === 'calender') {
             setDisplay('jw-sheet-view', 'none');
             setDisplay('jw-dukan-view', 'none');
             setDisplay('jw-billing-view', 'none');
@@ -154,9 +162,6 @@
             if (mode === 'cutting') {
                 if (titleEl) titleEl.textContent = '✂️ Booti Cutting Workers List';
                 if (addBtnEl) addBtnEl.textContent = '+ Naya Cutting Kariger';
-            } else if (mode === 'embroidery') {
-                if (titleEl) titleEl.textContent = '🪡 Embroidery Workers List';
-                if (addBtnEl) addBtnEl.textContent = '+ Naya Embroidery Kariger';
             } else {
                 if (titleEl) titleEl.textContent = '🎛️ Calender Workers List';
                 if (addBtnEl) addBtnEl.textContent = '+ Naya Calender Kariger';
@@ -195,12 +200,12 @@
     const updateJobWorkHubBadges = () => {
         const workers = getJobWorkers();
         const cutCount = workers.filter((w) => String(w?.type || '').toLowerCase() === 'cutting').length;
-        const embCount = workers.filter((w) => String(w?.type || '').toLowerCase() === 'embroidery').length;
         const calCount = workers.filter((w) => String(w?.type || '').toLowerCase() === 'calender').length;
+        const embCount = workers.filter((w) => String(w?.type || '').toLowerCase() === 'embroidery').length;
 
         setText('jw-hub-badge-cutting', `${cutCount} Kariger`);
-        setText('jw-hub-badge-embroidery', `${embCount} Kariger`);
         setText('jw-hub-badge-calender', `${calCount} Kariger`);
+        setText('jw-hub-badge-embroidery', `${embCount} Kariger`);
 
         let totSent = 0;
         if (typeof window.getDukanTransfers === 'function') {
@@ -469,7 +474,6 @@
         const sum = getJobWorkerOverallSummary(workerId);
         let typeTitle = 'कटिंग';
         if (w.type === 'calender') typeTitle = 'कैलेंडर';
-        else if (w.type === 'embroidery') typeTitle = 'कढ़ाई / एम्ब्रॉयडरी';
 
         const msg = `🪡 *SIMPLICITY ERP*\n━━━━━━━━━━━━━━━━━━━━━\n` +
             `सलाम ${w.name} भाई,\n\n` +
@@ -487,7 +491,7 @@
         }
         if (mob.length === 10) mob = `91${mob}`;
 
-        window.open(`https://wa.me/${mobile}?text=${encodeURIComponent(msg)}`, '_blank');
+        window.open(`https://wa.me/${mob}?text=${encodeURIComponent(msg)}`, '_blank');
     };
 
     /* ========================================================================
@@ -586,18 +590,18 @@
     };
 
     /* ========================================================================
-       7. LIVE KARIGER SAREE STOCK CHECKER (FRESH | CUTTING | EMBROIDERY)
+       7. LIVE KARIGER SAREE STOCK CHECKER (FRESH | CUTTING)
        ======================================================================== */
     const getKarigerAvailableSareeStock = (karigerName) => {
         const kName = String(karigerName || '').trim().toUpperCase();
-        if (!kName) return { fresh: 0, cutting: 0, embroidery: 0, total: 0 };
+        if (!kName) return { fresh: 0, cutting: 0, total: 0 };
 
         if (KARIGER_STOCK_CACHE.has(kName)) {
             return KARIGER_STOCK_CACHE.get(kName);
         }
 
         const sH = toArray(getFromStore('saree_history'));
-        let fAai = 0, fGai = 0, cAai = 0, cGai = 0, eAai = 0, eGai = 0;
+        let fAai = 0, fGai = 0, cAai = 0, cGai = 0;
 
         for (let i = 0; i < sH.length; i++) {
             const r = sH[i];
@@ -615,21 +619,16 @@
                 } else if (t === 'cutting' || t === 'cut') {
                     cAai += a;
                     cGai += g;
-                } else if (t === 'embroidery' || t === 'emb') {
-                    eAai += a;
-                    eGai += g;
                 }
             }
         }
 
         const fBacha = Math.max(0, fAai - fGai);
         const cBacha = Math.max(0, cAai - cGai);
-        const eBacha = Math.max(0, eAai - eGai);
         const stock = { 
             fresh: fBacha, 
             cutting: cBacha, 
-            embroidery: eBacha, 
-            total: fBacha + cBacha + eBacha 
+            total: fBacha + cBacha 
         };
 
         KARIGER_STOCK_CACHE.set(kName, stock);
@@ -669,11 +668,10 @@
         const sourceSelectEl = document.getElementById('jw-batch-source-select');
         const curSource = sourceSelectEl ? sourceSelectEl.value : (wType === 'cutting' ? 'fresh' : 'cutting');
 
-        let stockHtml = `🧵 <strong>${esc(kName)} Stock:</strong> <span style="color:#0284c7; margin-left:4px;">Fresh: <b>${stock.fresh}</b></span> | <span style="color:#0d9488;">Cutting: <b>${stock.cutting}</b></span> | <span style="color:#d97706;">Embroidery: <b>${stock.embroidery}</b></span>`;
+        let stockHtml = `🧵 <strong>${esc(kName)} Stock:</strong> <span style="color:#0284c7; margin-left:4px;">Fresh: <b>${stock.fresh}</b></span> | <span style="color:#0d9488;">Cutting: <b>${stock.cutting}</b></span>`;
 
         let selStock = stock.fresh;
         if (curSource === 'cutting') selStock = stock.cutting;
-        else if (curSource === 'embroidery') selStock = stock.embroidery;
 
         stockHtml += `<br><small style="color:#475569;">👉 Saree <b>${curSource.toUpperCase()} STOCK</b> se jayegi (Available: <b>${selStock} Pcs</b>)</small>`;
         if (selStock <= 0) {
@@ -686,7 +684,7 @@
     };
 
     /* ========================================================================
-       8. SHEET VIEW & TABS CONTROLLER (WITH PERMANENT ROCK-SOLID SELECTOR)
+       8. SHEET VIEW & TABS CONTROLLER (CUTTING & CALENDER ONLY)
        ======================================================================== */
     const openJobWorkerSheet = (workerId) => {
         const w = getJobWorkers().find((x) => String(x.id) === String(workerId));
@@ -698,7 +696,6 @@
 
         let typeTitle = 'Booti Cutting';
         if (w.type === 'calender') typeTitle = 'Calender';
-        else if (w.type === 'embroidery') typeTitle = 'Embroidery';
 
         let sess = '2026-2027';
         if (typeof window.getActiveFinancialSession === 'function') {
@@ -720,7 +717,7 @@
         renderAayiBatchChips();
         populateKarigersDatalist();
 
-        // ⭐ DROP-DOWN CONTAINER INJECTION RIGHT INSIDE 1. SAREE GAYI BOX
+        // DROP-DOWN CONTAINER INJECTION RIGHT INSIDE 1. SAREE GAYI BOX
         let stockSelectWrap = document.getElementById('jw-calender-stock-source-wrap');
         const kInp = document.getElementById('jw-diya-karigar');
 
@@ -739,17 +736,6 @@
             stockSelectWrap.style.cssText = 'margin:8px 0 12px 0; padding:10px 14px; background:#f8fafc; border:1.5px solid #0284c7; border-radius:8px; display:flex; align-items:center; flex-wrap:wrap; gap:12px; font-size:13px;';
 
             if (w.type === 'calender') {
-                stockSelectWrap.style.display = 'flex';
-                stockSelectWrap.innerHTML = `
-                    <label for="jw-batch-source-select" style="font-weight:800; color:#0369a1;">📦 Saree Kahan Se Bhej Rahe Hain?</label>
-                    <select id="jw-batch-source-select" onchange="JobWorkEngine.updateJwKarigerLiveStockBadge()" style="padding:6px 12px; font-weight:bold; font-size:13px; border-radius:6px; border:2px solid #0284c7; background:#ffffff; color:#0f172a; cursor:pointer;">
-                        <option value="cutting" selected>✂️ Cutting Stock Se</option>
-                        <option value="embroidery">🪡 Embroidery Stock Se</option>
-                        <option value="fresh">🥻 Fresh Godown Stock Se</option>
-                    </select>
-                `;
-                if (cuttingNotice) cuttingNotice.style.display = 'none';
-            } else if (w.type === 'embroidery') {
                 stockSelectWrap.style.display = 'flex';
                 stockSelectWrap.innerHTML = `
                     <label for="jw-batch-source-select" style="font-weight:800; color:#0369a1;">📦 Saree Kahan Se Bhej Rahe Hain?</label>
@@ -901,7 +887,7 @@
     };
 
     /* ========================================================================
-       9. BATCH DIALOG & CHIP BUILDERS (WITH ITEM-LEVEL SOURCE LOCK)
+       9. BATCH DIALOG & CHIP BUILDERS
        ======================================================================== */
     const addDiyaBatchKarigarItem = () => {
         const kInp = document.getElementById('jw-diya-karigar');
@@ -915,12 +901,9 @@
         const worker = getJobWorkers().find((x) => String(x.id) === String(window.activeJobWorkerId));
         const wType = String(worker?.type || '').toLowerCase();
 
-        // ⭐ CURRENT SELECTED SOURCE IS LOCKED DIRECTLY ONTO THIS CHIP ITEM
         const selEl = document.getElementById('jw-batch-source-select');
         let itemSource = 'fresh';
         if (wType === 'calender') {
-            itemSource = selEl ? selEl.value : 'cutting';
-        } else if (wType === 'embroidery') {
             itemSource = selEl ? selEl.value : 'cutting';
         } else {
             itemSource = 'fresh';
@@ -930,7 +913,7 @@
             id: `d_item_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
             karigar: kName,
             qty: qty,
-            source: itemSource // ⭐ Saved right with the chip
+            source: itemSource
         });
 
         if (kInp) kInp.value = '';
@@ -1058,7 +1041,6 @@
 
         let processLabel = 'Cutting';
         if (wType === 'calender') processLabel = 'Calender';
-        else if (wType === 'embroidery') processLabel = 'Embroidery';
         const targetLabel = `${workerName} (${processLabel})`;
 
         const resolveKarigerMeta = (wKarName) => {
@@ -1077,7 +1059,7 @@
             };
         };
 
-        // 1. SAREE GAYI (Outward Entry) ➔ Deducts strictly from each item's OWN locked source
+        // 1. SAREE GAYI (Outward Entry)
         if (totGayi > 0) {
             window.currentDiyaBatch.forEach((item, itemIdx) => {
                 const wKarName = String(item.karigar || 'General').trim().toUpperCase();
@@ -1094,7 +1076,7 @@
                     partyName: targetLabel,
                     targetWorker: targetLabel,
                     karkhanaId: meta.godown,
-                    type: itemSource, // ⭐ Cuts from chosen stock: 'fresh' | 'cutting' | 'embroidery'
+                    type: itemSource,
                     typeLabel: `📤 ${targetLabel} ko bheja [${itemSource.toUpperCase()} Stock]`,
                     aai: 0,
                     gai: safeNum(item.qty),
@@ -1105,7 +1087,7 @@
             });
         }
 
-        // 2. SAREE AAYI (Inward Entry) ➔ Routes into next stage
+        // 2. SAREE AAYI (Inward Entry)
         if (totAayi > 0) {
             window.currentAayiBatch.forEach((item, itemIdx) => {
                 const wKarName = String(item.karigar || 'General').trim().toUpperCase();
@@ -1116,9 +1098,6 @@
                 if (wType === 'calender') {
                     destTab = 'finished'; // Calender -> Finished
                     icon = '✨';
-                } else if (wType === 'embroidery') {
-                    destTab = 'embroidery'; // Embroidery -> Embroidery
-                    icon = '🪡';
                 }
 
                 sH.push({
@@ -1426,7 +1405,6 @@
             opt.value = w.id;
             let tag = 'Cutting';
             if (w.type === 'calender') tag = 'Calender';
-            else if (w.type === 'embroidery') tag = 'Embroidery';
             opt.textContent = `${w.name} (${tag})`;
             sel.appendChild(opt);
         });
@@ -1546,7 +1524,6 @@
 
             let procTitle = '✂️ Cutting';
             if (b.workType === 'calender') procTitle = '🎛️ Calender';
-            else if (b.workType === 'embroidery') procTitle = '🪡 Embroidery';
 
             html += `<tr>
                 <td>${formatDisplay(b.date)}</td>
@@ -1720,7 +1697,6 @@
 
         let procTitle = 'BOOTI CUTTING';
         if (w.type === 'calender') procTitle = 'CALENDER';
-        else if (w.type === 'embroidery') procTitle = 'EMBROIDERY';
 
         const c = calculateJobWorkSheetTotals(sheet);
         const text = `🧾 *${procTitle} HISAB PARCHI* 🧾\n━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -1744,7 +1720,7 @@
     };
 
     /* ========================================================================
-       13. DAILY MOVEMENT DAYBOOK ENGINE
+       13. DAILY MOVEMENT DAYBOOK ENGINE (CUTTING, CALENDER, PAYMENT)
        ======================================================================== */
     const setJwMovementToday = () => {
         const dEl = document.getElementById('jw-mov-date');
@@ -1754,7 +1730,7 @@
 
     const switchJwMovementTab = (tab) => {
         window.currentJwMovementTab = tab;
-        ['cutting', 'embroidery', 'calender', 'payment'].forEach((t) => {
+        ['cutting', 'calender', 'payment'].forEach((t) => {
             const el = document.getElementById(`btn-jw-mov-${t}`);
             if (el) {
                 if (t === tab) el.classList.add('active'); else el.classList.remove('active');
@@ -1771,8 +1747,8 @@
         if (!thead || !tbody || !tfoot) return;
 
         const txt = (document.getElementById('jw-mov-search')?.value || '').toLowerCase().trim();
-        let cutG = 0, cutA = 0, embG = 0, embA = 0, calG = 0, calA = 0, payOut = 0;
-        const cuttingRows = [], embroideryRows = [], calenderRows = [], paymentRows = [];
+        let cutG = 0, cutA = 0, calG = 0, calA = 0, payOut = 0;
+        const cuttingRows = [], calenderRows = [], paymentRows = [];
 
         getJobWorkers().forEach((w) => {
             const wType = String(w.type || '').toLowerCase();
@@ -1789,13 +1765,7 @@
                             calA += aQty;
                             calenderRows.push({ worker: w.name, sheet: sh.title, gayi: gQty, aayi: aQty, damagePcs: r.damagePcs || 0 });
                         }
-                    } else if (wType === 'embroidery') {
-                        if (gQty > 0 || aQty > 0) {
-                            embG += gQty;
-                            embA += aQty;
-                            embroideryRows.push({ worker: w.name, sheet: sh.title, gayi: gQty, aayi: aQty, damagePcs: r.damagePcs || 0 });
-                        }
-                    } else {
+                    } else if (wType === 'cutting') {
                         if (gQty > 0 || aQty > 0) {
                             cutG += gQty;
                             cutA += aQty;
@@ -1820,7 +1790,6 @@
         });
 
         setText('sub-jw-mov-cutting', `Gayi: -${cutG} | Aayi: +${cutA}`);
-        setText('sub-jw-mov-embroidery', `Gayi: -${embG} | Aayi: +${embA}`);
         setText('sub-jw-mov-calender', `Gayi: -${calG} | Aayi: +${calA}`);
         setText('sub-jw-mov-payment', `Diya: -₹ ${payOut.toFixed(0)}`);
 
@@ -1837,19 +1806,6 @@
                 tbody.innerHTML = html;
             }
             tfoot.innerHTML = `<tr style="background:#fff1f2; font-weight:800; border-top:2px solid #e11d48;"><td colspan="2">TOTAL CUTTING:</td><td style="color:#dc2626; text-align:center;">-${cutG} Pcs</td><td style="color:#059669; text-align:center;">+${cutA} Pcs</td><td>-</td></tr>`;
-        } else if (window.currentJwMovementTab === 'embroidery') {
-            thead.innerHTML = '<tr style="background:#d97706; color:white;"><th>Embroidery Kariger</th><th>Sheet</th><th style="text-align:center;">📤 Gayi</th><th style="text-align:center;">📥 Wapas Aayi</th><th>⚠️ Damage</th></tr>';
-            const filteredEmb = embroideryRows.filter((r) => !txt || `${r.worker} ${r.sheet}`.toLowerCase().includes(txt));
-            if (!filteredEmb.length) {
-                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:18px; color:#888;">Koi entry nahi hai.</td></tr>';
-            } else {
-                let html = '';
-                filteredEmb.forEach((r) => {
-                    html += `<tr><td><strong>${esc(r.worker)}</strong></td><td>${esc(r.sheet)}</td><td style="text-align:center;"><strong style="color:#dc2626;">-${r.gayi} Pcs</strong></td><td style="text-align:center;"><strong style="color:#059669;">+${r.aayi} Pcs</strong></td><td>${r.damagePcs > 0 ? `⚠️ ${r.damagePcs}` : '-'}</td></tr>`;
-                });
-                tbody.innerHTML = html;
-            }
-            tfoot.innerHTML = `<tr style="background:#fef3c7; font-weight:800; border-top:2px solid #d97706;"><td colspan="2">TOTAL EMBROIDERY:</td><td style="color:#dc2626; text-align:center;">-${embG} Pcs</td><td style="color:#059669; text-align:center;">+${embA} Pcs</td><td>-</td></tr>`;
         } else if (window.currentJwMovementTab === 'calender') {
             thead.innerHTML = '<tr style="background:#0284c7; color:white;"><th>Calender Kariger</th><th>Sheet</th><th style="text-align:center;">📤 Gayi</th><th style="text-align:center;">📥 Wapas Aayi</th><th>⚠️ Damage</th></tr>';
             const filteredCal = calenderRows.filter((r) => !txt || `${r.worker} ${r.sheet}`.toLowerCase().includes(txt));
