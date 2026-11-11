@@ -56,13 +56,12 @@ function getBanaItemStats(itemName, targetKarkhanaId) {
     var isItemMatch = function(rowItemName) {
         var rN = (rowItemName || "").trim().toLowerCase();
         if (rN === nameLower) return true;
-        if (!rN && uniqueItemCount <= 1) return true; // Business me sirf 1 hi item ho toh bina naam wala count hoga
+        if (!rN && uniqueItemCount <= 1) return true;
         return false;
     };
 
     // --- CASE 1: SABHI KARKHANE (TOTAL CONSOLIDATED VIEW) ---
     if (kId === "all") {
-        // 1. All Direct Purchases / Openings across all branches
         bStock.forEach(function(b) {
             if (b && b.name && b.name.trim().toLowerCase() === nameLower) {
                 totalAaya += (Number(b.aaya !== undefined ? b.aaya : (b.qty || b.totalQty || 0)) || 0);
@@ -70,7 +69,6 @@ function getBanaItemStats(itemName, targetKarkhanaId) {
             }
         });
 
-        // 2. All Kariger Consumption across all branches (Line + Sheet Default Match)
         allKarigers.forEach(function(k) {
             var sheets = (typeof getKarigerSheets === "function") ? getKarigerSheets(k.id) : [];
             sheets.forEach(function(sh) {
@@ -90,7 +88,6 @@ function getBanaItemStats(itemName, targetKarkhanaId) {
 
     // --- CASE 2: MAIN GODOWN ONLY ---
     else if (kId === "k_main") {
-        // 1. Main Godown Purchase / Opening
         bStock.forEach(function(b) {
             var matchK = (!b.karkhanaId || b.karkhanaId === "k_main");
             if (b && matchK && b.name && b.name.trim().toLowerCase() === nameLower) {
@@ -99,7 +96,6 @@ function getBanaItemStats(itemName, targetKarkhanaId) {
             }
         });
 
-        // 2. Transfers Sent OUT to branches (-)
         transfers.forEach(function(t) {
             var fromK = normalizeGodownId(t.fromKarkhanaId);
             if (fromK === "k_main" && t.itemName && t.itemName.trim().toLowerCase() === nameLower) {
@@ -108,7 +104,6 @@ function getBanaItemStats(itemName, targetKarkhanaId) {
             }
         });
 
-        // 3. Transfers Received IN from branches (+)
         transfers.forEach(function(t) {
             var toK = normalizeGodownId(t.toKarkhanaId);
             if (toK === "k_main" && t.itemName && t.itemName.trim().toLowerCase() === nameLower) {
@@ -117,7 +112,6 @@ function getBanaItemStats(itemName, targetKarkhanaId) {
             }
         });
 
-        // 4. Main Godown Kariger Consumption
         allKarigers.forEach(function(k) {
             var sheets = (typeof getKarigerSheets === "function") ? getKarigerSheets(k.id) : [];
             sheets.forEach(function(sh) {
@@ -138,9 +132,8 @@ function getBanaItemStats(itemName, targetKarkhanaId) {
         });
     }
 
-    // --- CASE 3: BRANCH GODOWN (Mau, Mubarakpur, Bahadurganj etc.) ---
+    // --- CASE 3: BRANCH GODOWN ---
     else {
-        // 1. Direct Purchase at Branch
         bStock.forEach(function(b) {
             if (b && String(b.karkhanaId) === String(kId) && b.name && b.name.trim().toLowerCase() === nameLower) {
                 totalAaya += (Number(b.aaya !== undefined ? b.aaya : (b.qty || b.totalQty || 0)) || 0);
@@ -148,7 +141,6 @@ function getBanaItemStats(itemName, targetKarkhanaId) {
             }
         });
 
-        // 2. Transfers Received IN from Main/other Godam (+)
         transfers.forEach(function(t) {
             var toK = normalizeGodownId(t.toKarkhanaId);
             if (String(toK) === String(kId) && t.itemName && t.itemName.trim().toLowerCase() === nameLower) {
@@ -157,7 +149,6 @@ function getBanaItemStats(itemName, targetKarkhanaId) {
             }
         });
 
-        // 3. Transfers Sent OUT from this branch (-)
         transfers.forEach(function(t) {
             var fromK = normalizeGodownId(t.fromKarkhanaId);
             if (String(fromK) === String(kId) && t.itemName && t.itemName.trim().toLowerCase() === nameLower) {
@@ -166,7 +157,6 @@ function getBanaItemStats(itemName, targetKarkhanaId) {
             }
         });
 
-        // 4. Branch Kariger Consumption
         allKarigers.forEach(function(k) {
             var sheets = (typeof getKarigerSheets === "function") ? getKarigerSheets(k.id) : [];
             sheets.forEach(function(sh) {
