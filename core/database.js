@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - ENTERPRISE AUTO-POLLING & LIVE REALTIME ENGINE (ALL MODULES)
    File: core/database.js • Developed by Farhan Jawed
-   Architecture: Cross-Device Realtime Session Lock • Multi-Device Isolation
+   Architecture: Multi-Godam Dedicated Sync (karkhanas table) • Realtime Lock
 ============================================================================ */
 
 (() => {
@@ -91,6 +91,51 @@
         return [];
     };
 
+    /**
+     * ⭐ DEDICATED KARKHANA SYNC: karkhanas table me alag-alag rows banata hai
+     */
+    const syncKarkhanasToCloudTable = async (customList) => {
+        if (!supabaseClient || !navigator.onLine) return;
+        const uid = getSafeUserId();
+
+        let list = customList;
+        if (!Array.isArray(list) || list.length === 0) {
+            try {
+                if (typeof window.getKarkhanasSafe === 'function') {
+                    list = window.getKarkhanasSafe();
+                } else if (typeof window.getStore === 'function') {
+                    list = window.getStore('karkhana_list');
+                }
+                if (!Array.isArray(list) || !list.length) {
+                    list = JSON.parse(localStorage.getItem('karkhana_list') || localStorage.getItem(`${uid}_karkhana_list`) || '[]');
+                }
+            } catch (_) {}
+        }
+
+        if (!Array.isArray(list) || list.length === 0) return;
+
+        try {
+            // Purane karkhane delete karke fresh rows daalein
+            await supabaseClient.from('karkhanas').delete().eq('user_id', uid);
+
+            const rowsToInsert = list.map((k) => ({
+                user_id: uid,
+                karkhana_name: String(k.name || 'Karkhana').trim(),
+                is_default: Boolean(k.isDefault || k.id === 'k_main'),
+                created_at: k.createdAt || new Date().toISOString()
+            }));
+
+            const { error: kErr } = await supabaseClient.from('karkhanas').insert(rowsToInsert);
+            if (kErr) {
+                console.error("❌ [Karkhanas Insert Error]:", kErr.message);
+            } else {
+                console.log(`🟢 [Sync] karkhanas table me ${rowsToInsert.length} Godam save ho gaye!`);
+            }
+        } catch (err) {
+            console.warn('[syncKarkhanasToCloudTable Error]:', err);
+        }
+    };
+
     const syncWorkersDirectToCuttingAndCalender = async () => {
         if (!supabaseClient || !navigator.onLine) return;
 
@@ -134,30 +179,44 @@
     const resolveTargetTable = (fullKey) => {
         const k = String(fullKey).toLowerCase();
 
-        if (k.includes('session') || k.includes('app_store') || k.includes('info_ledger') || k.includes('karkhana_list')) {
+        // 1. Karkhana List
+        if (k.includes('karkhana_list')) {
+            return 'KARKHANA_LIST_ACTION';
+        }
+
+        // 2. Session & Global Settings -> app_store
+        if (k.includes('session') || k.includes('app_store') || k.includes('info_ledger')) {
             return 'app_store';
         }
 
+        // 3. Saree Module
         if (k.includes('saree_history')) return 'saree_history';
         if (k.includes('saree_stock') || k.includes('saree_items') || k.includes('saree')) return 'saree_stock';
 
+        // 4. Zari Module
         if (k.includes('zari_history')) return 'zari_history';
         if (k.includes('zari_stock') || k.includes('zari')) return 'zari_stock';
 
+        // 5. Bana Module
         if (k.includes('bana_history')) return 'bana_history';
         if (k.includes('bana_stock') || k.includes('bana')) return 'bana_stock';
 
+        // 6. Sancha Module
         if (k.includes('sancha_history')) return 'sancha_history';
         if (k.includes('sancha_items') || k.includes('sancha_list') || k.includes('sancha')) return 'sancha_list';
 
+        // 7. Karigers & Sheets
         if (k.includes('kariger_sheet') || k.includes('tani_sheet') || k.includes('tani_sheets')) return 'tani_sheets';
         if (k.includes('kariger_list') || k.includes('karigers') || k.includes('kariger')) return 'karigers';
 
+        // 8. Payments Module
         if (k.includes('payments') || k.includes('payment_list') || k.includes('kharcha')) return 'payments';
 
+        // 9. Godown & Dukan Transfers
         if (k.includes('material_transfer') || k.includes('transfer')) return 'material_transfers';
         if (k.includes('dukan')) return 'dukan_challans';
 
+        // 10. Job Work Sheets (History)
         if (k.includes('jobwork_sheets_') || k.includes('jw_sheet_')) {
             const workerId = k.replace(/.*jobwork_sheets_/, '').replace(/.*jw_sheet_/, '');
             const workers = getAllLocalWorkers();
@@ -169,10 +228,12 @@
             return 'cutting_history';
         }
 
+        // 11. Job Workers List
         if (k.includes('jobwork_workers') || k.includes('cutting_workers') || k.includes('calender_workers')) {
             return 'WORKERS_SPLIT_ACTION';
         }
 
+        // 12. Job Work Bills & Payments
         if (k.includes('jw_bill') || k.includes('jobwork_bill') || k.includes('jw_payment') || k.includes('jobwork')) {
             return 'job_work_bills';
         }
@@ -237,6 +298,7 @@
 
         if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
         renderDebounceTimer = setTimeout(() => {
+            if (typeof window.populateNavbarKarkhanaDropdown === 'function') window.populateNavbarKarkhanaDropdown();
             if (typeof window.renderSheetTabs === 'function') window.renderSheetTabs();
             if (typeof window.renderKarigerTable === 'function') window.renderKarigerTable();
             if (typeof window.renderBanaTable === 'function') window.renderBanaTable();
@@ -294,6 +356,13 @@
         const targetTable = resolveTargetTable(fullKey);
         if (!targetTable) return false;
 
+        // 1. Karkhana Table Direct Sync
+        if (targetTable === 'KARKHANA_LIST_ACTION') {
+            await syncKarkhanasToCloudTable(data);
+            return true;
+        }
+
+        // 2. Workers Split Sync
         if (targetTable === 'WORKERS_SPLIT_ACTION') {
             await syncWorkersDirectToCuttingAndCalender();
             return true;
@@ -310,7 +379,6 @@
             const cleanKey = String(fullKey).replace(`${uid}_${sess}_`, '').replace(`${uid}_`, '');
             const recordId = `${uid}_${sess}_${cleanKey}`;
 
-            // app_store ke liye Safe Write (Delete + Insert)
             if (targetTable === 'app_store') {
                 await supabaseClient.from('app_store').delete().eq('id', recordId);
                 const { error: appErr } = await supabaseClient.from('app_store').insert({
@@ -382,6 +450,23 @@
         isSyncingInProgress = true;
         if (!silent) showSyncStatus('syncing');
 
+        // ⭐ 1. Karkhanas table se direct load karein
+        try {
+            const { data: kData, error: kErr } = await supabaseClient.from('karkhanas').select('*').eq('user_id', uid);
+            if (!kErr && Array.isArray(kData) && kData.length > 0) {
+                const kList = kData.map(row => ({
+                    id: row.is_default ? 'k_main' : `k_${row.id}`,
+                    name: row.karkhana_name,
+                    isDefault: Boolean(row.is_default),
+                    location: 'Local Branch',
+                    incharge: 'Munshi',
+                    createdAt: row.created_at
+                }));
+                smartApplyRemoteData('karkhana_list', kList);
+            }
+        } catch (_) {}
+
+        // ⭐ 2. Baaki sabhi tables se load karein
         const tables = [
             'app_store',
             'saree_stock', 'saree_history',
@@ -443,8 +528,10 @@
             hasNewData = true;
         }
 
+        // Pehli baar local godam aur workers ko Supabase me push karein
         if (!hasInitialPushed) {
             hasInitialPushed = true;
+            await syncKarkhanasToCloudTable();
             await syncWorkersDirectToCuttingAndCalender();
         }
 
@@ -456,9 +543,6 @@
         showSyncStatus('online');
     };
 
-    /**
-     * ⭐ LIVE REALTIME: Dusre device par session badalte hi turant pakad kar switch karega
-     */
     const initSupabaseRealtime = () => {
         if (!supabaseClient) return;
         detachSupabaseRealtime();
@@ -474,14 +558,12 @@
                         const row = payload.new;
                         if (!row || row.user_id !== uid) return;
 
-                        // ⭐ 1. LIVE CROSS-DEVICE ACTIVE SESSION SWITCH
                         const rKey = String(row.key || row.id || '');
                         if (rKey.includes('app_active_session')) {
                             const cloudActiveSess = String(row.data !== undefined ? row.data : row.value).replace(/['"]+/g, '').trim();
                             const currentLocalSess = getActiveSessionVal();
 
                             if (/^\d{4}-\d{4}$/.test(cloudActiveSess) && cloudActiveSess !== currentLocalSess) {
-                                console.log(`[CrossDeviceRealtime] Active Session changed on another device: ${cloudActiveSess}`);
                                 localStorage.setItem(`${uid}_app_active_session`, cloudActiveSess);
                                 if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[`${uid}_app_active_session`] = cloudActiveSess;
                                 window.location.reload();
@@ -489,7 +571,6 @@
                             }
                         }
 
-                        // ⭐ 2. Normal Data Sync
                         if (!isSyncingInProgress) {
                             pullAllCloudData(true);
                         }
@@ -539,6 +620,7 @@
         switchSessionListeners,
         cloudWrite,
         pullAllCloudData,
+        syncKarkhanasToCloudTable,
         syncWorkersDirectToCuttingAndCalender,
         triggerSmartUIRepaint
     };
