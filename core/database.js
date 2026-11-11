@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - ENTERPRISE AUTO-POLLING & LIVE REALTIME ENGINE (ALL MODULES)
    File: core/database.js • Developed by Farhan Jawed
-   Architecture: Intelligent Auto-Split • Two-Way Sync • Startup Local-to-Cloud Push
+   Architecture: Cross-Device Instant Sync (Mobile + PC) • Multi-Tenant Isolation
 ============================================================================ */
 
 (() => {
@@ -50,7 +50,7 @@
                 if (clean && clean !== 'app') return clean;
             }
         } catch (_) {}
-        return 'farhan';
+        return '10001';
     };
 
     const getSafeTenantId = () => {
@@ -106,7 +106,7 @@
         if (k.includes('material_transfer') || k.includes('transfer')) return 'material_transfers';
         if (k.includes('dukan')) return 'dukan_challans';
 
-        // 8. Job Work Sheets (History)
+        // 8. Job Work Sheets
         if (k.includes('jobwork_sheets_') || k.includes('jw_sheet_')) {
             const workerId = k.replace(/.*jobwork_sheets_/, '').replace(/.*jw_sheet_/, '');
             let workers = [];
@@ -206,57 +206,45 @@
         }, 50);
     };
 
+    /**
+     * ⭐ SMART APPLY: Mobile aur PC dono ke LocalStorage me sahi prefix key se data dalta hai
+     */
     const smartApplyRemoteData = (targetKey, rowData) => {
-        if (!targetKey) return false;
+        if (!targetKey || rowData === undefined || rowData === null) return false;
 
-        let localData = null;
+        const uid = getSafeUserId();
+        const sess = getActiveSessionVal();
+
+        // 1. Direct short key
+        let shortKey = targetKey;
+        const prefix = `${uid}_${sess}_`;
+        if (shortKey.startsWith(prefix)) {
+            shortKey = shortKey.replace(prefix, '');
+        }
+
+        // 2. Storage Engine ke memory cache aur localStorage dono me store karein
+        const fullStorageKey = (typeof window.getStorageKey === 'function') 
+            ? window.getStorageKey(shortKey) 
+            : `${uid}_${sess}_${shortKey}`;
+
         try {
-            if (typeof window.getStore === 'function') {
-                localData = window.getStore(targetKey);
-            } else {
-                localData = JSON.parse(localStorage.getItem(targetKey) || 'null');
+            if (window.APP_MEMORY_CACHE) {
+                window.APP_MEMORY_CACHE[fullStorageKey] = rowData;
+                window.APP_MEMORY_CACHE[shortKey] = rowData;
             }
-        } catch (_) {}
-
-        if (Array.isArray(localData) && Array.isArray(rowData)) {
-            const map = new Map();
-            rowData.forEach((item) => {
-                if (!item) return;
-                const itemId = String(item.id || item.refId || JSON.stringify(item));
-                map.set(itemId, item);
-            });
-            localData.forEach((item) => {
-                if (!item) return;
-                const itemId = String(item.id || item.refId || JSON.stringify(item));
-                map.set(itemId, item);
-            });
-
-            const merged = Array.from(map.values());
-
-            if (typeof window.setRemoteStore === 'function') {
-                window.setRemoteStore(targetKey, merged);
-            } else {
-                localStorage.setItem(targetKey, JSON.stringify(merged));
+            localStorage.setItem(fullStorageKey, JSON.stringify(rowData));
+            localStorage.setItem(shortKey, JSON.stringify(rowData));
+            if (typeof window.idbPut === 'function') {
+                window.idbPut(fullStorageKey, rowData);
             }
             return true;
+        } catch (_) {
+            return false;
         }
-
-        if (rowData !== undefined && rowData !== null) {
-            if (JSON.stringify(localData) !== JSON.stringify(rowData)) {
-                if (typeof window.setRemoteStore === 'function') {
-                    window.setRemoteStore(targetKey, rowData);
-                } else {
-                    localStorage.setItem(targetKey, JSON.stringify(rowData));
-                }
-                return true;
-            }
-        }
-
-        return false;
     };
 
     /**
-     * 🚀 CLOUD WRITE (WITH SPECIAL JOBWORK SPLITTER)
+     * 🚀 CLOUD WRITE
      */
     const cloudWrite = async (fullKey, data) => {
         if (!supabaseClient) return false;
@@ -272,7 +260,6 @@
         showSyncStatus('syncing');
 
         try {
-            // ⭐ SPECIAL: Jobwork Workers ko Cutting aur Calender me alag-alag daalo
             if (targetTable === 'JOBWORK_WORKERS_SPECIAL') {
                 const workers = Array.isArray(data) ? data : [];
                 const cuttingWorkers = workers.filter(w => String(w?.type || '').toLowerCase() === 'cutting');
@@ -337,48 +324,14 @@
     };
 
     /**
-     * 🌟 FORCE INITIAL PUSH: Local me maujood data ko khali tables me turant push karein
-     */
-    const forceSyncLocalToCloudIfEmpty = async () => {
-        if (!supabaseClient || !navigator.onLine) return;
-        const uid = getSafeUserId();
-        const sess = getActiveSessionVal();
-
-        // 1. Check & Push Jobwork Workers (Cutting & Calender)
-        try {
-            let localWorkers = [];
-            if (typeof window.getStore === 'function') localWorkers = window.getStore('jobwork_workers') || [];
-            if (localWorkers.length > 0) {
-                await cloudWrite(`${uid}_${sess}_jobwork_workers`, localWorkers);
-            }
-        } catch (_) {}
-
-        // 2. Check & Push Saree Stock
-        try {
-            let localSaree = [];
-            if (typeof window.getStore === 'function') localSaree = window.getStore('saree_stock') || [];
-            if (localSaree.length > 0) {
-                await cloudWrite(`${uid}_${sess}_saree_stock`, localSaree);
-            }
-        } catch (_) {}
-
-        // 3. Check & Push Sancha Items
-        try {
-            let localSancha = [];
-            if (typeof window.getStore === 'function') localSancha = window.getStore('sancha_items') || [];
-            if (localSancha.length > 0) {
-                await cloudWrite(`${uid}_${sess}_sancha_items`, localSancha);
-            }
-        } catch (_) {}
-    };
-
-    /**
-     * 📥 CLOUD PULL
+     * 📥 CLOUD PULL: Mobile khulte hi Supabase se sara data lekar mobile screen par bharta hai
      */
     const pullAllCloudData = async (silent = true) => {
         if (!supabaseClient || !navigator.onLine) return;
         const uid = getSafeUserId();
         if (!uid) return;
+
+        showSyncStatus('syncing');
 
         const tables = [
             'saree_stock', 'saree_history',
@@ -424,8 +377,8 @@
 
                         const mappedLocalKey = mapCloudKeyToLocalKey(localKey, tbl);
                         if (mappedLocalKey && row.data !== undefined) {
-                            const updated = smartApplyRemoteData(mappedLocalKey, row.data);
-                            if (updated) hasNewData = true;
+                            smartApplyRemoteData(mappedLocalKey, row.data);
+                            hasNewData = true;
                         }
                     });
                 }
@@ -434,17 +387,12 @@
 
         if (collectedWorkersMap.size > 0) {
             const allWorkers = Array.from(collectedWorkersMap.values());
-            const updated = smartApplyRemoteData('jobwork_workers', allWorkers);
-            if (updated) hasNewData = true;
+            smartApplyRemoteData('jobwork_workers', allWorkers);
+            hasNewData = true;
         }
 
-        // Pehle se maujood local data ko khali tables me bhein
-        await forceSyncLocalToCloudIfEmpty();
-
-        if (hasNewData || !silent) {
-            triggerSmartUIRepaint();
-            showSyncStatus('online');
-        }
+        triggerSmartUIRepaint();
+        showSyncStatus('online');
     };
 
     const initSupabaseRealtime = () => {
@@ -472,6 +420,7 @@
                     }
                 });
 
+            // Pehli baar khulte hi turant pura cloud data pull karein
             pullAllCloudData(false);
         } catch (err) {
             console.warn('[CloudEngine] Realtime setup:', err);
@@ -509,7 +458,6 @@
         switchSessionListeners,
         cloudWrite,
         pullAllCloudData,
-        forceSyncLocalToCloudIfEmpty,
         triggerSmartUIRepaint
     };
 
@@ -534,9 +482,9 @@
     });
 
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => setTimeout(initSupabaseRealtime, 300));
+        document.addEventListener('DOMContentLoaded', () => setTimeout(initSupabaseRealtime, 200));
     } else {
-        setTimeout(initSupabaseRealtime, 300);
+        setTimeout(initSupabaseRealtime, 200);
     }
 
     if (typeof module !== 'undefined' && module.exports) {
