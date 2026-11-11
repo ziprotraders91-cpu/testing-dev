@@ -54,7 +54,7 @@
         }
     </style>
 </head>
-<body oncontextmenu="return false;">
+<body>
 
     <!-- TOP PREVIEW BANNER -->
     <aside id="backup-preview-banner" style="display:none; background:#fef08a; color:#854d0e; padding:10px 20px; font-weight:800; border-bottom:2px solid #eab308; position:sticky; top:0; z-index:999999; justify-content:space-between; align-items:center;" role="alert">
@@ -1252,47 +1252,6 @@
                 window.checkAutoLogin();
             }
         });
-    </script>
-
-    <!-- =========================================================================
-         6. SECURITY GUARD: SAFE F12 & ANTI-INSPECT LOCK
-         Developed for: Farhan Jawed
-         Protection: Blocks F12, Ctrl+U, Ctrl+Shift+I/J/C without touching F1-F6
-    ========================================================================= -->
-    <script>
-    (() => {
-        'use strict';
-
-        window.addEventListener('keydown', (e) => {
-            // 1. F12 Lock (Developer Tools Block)
-            if (e.key === 'F12' || e.keyCode === 123) {
-                e.preventDefault();
-                e.stopPropagation();
-                return false;
-            }
-
-            // 2. Ctrl + Shift + I (Inspect), J (Console), C (Element Inspector)
-            if (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'i' || e.key === 'J' || e.key === 'j' || e.key === 'C' || e.key === 'c' || e.keyCode === 73 || e.keyCode === 74 || e.keyCode === 67)) {
-                e.preventDefault();
-                e.stopPropagation();
-                return false;
-            }
-
-            // 3. Ctrl + U (View Page Source Code)
-            if (e.ctrlKey && (e.key === 'u' || e.key === 'U' || e.keyCode === 85)) {
-                e.preventDefault();
-                e.stopPropagation();
-                return false;
-            }
-
-            // 4. Ctrl + S (Save Page as File)
-            if (e.ctrlKey && (e.key === 's' || e.key === 'S' || e.keyCode === 83)) {
-                e.preventDefault();
-                e.stopPropagation();
-                return false;
-            }
-        }, true);
-    })();
     </script>
 </body>
 </html>
