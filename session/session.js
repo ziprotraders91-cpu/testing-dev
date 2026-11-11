@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - HIGH-SCALE FINANCIAL YEAR SESSION CONTROLLER
    File: session/session.js • Developed by Farhan Jawed
-   Architecture: Global Cloud Active Session Lock (Phone & Laptop 100% Lock)
+   Architecture: Clean Direct Sessions • Cross-Device Live Sync • Zero Traps
 ============================================================================ */
 
 (() => {
@@ -31,23 +31,12 @@
         return '10001';
     };
 
-    const getDeletedSessionsList = () => {
-        const uId = getEffectiveUserId();
-        const delKey = `${uId}_app_deleted_sessions`;
-        try {
-            const raw = localStorage.getItem(delKey);
-            if (raw) {
-                const parsed = JSON.parse(raw);
-                return Array.isArray(parsed) ? parsed.map(s => String(s).trim()) : [];
-            }
-        } catch (_) {}
-        return [];
-    };
-
+    /**
+     * Sabhi valid sessions ki clean list nikaalta hai
+     */
     const getAppSessions = () => {
         const uId = getEffectiveUserId();
         const userKey = `${uId}_app_sessions_list`;
-        const deletedSet = new Set(getDeletedSessionsList());
 
         let list = [];
         try {
@@ -59,42 +48,38 @@
             list = [];
         }
 
-        const sessionSet = new Set();
-        if (Array.isArray(list)) {
-            list.forEach((s) => {
-                const clean = String(s || '').replace(/['"]+/g, '').trim();
-                if (/^\d{4}-\d{4}$/.test(clean) && !deletedSet.has(clean)) {
-                    sessionSet.add(clean);
-                }
-            });
+        let cleanList = Array.isArray(list) 
+            ? list.map(s => String(s).replace(/['"]+/g, '').trim()).filter(s => /^\d{4}-\d{4}$/.test(s))
+            : [];
+
+        if (cleanList.length === 0) {
+            cleanList = [DEFAULT_BOOTSTRAP_SESSION];
         }
 
-        if (sessionSet.size === 0) {
-            sessionSet.add(DEFAULT_BOOTSTRAP_SESSION);
-        }
-
-        const finalList = Array.from(sessionSet).sort();
+        cleanList = Array.from(new Set(cleanList)).sort();
         try {
-            localStorage.setItem(userKey, JSON.stringify(finalList));
-            if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[userKey] = finalList;
+            localStorage.setItem(userKey, JSON.stringify(cleanList));
+            if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[userKey] = cleanList;
         } catch (_) {}
 
-        return finalList;
+        return cleanList;
     };
 
+    /**
+     * Current Active Session nikaalta hai (No Blacklist trap)
+     */
     const getActiveFinancialSession = () => {
         const uId = getEffectiveUserId();
         const userKey = `${uId}_app_active_session`;
-        const deletedSet = new Set(getDeletedSessionsList());
+        const validSessions = getAppSessions();
 
         let sess = localStorage.getItem(userKey);
         if (sess) {
             sess = String(sess).replace(/['"]+/g, '').trim();
         }
 
-        if (!sess || !/^\d{4}-\d{4}$/.test(sess) || deletedSet.has(sess)) {
-            const list = getAppSessions();
-            sess = list[list.length - 1] || DEFAULT_BOOTSTRAP_SESSION;
+        if (!sess || !/^\d{4}-\d{4}$/.test(sess) || !validSessions.includes(sess)) {
+            sess = validSessions[validSessions.length - 1] || DEFAULT_BOOTSTRAP_SESSION;
             localStorage.setItem(userKey, sess);
             if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[userKey] = sess;
         }
@@ -143,14 +128,10 @@
         }
     };
 
-    /**
-     * ⭐ GLOBAL ACTIVE SESSION SYNC (App start hone par Cloud ka Active Session check karta hai)
-     */
     const initCloudSessionSync = async () => {
         const uId = getEffectiveUserId();
         const sessionsKey = `${uId}_app_sessions_list`;
         const activeKey = `${uId}_app_active_session`;
-        const deletedKey = `${uId}_app_deleted_sessions`;
 
         try {
             const sb = window.supabaseClient || window.supabase;
@@ -161,20 +142,19 @@
                         const rKey = row.key || row.id;
                         const rVal = row.data !== undefined ? row.data : row.value;
 
-                        // 1. Session list sync
-                        if (rKey.includes('app_sessions_list') && Array.isArray(rVal)) {
-                            localStorage.setItem(sessionsKey, JSON.stringify(rVal));
+                        if (rKey.includes('app_sessions_list') && Array.isArray(rVal) && rVal.length > 0) {
+                            const clean = rVal.map(s => String(s).replace(/['"]+/g, '').trim()).filter(s => /^\d{4}-\d{4}$/.test(s));
+                            if (clean.length > 0) {
+                                localStorage.setItem(sessionsKey, JSON.stringify(clean));
+                            }
                         }
 
-                        // 2. ⭐ CROSS-DEVICE ACTIVE SESSION ENFORCEMENT
                         if (rKey.includes('app_active_session') && rVal) {
-                            const cloudActiveSess = String(rVal).replace(/['"]+/g, '').trim();
-                            const currentLocalSess = getActiveFinancialSession();
-
-                            if (/^\d{4}-\d{4}$/.test(cloudActiveSess) && cloudActiveSess !== currentLocalSess) {
-                                console.log(`[CrossDeviceSync] Cloud par Active Session '${cloudActiveSess}' hai. Device ko align kar rahe hain...`);
-                                localStorage.setItem(activeKey, cloudActiveSess);
-                                if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[activeKey] = cloudActiveSess;
+                            const cloudActive = String(rVal).replace(/['"]+/g, '').trim();
+                            const curActive = getActiveFinancialSession();
+                            if (/^\d{4}-\d{4}$/.test(cloudActive) && cloudActive !== curActive) {
+                                localStorage.setItem(activeKey, cloudActive);
+                                if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[activeKey] = cloudActive;
                                 window.location.reload();
                                 return;
                             }
@@ -188,14 +168,11 @@
         }
     };
 
-    /* ========================================================================
-       ⭐ SESSION SWITCH: TURANT SUPABASE ME BHEJTA HAI TAHO DUSRA DEVICE BHI UPDATE HO
-       ======================================================================== */
     const switchAppFinancialSession = async (targetSession) => {
         const activeSess = getActiveFinancialSession();
         if (!targetSession || targetSession === activeSess) return;
 
-        if (!confirm(`Kya aap Session badal kar '${targetSession}' me jana chahte hain?\nYe aapke sabhi devices (Phone aur Laptop) par turant activate ho jayega.`)) {
+        if (!confirm(`Kya aap Session badal kar '${targetSession}' me jana chahte hain?`)) {
             populateSessionDropdown();
             return;
         }
@@ -209,7 +186,6 @@
                 window.APP_MEMORY_CACHE[`${uId}_app_active_session`] = cleanTarget;
             }
 
-            // ⭐ Cloud app_store me likho taaki laptop/phone ko pata chale
             await saveToAppStoreSafe(`${uId}_app_active_session`, cleanTarget);
             await saveToAppStoreSafe(`${uId}_app_sessions_list`, getAppSessions());
 
@@ -262,6 +238,9 @@
         modal.style.display = 'none';
     };
 
+    /* ========================================================================
+       🗑️ CLEAN SESSION DELETE
+       ======================================================================== */
     const confirmAndDeleteSessionWithAuth = async () => {
         const delSel = document.getElementById('session-delete-select');
         const targetSess = delSel ? delSel.value : '';
@@ -303,26 +282,22 @@
         }
 
         try {
+            // 1. Session list se hatao
             sessions = sessions.filter((s) => s !== targetSess);
             if (sessions.length === 0) sessions = [DEFAULT_BOOTSTRAP_SESSION];
-
             localStorage.setItem(`${uId}_app_sessions_list`, JSON.stringify(sessions));
 
-            const delKey = `${uId}_app_deleted_sessions`;
-            let delList = getDeletedSessionsList();
-            if (!delList.includes(targetSess)) {
-                delList.push(targetSess);
-            }
-            localStorage.setItem(delKey, JSON.stringify(delList));
-
-            const cur = getActiveFinancialSession();
-            let nextActive = cur;
-            if (cur === targetSess) {
+            // 2. Active session adjust karo
+            let nextActive = getActiveFinancialSession();
+            if (nextActive === targetSess) {
                 nextActive = sessions[sessions.length - 1] || DEFAULT_BOOTSTRAP_SESSION;
                 localStorage.setItem(`${uId}_app_active_session`, nextActive);
             }
 
-            // Wipe from Supabase
+            // Purani blacklists saaf
+            localStorage.removeItem(`${uId}_app_deleted_sessions`);
+
+            // 3. Supabase Cloud se saaf karo
             const sb = window.supabaseClient || window.supabase;
             if (sb && typeof sb.from === 'function') {
                 const tables = [
@@ -352,13 +327,13 @@
 
                 await saveToAppStoreSafe(`${uId}_app_sessions_list`, sessions);
                 await saveToAppStoreSafe(`${uId}_app_active_session`, nextActive);
-                await saveToAppStoreSafe(delKey, delList);
             }
 
+            // 4. LocalStorage saaf
             const keysToRemove = [];
             for (let i = 0; i < localStorage.length; i++) {
                 const k = localStorage.key(i);
-                if (k && (k.includes(`_${targetSess}_`) || k.includes(`${targetSess}`))) {
+                if (k && k.includes(`_${targetSess}_`)) {
                     keysToRemove.push(k);
                 }
             }
@@ -370,7 +345,7 @@
                 });
             }
 
-            alert(`✅ Session '${targetSess}' Cloud aur Computer dono se PERMANENTLY delete ho gaya!`);
+            alert(`✅ Session '${targetSess}' safalata-poorvak delete ho gaya!`);
             window.location.reload();
 
         } catch (err) {
@@ -398,6 +373,10 @@
     window.SessionEngine = Object.assign(window.SessionEngine || {}, sessionAPI);
 
     const initRunner = () => {
+        // Blacklist ka kachra saaf karein
+        const uId = getEffectiveUserId();
+        localStorage.removeItem(`${uId}_app_deleted_sessions`);
+
         populateSessionDropdown();
         initCloudSessionSync();
     };
