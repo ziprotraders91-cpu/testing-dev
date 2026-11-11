@@ -8,6 +8,7 @@
    - Bana, Zari & Sancha (Tani/Chukka) Inward Engine
    - Purana vs Naya Mode with Datalist Auto-Complete
    - Live Godown Stock Display & Instant A6 Print
+   - [FIXED: YYYY-MM-DD Date Format Warning for <input type="date">]
 ============================================================================ */
 
 (() => {
@@ -28,10 +29,20 @@
         return isNaN(n) || !isFinite(n) ? fallback : n;
     };
 
+    // ⭐ FIXED: Always return valid YYYY-MM-DD format for HTML date inputs
     const getToday = () => {
-        return (typeof window.getTodayDate === 'function') 
+        let rawDate = (typeof window.getTodayDate === 'function') 
             ? window.getTodayDate() 
             : new Date().toISOString().split('T')[0];
+
+        // Agar date DD-MM-YYYY form me ho (jaise 11-11-2026), to use YYYY-MM-DD banayein
+        if (typeof rawDate === 'string' && rawDate.includes('-')) {
+            const parts = rawDate.split('-');
+            if (parts.length === 3 && parts[0].length === 2 && parts[2].length === 4) {
+                return `${parts[2]}-${parts[1]}-${parts[0]}`; // Convert to YYYY-MM-DD
+            }
+        }
+        return rawDate || new Date().toISOString().split('T')[0];
     };
 
     // Datalists Builder
