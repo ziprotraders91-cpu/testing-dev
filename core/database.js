@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - ENTERPRISE AUTO-POLLING & LIVE REALTIME ENGINE (ALL MODULES)
    File: core/database.js • Developed by Farhan Jawed
-   Architecture: Intelligent Auto-Split (Cutting & Calender) • Multi-Tenant Privacy
+   Architecture: Intelligent Auto-Split • Two-Way Sync • Startup Local-to-Cloud Push
 ============================================================================ */
 
 (() => {
@@ -76,10 +76,6 @@
         return '2026-2027';
     };
 
-    /**
-     * ⭐ SMART TRAFFIC POLICE (ROUTER)
-     * Har data key ko pehchan kar uski sahi Supabase table me route karta hai
-     */
     const resolveTargetTable = (fullKey) => {
         const k = String(fullKey).toLowerCase();
 
@@ -95,32 +91,28 @@
         if (k.includes('bana_history')) return 'bana_history';
         if (k.includes('bana_stock') || k.includes('bana')) return 'bana_stock';
 
-        // 4. Sancha Module (Tani / Chukka)
+        // 4. Sancha Module
         if (k.includes('sancha_history')) return 'sancha_history';
         if (k.includes('sancha_items') || k.includes('sancha_list') || k.includes('sancha')) return 'sancha_list';
 
-        // 5. Kariger & Tani Sheets
+        // 5. Karigers & Sheets
         if (k.includes('kariger_sheet') || k.includes('tani_sheet') || k.includes('tani_sheets')) return 'tani_sheets';
         if (k.includes('kariger_list') || k.includes('karigers') || k.includes('kariger')) return 'karigers';
 
         // 6. Payments Module
         if (k.includes('payments') || k.includes('payment_list') || k.includes('kharcha')) return 'payments';
 
-        // 7. Godown, Transfers & Dukan
+        // 7. Godown & Dukan
         if (k.includes('material_transfer') || k.includes('transfer')) return 'material_transfers';
         if (k.includes('dukan')) return 'dukan_challans';
 
-        // 8. Job Work Monthly Sheets (Checking Worker Type: Cutting vs Calender vs Embroidery)
+        // 8. Job Work Sheets (History)
         if (k.includes('jobwork_sheets_') || k.includes('jw_sheet_')) {
             const workerId = k.replace(/.*jobwork_sheets_/, '').replace(/.*jw_sheet_/, '');
             let workers = [];
             try {
-                if (typeof window.getStore === 'function') {
-                    workers = window.getStore('jobwork_workers') || [];
-                }
-                if (!workers.length) {
-                    workers = JSON.parse(localStorage.getItem('jobwork_workers') || '[]');
-                }
+                if (typeof window.getStore === 'function') workers = window.getStore('jobwork_workers') || [];
+                if (!workers.length) workers = JSON.parse(localStorage.getItem('jobwork_workers') || '[]');
             } catch (_) {}
 
             const found = workers.find(w => w && String(w.id).toLowerCase() === workerId.toLowerCase());
@@ -128,10 +120,10 @@
 
             if (wType === 'calender') return 'calender_history';
             if (wType === 'embroidery') return 'embroidery_history';
-            return 'cutting_history'; // Default Cutting History
+            return 'cutting_history';
         }
 
-        // 9. Job Workers List (Cutting vs Calender Auto-Splitter)
+        // 9. Job Workers Directory
         if (k.includes('jobwork_workers')) return 'JOBWORK_WORKERS_SPECIAL';
 
         // 10. Job Work Bills & Payments
@@ -142,17 +134,12 @@
         return null;
     };
 
-    /**
-     * ⭐ LOCAL KEY TRANSLATOR (Cloud Data -> Exact Local Key Name)
-     */
     const mapCloudKeyToLocalKey = (cloudKey, tableName) => {
         const k = String(cloudKey).toLowerCase();
-
         if (k.includes('sancha_list') || tableName === 'sancha_list') return 'sancha_items';
         if (k.includes('karigers') || tableName === 'karigers') return 'kariger_list';
         if (tableName === 'job_work_bills' && k.includes('jw_bills_list')) return 'jw_bills_list';
         if (tableName === 'job_work_bills' && k.includes('jw_payments_list')) return 'jw_payments_list';
-
         return cloudKey;
     };
 
@@ -204,47 +191,16 @@
 
         if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
         renderDebounceTimer = setTimeout(() => {
-            const shSec = document.getElementById('kariger-sheet-section');
-            if (shSec && shSec.style.display !== 'none') {
-                if (typeof window.renderSheetTabs === 'function') window.renderSheetTabs();
-                if (typeof window.loadCurrentSheetData === 'function') window.loadCurrentSheetData();
-            }
-
-            const kSec = document.getElementById('kariger-section');
-            if (kSec && kSec.style.display !== 'none') {
-                if (typeof window.renderKarigerTable === 'function') window.renderKarigerTable();
-            }
-
-            const bSec = document.getElementById('bana-section');
-            if (bSec && bSec.style.display !== 'none') {
-                if (typeof window.renderBanaTable === 'function') window.renderBanaTable();
-                if (typeof window.applyPassbookFilters === 'function') window.applyPassbookFilters();
-            }
-
-            const zSec = document.getElementById('zari-section');
-            if (zSec && zSec.style.display !== 'none') {
-                if (typeof window.renderZariTable === 'function') window.renderZariTable();
-                if (typeof window.applyZariPassbookFilters === 'function') window.applyZariPassbookFilters();
-            }
-
-            const sSec = document.getElementById('saree-section');
-            if (sSec && sSec.style.display !== 'none') {
-                if (typeof window.renderSareeTable === 'function') window.renderSareeTable();
-            }
-
-            const sanchaSec = document.getElementById('sancha-section');
-            if (sanchaSec && sanchaSec.style.display !== 'none') {
-                if (typeof window.renderSanchaTable === 'function') window.renderSanchaTable();
-            }
-
-            const jwSec = document.getElementById('jobwork-section');
-            if (jwSec && jwSec.style.display !== 'none') {
-                if (typeof window.renderJobWorkersTable === 'function') window.renderJobWorkersTable();
-                if (typeof window.renderJobWorkMovementDaybook === 'function') window.renderJobWorkMovementDaybook();
-                if (typeof window.renderJobWorkBillsTable === 'function') window.renderJobWorkBillsTable();
-                if (typeof window.updateJobWorkHubBadges === 'function') window.updateJobWorkHubBadges();
-            }
-
+            if (typeof window.renderSheetTabs === 'function') window.renderSheetTabs();
+            if (typeof window.renderKarigerTable === 'function') window.renderKarigerTable();
+            if (typeof window.renderBanaTable === 'function') window.renderBanaTable();
+            if (typeof window.renderZariTable === 'function') window.renderZariTable();
+            if (typeof window.renderSareeTable === 'function') window.renderSareeTable();
+            if (typeof window.renderSanchaTable === 'function') window.renderSanchaTable();
+            if (typeof window.renderJobWorkersTable === 'function') window.renderJobWorkersTable();
+            if (typeof window.renderJobWorkMovementDaybook === 'function') window.renderJobWorkMovementDaybook();
+            if (typeof window.renderJobWorkBillsTable === 'function') window.renderJobWorkBillsTable();
+            if (typeof window.updateJobWorkHubBadges === 'function') window.updateJobWorkHubBadges();
             if (typeof window.renderDashboardDayBook === 'function') window.renderDashboardDayBook();
             if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
         }, 50);
@@ -300,7 +256,7 @@
     };
 
     /**
-     * 🚀 CLOUD WRITE (CUTTING & CALENDER LIST AUTO-SPLITTER)
+     * 🚀 CLOUD WRITE (WITH SPECIAL JOBWORK SPLITTER)
      */
     const cloudWrite = async (fullKey, data) => {
         if (!supabaseClient) return false;
@@ -316,7 +272,7 @@
         showSyncStatus('syncing');
 
         try {
-            // ⭐ SPECIAL CASE: Jobwork Workers ko Cutting aur Calender alag-alag tables me baanto
+            // ⭐ SPECIAL: Jobwork Workers ko Cutting aur Calender me alag-alag daalo
             if (targetTable === 'JOBWORK_WORKERS_SPECIAL') {
                 const workers = Array.isArray(data) ? data : [];
                 const cuttingWorkers = workers.filter(w => String(w?.type || '').toLowerCase() === 'cutting');
@@ -325,21 +281,18 @@
 
                 const now = new Date().toISOString();
 
-                // Save to cutting table
                 await supabaseClient.from('cutting').upsert({
                     id: `${uid}_${sess}_cutting_workers`,
                     user_id: uid, tenant_id: tid, session: sess,
                     data: cuttingWorkers, updated_at: now
                 }, { onConflict: 'id' });
 
-                // Save to calender table
                 await supabaseClient.from('calender').upsert({
                     id: `${uid}_${sess}_calender_workers`,
                     user_id: uid, tenant_id: tid, session: sess,
                     data: calenderWorkers, updated_at: now
                 }, { onConflict: 'id' });
 
-                // Save to embroidery table
                 await supabaseClient.from('embroidery').upsert({
                     id: `${uid}_${sess}_embroidery_workers`,
                     user_id: uid, tenant_id: tid, session: sess,
@@ -351,7 +304,6 @@
                 return true;
             }
 
-            // Normal tables write
             const cleanKey = String(fullKey).replace(`${uid}_${sess}_`, '').replace(`${uid}_`, '');
             const recordId = `${uid}_${sess}_${cleanKey}`;
 
@@ -385,7 +337,43 @@
     };
 
     /**
-     * 📥 CLOUD PULL (MERGING CUTTING & CALENDER BACK TO LOCAL)
+     * 🌟 FORCE INITIAL PUSH: Local me maujood data ko khali tables me turant push karein
+     */
+    const forceSyncLocalToCloudIfEmpty = async () => {
+        if (!supabaseClient || !navigator.onLine) return;
+        const uid = getSafeUserId();
+        const sess = getActiveSessionVal();
+
+        // 1. Check & Push Jobwork Workers (Cutting & Calender)
+        try {
+            let localWorkers = [];
+            if (typeof window.getStore === 'function') localWorkers = window.getStore('jobwork_workers') || [];
+            if (localWorkers.length > 0) {
+                await cloudWrite(`${uid}_${sess}_jobwork_workers`, localWorkers);
+            }
+        } catch (_) {}
+
+        // 2. Check & Push Saree Stock
+        try {
+            let localSaree = [];
+            if (typeof window.getStore === 'function') localSaree = window.getStore('saree_stock') || [];
+            if (localSaree.length > 0) {
+                await cloudWrite(`${uid}_${sess}_saree_stock`, localSaree);
+            }
+        } catch (_) {}
+
+        // 3. Check & Push Sancha Items
+        try {
+            let localSancha = [];
+            if (typeof window.getStore === 'function') localSancha = window.getStore('sancha_items') || [];
+            if (localSancha.length > 0) {
+                await cloudWrite(`${uid}_${sess}_sancha_items`, localSancha);
+            }
+        } catch (_) {}
+    };
+
+    /**
+     * 📥 CLOUD PULL
      */
     const pullAllCloudData = async (silent = true) => {
         if (!supabaseClient || !navigator.onLine) return;
@@ -426,7 +414,6 @@
                             localKey = localKey.replace(prefix, '');
                         }
 
-                        // Workers merging logic (Cutting + Calender + Embroidery -> jobwork_workers)
                         if (tbl === 'cutting' || tbl === 'calender' || tbl === 'embroidery') {
                             if (Array.isArray(row.data)) {
                                 row.data.forEach(w => {
@@ -445,12 +432,14 @@
             } catch (_) {}
         }
 
-        // Agar cutting/calender se workers mile hain to unhe jobwork_workers me daalo
         if (collectedWorkersMap.size > 0) {
             const allWorkers = Array.from(collectedWorkersMap.values());
             const updated = smartApplyRemoteData('jobwork_workers', allWorkers);
             if (updated) hasNewData = true;
         }
+
+        // Pehle se maujood local data ko khali tables me bhein
+        await forceSyncLocalToCloudIfEmpty();
 
         if (hasNewData || !silent) {
             triggerSmartUIRepaint();
@@ -520,6 +509,7 @@
         switchSessionListeners,
         cloudWrite,
         pullAllCloudData,
+        forceSyncLocalToCloudIfEmpty,
         triggerSmartUIRepaint
     };
 
