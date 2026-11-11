@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - HIGH-SCALE ENTERPRISE AUTHENTICATION & SECURITY ENGINE
    File: auth/auth.js • Developed by Farhan Jawed
-   Architecture: Supabase PostgreSQL Auth | Atomic Transactions | 5-Point Security
+   Architecture: Supabase PostgreSQL Auth | 5-Point Strict Check | Farhan Shield
    Scale: 1,000,000+ Concurrent Active Users | Offline-First & Resilient
 ============================================================================ */
 
@@ -156,7 +156,7 @@
     };
 
     /* ========================================================================
-       4. BULLETPROOF REGISTRATION (SUPABASE)
+       4. BULLETPROOF REGISTRATION (5-POINT STRICT CHECK & FARHAN SHIELD)
        ------------------------------------------------------------------------
     ======================================================================== */
     const handleRegister = async () => {
@@ -177,6 +177,7 @@
 
         if (!msg) return;
 
+        // 1. बुनियादी वैलिडेशन
         if (!name || !id || !pass || !mobile || pin.length !== 4) {
             msg.textContent = 'Sabhi details bharein (4-digit PIN zaroori hai)!';
             msg.className = 'message error';
@@ -191,36 +192,80 @@
             return;
         }
 
-        msg.textContent = 'Account request process ho rahi hai... ⏳';
+        // 🛑 FARHAN STRICT BLOCK (Farhan नाम या ID से कोई दूसरा खाता न बने)
+        const cleanNameLower = name.toLowerCase().replace(/\s+/g, '');
+        if (id.includes('farhan') || cleanNameLower.includes('farhan')) {
+            msg.innerHTML = '⛔ <strong>Farhan</strong> naam ya ID se naya account banana strictly block hai!';
+            msg.className = 'message error';
+            msg.style.display = 'block';
+            return;
+        }
+
+        msg.textContent = 'Details verify ho rahi hain... ⏳';
         msg.className = 'message';
         msg.style.display = 'block';
-
-        const isOwner = (id === 'farhan');
-        const exp = new Date();
-        exp.setDate(exp.getDate() + 30);
 
         try {
             const sb = getSupabase();
             if (!sb) {
-                alert('⚠️ Supabase connection nahi mila! Page ko Hard Refresh (Ctrl+F5) karein.');
+                alert('⚠️ Supabase connection nahi mila! Page ko Refresh karein.');
                 msg.textContent = 'Connection error! Page refresh karein.';
                 return;
             }
 
-            // 1. Check if user_id exists
-            const { data: existingUser, error: checkErr } = await sb
+            // 🔍 5-POINT EXACT MATCH CHECK IN SUPABASE
+            const { data: allUsers, error: fetchErr } = await sb
                 .from('karkhana_users')
-                .select('user_id')
-                .eq('user_id', id);
+                .select('user_id, full_name, mobile, email, pin');
 
-            if (existingUser && existingUser.length > 0) {
-                msg.textContent = '⚠️ Yeh User ID pehle se registered hai! Doosri ID chunein.';
-                msg.className = 'message error';
-                msg.style.display = 'block';
-                return;
+            if (fetchErr) throw fetchErr;
+
+            if (allUsers && allUsers.length > 0) {
+                // 1. Name Check
+                if (allUsers.some(u => String(u.full_name || '').trim().toLowerCase() === name.toLowerCase())) {
+                    msg.textContent = '⚠️ Koi aur name select karein';
+                    msg.className = 'message error';
+                    msg.style.display = 'block';
+                    return;
+                }
+
+                // 2. User ID Check
+                if (allUsers.some(u => String(u.user_id || '').trim().toLowerCase() === id.toLowerCase())) {
+                    msg.textContent = '⚠️ Koi aur user ID select karein';
+                    msg.className = 'message error';
+                    msg.style.display = 'block';
+                    return;
+                }
+
+                // 3. Mobile Check
+                if (allUsers.some(u => String(u.mobile || '').trim() === mobile)) {
+                    msg.textContent = '⚠️ Koi aur mobile number select karein';
+                    msg.className = 'message error';
+                    msg.style.display = 'block';
+                    return;
+                }
+
+                // 4. Gmail Check
+                if (email && allUsers.some(u => String(u.email || '').trim().toLowerCase() === email)) {
+                    msg.textContent = '⚠️ Koi aur gmail select karein';
+                    msg.className = 'message error';
+                    msg.style.display = 'block';
+                    return;
+                }
+
+                // 5. Secret PIN Check
+                if (allUsers.some(u => String(u.pin || '').trim() === pin)) {
+                    msg.textContent = '⚠️ Koi aur secret PIN select karein';
+                    msg.className = 'message error';
+                    msg.style.display = 'block';
+                    return;
+                }
             }
 
-            // 2. Insert into Supabase karkhana_users
+            // सारे 5 चेक पास होने पर 30-दिन की रिक्वेस्ट सबमिट करें
+            const exp = new Date();
+            exp.setDate(exp.getDate() + 30);
+
             const payload = {
                 user_id: id,
                 full_name: name,
@@ -228,35 +273,26 @@
                 email: email || null,
                 password: pass,
                 pin: pin,
-                role: isOwner ? 'admin' : 'owner',
-                status: isOwner ? 'active' : 'pending',
-                validity_date: isOwner ? null : exp.toISOString().split('T')[0]
+                role: 'owner',
+                status: 'pending',
+                validity_date: exp.toISOString().split('T')[0]
             };
 
             const { error: insertErr } = await sb
                 .from('karkhana_users')
                 .insert([payload]);
 
-            if (insertErr) {
-                console.error('Insert error details:', insertErr);
-                throw new Error(insertErr.message || insertErr.details || 'Database insert failed');
-            }
+            if (insertErr) throw insertErr;
 
-            // 3. Create default Main Godown
-            try {
-                await sb.from('karkhanas').insert([{
-                    user_id: id,
-                    karkhana_name: 'Main Godown',
-                    is_default: true
-                }]);
-            } catch (_) {}
+            // Default Main Godown
+            await sb.from('karkhanas').insert([{
+                user_id: id,
+                karkhana_name: 'Main Godown',
+                is_default: true
+            }]);
 
-            // Success response
-            if (isOwner) {
-                msg.textContent = '✅ Admin Account Ban Gaya!';
-            } else {
-                msg.innerHTML = `⏳ <strong>Account Request Admin ke paas bhej di gayi hai!</strong><br>Admin (Farhan) ke Approve karte hi aap login kar sakenge.<br>📞 Admin: <a href='tel:+917065572191' style='color:#2563eb; font-weight:bold;'>+91 70655 72191</a>`;
-            }
+            // सफलता का संदेश
+            msg.innerHTML = `⏳ <strong>Account Request Admin ke paas bhej di gayi hai!</strong><br>Admin (Farhan) ke Approve karte hi aap login kar sakenge.<br>📞 Admin: <a href='tel:+917065572191' style='color:#2563eb; font-weight:bold;'>+91 70655 72191</a>`;
             msg.className = 'message success';
             msg.style.display = 'block';
 
@@ -273,8 +309,7 @@
 
         } catch (err) {
             console.error('[Auth:Register] Error:', err);
-            alert('Registration Error: ' + err.message);
-            msg.textContent = 'Error: ' + err.message;
+            msg.textContent = 'Registration Error: ' + err.message;
             msg.className = 'message error';
             msg.style.display = 'block';
         }
@@ -403,7 +438,6 @@
         _setDisplay('nav-admin-btn', window.currentUserRole === 'admin' ? 'inline-block' : 'none');
 
         const finishLoginInit = () => {
-            // ✅ Supabase Realtime Listener connected
             if (typeof window.initSupabaseRealtime === 'function') {
                 window.initSupabaseRealtime();
             } else if (typeof window.initFirebaseLiveListeners === 'function') {
@@ -454,7 +488,6 @@
     };
 
     const logout = () => {
-        // ✅ Supabase Realtime Detached
         if (typeof window.detachSupabaseRealtime === 'function') {
             window.detachSupabaseRealtime();
         } else if (typeof window.detachFirebaseLiveListeners === 'function') {
