@@ -7,7 +7,7 @@
 (() => {
     'use strict';
 
-    // 🚀 NAYE SUPABASE PROJECT KI CONFIGURATION
+    // 🚀 SUPABASE CONFIGURATION
     const SUPABASE_CONFIG = Object.freeze({
         url: "https://mvbejtoylowskerlgfxs.supabase.co",
         anonKey: "sb_publishable_NhTU4xzRMi0gtKH4CzVf_Q_lRfzjg3c"
@@ -17,7 +17,6 @@
     let isConnectedToCloud = false;
     let renderDebounceTimer = null;
     let realtimeChannel = null;
-    let autoSyncIntervalTimer = null;
 
     try {
         if (typeof window.supabase !== 'undefined' && typeof window.supabase.createClient === 'function') {
@@ -78,13 +77,12 @@
     };
 
     /**
-     * ⭐ SMART TRAFFIC POLICE (ROUTER)
-     * Har data ko uski sahi Supabase table me route karta hai
+     * ⭐ SMART ROUTER - HAR DATA KO APNI ASLI TABLE ME BHEJTA HAI
      */
     const resolveTargetTable = (fullKey) => {
         const k = String(fullKey).toLowerCase();
 
-        // 1. Saree Module (Separate Stock & History)
+        // 1. Saree Module
         if (k.includes('saree_history')) return 'saree_history';
         if (k.includes('saree_stock') || k.includes('saree')) return 'saree_stock';
 
@@ -96,20 +94,22 @@
         if (k.includes('bana_history')) return 'bana_history';
         if (k.includes('bana_stock') || k.includes('bana')) return 'bana_stock';
 
-        // 4. Sancha (Tani / Chukka)
+        // 4. Sancha Module
         if (k.includes('sancha_history')) return 'sancha_history';
         if (k.includes('sancha')) return 'sancha_list';
 
         // 5. Kariger & Tani Sheets
         if (k.includes('kariger_sheet') || k.includes('tani_sheet')) return 'tani_sheets';
-        if (k.includes('kariger') || k.includes('karigers')) return 'karigers';
+        if (k.includes('kariger')) return 'karigers';
 
-        // 6. Godown & Logistics
-        if (k.includes('karkhana') || k.includes('godown')) return 'karkhanas';
-        if (k.includes('material_transfers') || k.includes('transfer')) return 'material_transfers';
+        // 6. Payments Module (⭐ FIXED: Ab app_store me nahi jaega)
+        if (k.includes('payment') || k.includes('kharcha')) return 'payments';
+
+        // 7. Godown, Transfers & Dukan
+        if (k.includes('material_transfer') || k.includes('transfer')) return 'material_transfers';
         if (k.includes('dukan')) return 'dukan_challans';
 
-        // 7. Job Work Departments (ALAG-ALAG TABLES ME)
+        // 8. Job Work Departments
         if (k.includes('cutting_history') || k.includes('cutting_sheet')) return 'cutting_history';
         if (k.includes('cutting')) return 'cutting';
 
@@ -119,11 +119,10 @@
         if (k.includes('calender_history') || k.includes('calender_sheet')) return 'calender_history';
         if (k.includes('calender')) return 'calender';
 
-        // 8. Job Work Bills & Payments (EK HI CENTRAL TABLE ME)
         if (k.includes('jw_bill') || k.includes('jobwork_bill') || k.includes('jw_payment')) return 'job_work_bills';
 
-        // 9. App Settings & Session fallback
-        return 'app_store';
+        // 9. Sirf System Settings ke liye app_store
+        return null;
     };
 
     const showSyncStatus = (status) => {
@@ -221,7 +220,7 @@
             if (typeof window.triggerActiveSectionRefresh === 'function') {
                 window.triggerActiveSectionRefresh();
             }
-        }, 30);
+        }, 50);
     };
 
     const smartApplyRemoteData = (targetKey, rowData) => {
@@ -278,18 +277,32 @@
         return false;
     };
 
+    /**
+     * 🚀 CLOUD WRITE - SIRF APNI TABLE ME HI WRITE HOGA
+     */
     const cloudWrite = async (fullKey, data) => {
         if (!supabaseClient) return false;
-        showSyncStatus('syncing');
 
         const targetTable = resolveTargetTable(fullKey);
+        if (!targetTable) {
+            // Agar koi aisi key hai jo business module nahi hai, use ignore karein
+            return false;
+        }
+
+        showSyncStatus('syncing');
+
         const uid = getSafeUserId();
         const tid = getSafeTenantId();
         const sess = getActiveSessionVal();
 
+        // 🌟 Exact wahi ID banate hain jo aapke zari_stock me already bani hui hai:
+        // Jaise: "farhan_2026-2027_zari_stock"
+        const cleanKey = String(fullKey).replace(`${uid}_${sess}_`, '').replace(`${uid}_`, '');
+        const recordId = `${uid}_${sess}_${cleanKey}`;
+
         try {
             const payload = {
-                id: String(fullKey),
+                id: recordId,
                 user_id: uid,
                 tenant_id: tid,
                 session: sess,
@@ -297,45 +310,28 @@
                 updated_at: new Date().toISOString()
             };
 
-            if (targetTable === 'app_store') {
-                payload.key = String(fullKey);
-                payload.value = data;
-            }
-
             const { error } = await supabaseClient
                 .from(targetTable)
                 .upsert(payload, { onConflict: 'id' });
 
             if (error) {
                 console.error(`❌ [Supabase Error in ${targetTable}]:`, error.message, error.details);
-                const fallbackPayload = {
-                    id: String(fullKey),
-                    key: String(fullKey),
-                    value: data,
-                    data: data,
-                    updated_at: new Date().toISOString()
-                };
-                const { error: fbError } = await supabaseClient
-                    .from('app_store')
-                    .upsert(fallbackPayload, { onConflict: 'id' });
-
-                if (fbError) {
-                    console.error(`❌ [Supabase Fallback app_store Error]:`, fbError.message, fbError.details);
-                }
+                showSyncStatus('error');
+                return false;
             }
 
             isConnectedToCloud = true;
             showSyncStatus('online');
             return true;
         } catch (err) {
-            console.error(`❌ [Supabase Catch Error]:`, err);
-            showSyncStatus('online');
+            console.error(`❌ [Supabase Exception]:`, err);
+            showSyncStatus('error');
             return false;
         }
     };
 
     /**
-     * 📥 CLOUD PULL - Sabhi 21+ Tables Se Live Data Lata Hai
+     * 📥 CLOUD PULL - SABHI BUSINESS TABLES SE DATA FETCH KARTA HAI
      */
     const pullAllCloudData = async (silent = true) => {
         if (!supabaseClient || !navigator.onLine) return;
@@ -346,11 +342,12 @@
             'bana_stock', 'bana_history',
             'sancha_list', 'sancha_history',
             'karigers', 'tani_sheets', 
-            'material_transfers', 'karkhanas', 'dukan_challans', 
+            'material_transfers', 'dukan_challans', 
+            'payments',
             'cutting', 'cutting_history',
             'embroidery', 'embroidery_history',
             'calender', 'calender_history',
-            'job_work_bills', 'app_store'
+            'job_work_bills'
         ];
 
         let hasNewData = false;
@@ -363,10 +360,19 @@
 
                 if (!error && data && data.length > 0) {
                     data.forEach((row) => {
-                        const targetKey = row.id || row.key;
-                        const rowData = row.data !== undefined ? row.data : (row.value !== undefined ? row.value : row);
-                        if (targetKey) {
-                            const updated = smartApplyRemoteData(targetKey, rowData);
+                        // row.id jaise "farhan_2026-2027_zari_stock"
+                        // Isme se clean local key nikaalenge
+                        let localKey = row.id;
+                        const uid = getSafeUserId();
+                        const sess = getActiveSessionVal();
+                        const prefix = `${uid}_${sess}_`;
+
+                        if (localKey.startsWith(prefix)) {
+                            localKey = localKey.replace(prefix, '');
+                        }
+
+                        if (localKey && row.data !== undefined) {
+                            const updated = smartApplyRemoteData(localKey, row.data);
                             if (updated) hasNewData = true;
                         }
                     });
@@ -378,22 +384,6 @@
             triggerSmartUIRepaint();
             showSyncStatus('online');
         }
-    };
-
-    const startLiveAutoSyncHeartbeat = () => {
-        if (autoSyncIntervalTimer) clearInterval(autoSyncIntervalTimer);
-
-        // ⚠️ STEP 1 FIX: 5 सेकंड वाले लूप को बंद किया ताकि कंसोल में एरर की बाढ़ न आए
-        /*
-        autoSyncIntervalTimer = setInterval(() => {
-            const activeEl = document.activeElement;
-            const isUserTyping = activeEl && ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeEl.tagName);
-            
-            if (!isUserTyping && navigator.onLine && !document.hidden) {
-                pullAllCloudData(true);
-            }
-        }, 5000);
-        */
     };
 
     const initSupabaseRealtime = () => {
@@ -408,13 +398,19 @@
                     (payload) => {
                         if (typeof window.isBackupPreviewMode !== 'undefined' && window.isBackupPreviewMode) return;
                         const row = payload.new;
-                        if (row && (row.id || row.key)) {
-                            const targetKey = row.id || row.key;
-                            const rowData = row.data !== undefined ? row.data : (row.value !== undefined ? row.value : row);
-                            smartApplyRemoteData(targetKey, rowData);
+                        if (row && row.id && row.data !== undefined) {
+                            let localKey = row.id;
+                            const uid = getSafeUserId();
+                            const sess = getActiveSessionVal();
+                            const prefix = `${uid}_${sess}_`;
+
+                            if (localKey.startsWith(prefix)) {
+                                localKey = localKey.replace(prefix, '');
+                            }
+                            smartApplyRemoteData(localKey, row.data);
+                            triggerSmartUIRepaint();
+                            showSyncStatus('online');
                         }
-                        triggerSmartUIRepaint();
-                        showSyncStatus('online');
                     }
                 )
                 .subscribe((status) => {
@@ -425,7 +421,6 @@
                 });
 
             pullAllCloudData(false);
-            startLiveAutoSyncHeartbeat();
         } catch (err) {
             console.warn('[CloudEngine] Realtime setup:', err);
         }
@@ -436,10 +431,6 @@
             if (realtimeChannel && supabaseClient) {
                 supabaseClient.removeChannel(realtimeChannel);
                 realtimeChannel = null;
-            }
-            if (autoSyncIntervalTimer) {
-                clearInterval(autoSyncIntervalTimer);
-                autoSyncIntervalTimer = null;
             }
         } catch (_) {}
     };
