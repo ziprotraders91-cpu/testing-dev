@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - SECURE USER PROFILE & SETTINGS ENGINE
    File: auth/profile.js • Developed by Farhan Jawed
-   Architecture: Supabase PostgreSQL Profile Sync | Duplicate Phone Guard
+   Architecture: Supabase PostgreSQL Profile Sync | 5-Point Strict Check
    Scale: 1,000,000+ Concurrent Active Users | Offline-First & Resilient
 ============================================================================ */
 
@@ -123,10 +123,9 @@
     /* ========================================================================
        3. CONCURRENT-SAFE PROFILE SETTINGS UPDATE ENGINE
        ------------------------------------------------------------------------
-       1. Duplicate Mobile Check across Supabase accounts
-       2. Multi-tier Local Cache Consistency (L1 RAM + L2 LS + L3 IDB)
-       3. 5-Point Session Synchronization (`app_active_session_auth`)
-       4. Realtime Cloud Sync with Supabase PostgreSQL
+       1. 5-Point Strict Duplicate Checks (Name, Mobile, Gmail, PIN)
+       2. Farhan Identity Protection Shield
+       3. Realtime Cloud Sync with Supabase PostgreSQL
     ======================================================================== */
 
     /**
@@ -153,7 +152,7 @@
         const pass = sanitizeText(passEl?.value);
         const email = sanitizeText(emailEl?.value).toLowerCase();
 
-        // Strict Validations
+        // 1. Strict Validations
         if (!name || name.length < 2) {
             alert('Kripya valid naam darj karein (kam se kam 2 akshar)!');
             if (nameEl) nameEl.focus();
@@ -178,6 +177,14 @@
             return;
         }
 
+        // 🛑 FARHAN STRICT BLOCK (अगर कोई दूसरा यूजर नाम बदलकर Farhan रखेगा तो ब्लॉक)
+        const cleanNameLower = name.toLowerCase().replace(/\s+/g, '');
+        if (String(uid).toLowerCase() !== 'farhan' && cleanNameLower.includes('farhan')) {
+            alert('⛔ Farhan naam rakhna strictly block hai!');
+            if (nameEl) nameEl.focus();
+            return;
+        }
+
         // Set Loading UI State
         if (saveBtn) {
             saveBtn.disabled = true;
@@ -187,22 +194,47 @@
         try {
             const sb = getSupabase();
 
-            // Step 1: Duplicate Mobile Conflict Check in Supabase
+            // 🔍 5-POINT EXACT MATCH CHECK IN SUPABASE (बाकी यूज़र्स से मिलान)
             if (sb && navigator.onLine) {
-                const { data: existingUsers, error: checkErr } = await sb
+                const { data: otherUsers, error: checkErr } = await sb
                     .from('karkhana_users')
-                    .select('user_id')
-                    .eq('mobile', mobile)
-                    .neq('user_id', uid)
-                    .limit(1);
+                    .select('user_id, full_name, mobile, email, pin')
+                    .neq('user_id', uid);
 
-                if (!checkErr && existingUsers && existingUsers.length > 0) {
-                    alert('⚠️ Yeh Mobile Number pehle se kisi aur account me registered hai! Alag number darj karein.');
-                    if (saveBtn) {
-                        saveBtn.disabled = false;
-                        saveBtn.textContent = 'Settings Save Karein';
+                if (checkErr) throw checkErr;
+
+                if (otherUsers && otherUsers.length > 0) {
+                    // 1. Name Check
+                    if (otherUsers.some(u => String(u.full_name || '').trim().toLowerCase() === name.toLowerCase())) {
+                        alert('⚠️ Koi aur name select karein');
+                        if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Settings Save Karein'; }
+                        if (nameEl) nameEl.focus();
+                        return;
                     }
-                    return;
+
+                    // 2. Mobile Check
+                    if (otherUsers.some(u => String(u.mobile || '').trim() === mobile)) {
+                        alert('⚠️ Koi aur mobile number select karein');
+                        if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Settings Save Karein'; }
+                        if (mobEl) mobEl.focus();
+                        return;
+                    }
+
+                    // 3. Gmail Check
+                    if (email && otherUsers.some(u => String(u.email || '').trim().toLowerCase() === email)) {
+                        alert('⚠️ Koi aur gmail select karein');
+                        if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Settings Save Karein'; }
+                        if (emailEl) emailEl.focus();
+                        return;
+                    }
+
+                    // 4. Secret PIN Check
+                    if (otherUsers.some(u => String(u.pin || '').trim() === pin)) {
+                        alert('⚠️ Koi aur secret PIN select karein');
+                        if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Settings Save Karein'; }
+                        if (pinEl) pinEl.focus();
+                        return;
+                    }
                 }
             }
 
@@ -218,7 +250,7 @@
                 updatedAt: new Date().toISOString()
             };
 
-            // Step 3: ⭐ 5-Point Session Synchronization (Prevents Security Lockout)
+            // Step 3: Session Synchronization
             const activeSessionAuth = {
                 id: uid,
                 name: name,
