@@ -1,12 +1,13 @@
 /* ============================================================================
    SIMPLICITY ERP - ENTERPRISE AUTO-POLLING & LIVE REALTIME ENGINE (ALL MODULES)
-   File: core/database.js • Developed by Farhan Jawed (Strict Privacy & Zero-Data-Loss)
-   Architecture: User-Level Isolation • Bi-directional Key Mapping • Instant Sync
+   File: core/database.js • Developed by Farhan Jawed
+   Architecture: Clean Dynamic Routing • Multi-Tenant Privacy • Zero-Data-Loss
 ============================================================================ */
 
 (() => {
     'use strict';
 
+    // 🚀 SUPABASE CONFIGURATION
     const SUPABASE_CONFIG = Object.freeze({
         url: "https://mvbejtoylowskerlgfxs.supabase.co",
         anonKey: "sb_publishable_NhTU4xzRMi0gtKH4CzVf_Q_lRfzjg3c"
@@ -76,12 +77,13 @@
     };
 
     /**
-     * ⭐ SMART ROUTER - HAR LOCAL KEY KO USKI ASLI SUPABASE TABLE PAR ROUTE KARTA HAI
+     * ⭐ SMART TRAFFIC POLICE (ROUTER)
+     * Har data key ko pehchan kar uski sahi Supabase table me route karta hai
      */
     const resolveTargetTable = (fullKey) => {
         const k = String(fullKey).toLowerCase();
 
-        // 1. Saree Module (Stock & History)
+        // 1. Saree Module
         if (k.includes('saree_history')) return 'saree_history';
         if (k.includes('saree_stock') || k.includes('saree_items') || k.includes('saree')) return 'saree_stock';
 
@@ -93,7 +95,7 @@
         if (k.includes('bana_history')) return 'bana_history';
         if (k.includes('bana_stock') || k.includes('bana')) return 'bana_stock';
 
-        // 4. Sancha Module (⭐ FIXED: sancha_items aur sancha_list dono handle honge)
+        // 4. Sancha Module (Tani / Chukka)
         if (k.includes('sancha_history')) return 'sancha_history';
         if (k.includes('sancha_items') || k.includes('sancha_list') || k.includes('sancha')) return 'sancha_list';
 
@@ -102,25 +104,39 @@
         if (k.includes('kariger_list') || k.includes('karigers') || k.includes('kariger')) return 'karigers';
 
         // 6. Payments Module
-        if (k.includes('payment') || k.includes('kharcha')) return 'payments';
+        if (k.includes('payments') || k.includes('payment_list') || k.includes('kharcha')) return 'payments';
 
         // 7. Godown, Transfers & Dukan
         if (k.includes('material_transfer') || k.includes('transfer')) return 'material_transfers';
         if (k.includes('dukan')) return 'dukan_challans';
 
-        // 8. Job Work Specific Departments
-        if (k.includes('cutting_history') || k.includes('cutting_sheet')) return 'cutting_history';
-        if (k.includes('cutting')) return 'cutting';
+        // 8. Job Work Monthly Sheets (Checking Worker Type: Cutting vs Calender vs Embroidery)
+        if (k.includes('jobwork_sheets_') || k.includes('jw_sheet_')) {
+            const workerId = k.replace(/.*jobwork_sheets_/, '').replace(/.*jw_sheet_/, '');
+            let workers = [];
+            try {
+                if (typeof window.getStore === 'function') {
+                    workers = window.getStore('jobwork_workers') || [];
+                }
+                if (!workers.length) {
+                    workers = JSON.parse(localStorage.getItem('jobwork_workers') || '[]');
+                }
+            } catch (_) {}
 
-        if (k.includes('embroidery_history') || k.includes('embroidery_sheet')) return 'embroidery_history';
-        if (k.includes('embroidery')) return 'embroidery';
+            const found = workers.find(w => w && String(w.id).toLowerCase() === workerId.toLowerCase());
+            const wType = String(found?.type || '').toLowerCase();
 
-        if (k.includes('calender_history') || k.includes('calender_sheet')) return 'calender_history';
-        if (k.includes('calender')) return 'calender';
+            if (wType === 'calender') return 'calender_history';
+            if (wType === 'embroidery') return 'embroidery_history';
+            return 'cutting_history'; // Default Cutting History
+        }
 
-        // 9. ⭐ FIXED: Job Work Hub, Workers, Monthly Sheets, Bills & Payments
-        if (k.includes('jobwork_sheets') || k.includes('jw_sheet')) return 'cutting_history';
-        if (k.includes('jobwork_workers') || k.includes('jw_worker')) return 'cutting';
+        // 9. Job Work Workers Directory
+        if (k.includes('jobwork_workers')) return 'cutting';
+        if (k.includes('calender_workers')) return 'calender';
+        if (k.includes('embroidery_workers')) return 'embroidery';
+
+        // 10. Job Work Bills & Payments
         if (k.includes('jw_bill') || k.includes('jobwork_bill') || k.includes('jw_payment') || k.includes('jobwork')) {
             return 'job_work_bills';
         }
@@ -129,19 +145,16 @@
     };
 
     /**
-     * ⭐ BI-DIRECTIONAL TRANSLATOR: Supabase table/key se Local UI Key ka milaan
+     * ⭐ LOCAL KEY TRANSLATOR (Cloud Data -> Exact Local Key Name)
      */
     const mapCloudKeyToLocalKey = (cloudKey, tableName) => {
         const k = String(cloudKey).toLowerCase();
 
-        // Sancha mapping
         if (k.includes('sancha_list') || tableName === 'sancha_list') return 'sancha_items';
-        // Kariger mapping
         if (k.includes('karigers') || tableName === 'karigers') return 'kariger_list';
-        // Jobwork mapping
-        if (tableName === 'job_work_bills' && k.includes('jw_payments_list')) return 'jw_payments_list';
-        if (tableName === 'job_work_bills' && k.includes('jw_bills_list')) return 'jw_bills_list';
         if (tableName === 'cutting' && k.includes('jobwork_workers')) return 'jobwork_workers';
+        if (tableName === 'job_work_bills' && k.includes('jw_bills_list')) return 'jw_bills_list';
+        if (tableName === 'job_work_bills' && k.includes('jw_payments_list')) return 'jw_payments_list';
 
         return cloudKey;
     };
@@ -305,7 +318,7 @@
     };
 
     /**
-     * 🚀 SECURE WRITE: Local Data ko Supabase Cloud Table me Save karta hai
+     * 🚀 SECURE WRITE: Local Data ko sahi Supabase Cloud Table me Save karta hai
      */
     const cloudWrite = async (fullKey, data) => {
         if (!supabaseClient) return false;
@@ -324,7 +337,6 @@
 
         showSyncStatus('syncing');
 
-        // Clean unique record ID banate hain
         const cleanKey = String(fullKey).replace(`${uid}_${sess}_`, '').replace(`${uid}_`, '');
         const recordId = `${uid}_${sess}_${cleanKey}`;
 
@@ -359,7 +371,7 @@
     };
 
     /**
-     * 📥 SECURE PULL: 🔒 Sabhi 21+ Tables Se Data Lekar Sahi Local Key Me Set Karta Hai
+     * 📥 SECURE PULL: 🔒 Sabhi Tables Se Live Data Lata Hai
      */
     const pullAllCloudData = async (silent = true) => {
         if (!supabaseClient || !navigator.onLine) return;
@@ -400,12 +412,10 @@
                             localKey = localKey.replace(prefix, '');
                         }
 
-                        // ⭐ Bi-directional mapping apply karein (jaise sancha_list -> sancha_items)
                         const mappedLocalKey = mapCloudKeyToLocalKey(localKey, tbl);
 
                         if (mappedLocalKey && row.data !== undefined) {
                             const updated = smartApplyRemoteData(mappedLocalKey, row.data);
-                            // Agar original key alag thi to dono sync rakhein
                             if (mappedLocalKey !== localKey) {
                                 smartApplyRemoteData(localKey, row.data);
                             }
