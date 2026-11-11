@@ -1,13 +1,12 @@
 /* ============================================================================
    SIMPLICITY ERP - ENTERPRISE AUTO-POLLING & LIVE REALTIME ENGINE (ALL MODULES)
-   File: core/database.js • Developed by Farhan Jawed (Fixed Zero-Data-Loss Engine)
-   Architecture: Smart Bidirectional Merge • Local Data Protection • Instant Sync
+   File: core/database.js • Developed by Farhan Jawed (Strict Privacy Architecture)
+   Architecture: User-Level Isolation • Encrypted Sync • Instant Local Repaint
 ============================================================================ */
 
 (() => {
     'use strict';
 
-    // 🚀 SUPABASE CONFIGURATION
     const SUPABASE_CONFIG = Object.freeze({
         url: "https://mvbejtoylowskerlgfxs.supabase.co",
         anonKey: "sb_publishable_NhTU4xzRMi0gtKH4CzVf_Q_lRfzjg3c"
@@ -77,7 +76,7 @@
     };
 
     /**
-     * ⭐ SMART ROUTER - HAR DATA KO APNI ASLI TABLE ME BHEJTA HAI
+     * ⭐ SMART ROUTER - HAR DATA KO USKI APNI TABLE ME ROUTE KARTA HAI
      */
     const resolveTargetTable = (fullKey) => {
         const k = String(fullKey).toLowerCase();
@@ -102,7 +101,7 @@
         if (k.includes('kariger_sheet') || k.includes('tani_sheet')) return 'tani_sheets';
         if (k.includes('kariger')) return 'karigers';
 
-        // 6. Payments Module (⭐ FIXED: Ab app_store me nahi jaega)
+        // 6. Payments Module
         if (k.includes('payment') || k.includes('kharcha')) return 'payments';
 
         // 7. Godown, Transfers & Dukan
@@ -121,7 +120,6 @@
 
         if (k.includes('jw_bill') || k.includes('jobwork_bill') || k.includes('jw_payment')) return 'job_work_bills';
 
-        // 9. Sirf System Settings ke liye app_store
         return null;
     };
 
@@ -278,25 +276,26 @@
     };
 
     /**
-     * 🚀 CLOUD WRITE - SIRF APNI TABLE ME HI WRITE HOGA
+     * 🚀 SECURE WRITE: Sirf aur sirf valid User ID ke saath hi write karega
      */
     const cloudWrite = async (fullKey, data) => {
         if (!supabaseClient) return false;
 
         const targetTable = resolveTargetTable(fullKey);
-        if (!targetTable) {
-            // Agar koi aisi key hai jo business module nahi hai, use ignore karein
-            return false;
-        }
-
-        showSyncStatus('syncing');
+        if (!targetTable) return false;
 
         const uid = getSafeUserId();
         const tid = getSafeTenantId();
         const sess = getActiveSessionVal();
 
-        // 🌟 Exact wahi ID banate hain jo aapke zari_stock me already bani hui hai:
-        // Jaise: "farhan_2026-2027_zari_stock"
+        // 🔒 Security check: Agar User ID blank hai to write nahi karega
+        if (!uid || uid === 'null' || uid === 'undefined') {
+            console.warn('[CloudEngine] Write blocked: User ID missing!');
+            return false;
+        }
+
+        showSyncStatus('syncing');
+
         const cleanKey = String(fullKey).replace(`${uid}_${sess}_`, '').replace(`${uid}_`, '');
         const recordId = `${uid}_${sess}_${cleanKey}`;
 
@@ -331,10 +330,13 @@
     };
 
     /**
-     * 📥 CLOUD PULL - SABHI BUSINESS TABLES SE DATA FETCH KARTA HAI
+     * 📥 SECURE PULL: 🔒 SIRF LOGGED-IN USER KA HI DATA AAYEGA
      */
     const pullAllCloudData = async (silent = true) => {
         if (!supabaseClient || !navigator.onLine) return;
+
+        const uid = getSafeUserId();
+        if (!uid) return;
 
         const tables = [
             'saree_stock', 'saree_history',
@@ -354,16 +356,15 @@
 
         for (const tbl of tables) {
             try {
+                // 🔒 PRIVACY FILTER: Sirf is user_id ka data maangein
                 const { data, error } = await supabaseClient
                     .from(tbl)
-                    .select('*');
+                    .select('*')
+                    .eq('user_id', uid);
 
                 if (!error && data && data.length > 0) {
                     data.forEach((row) => {
-                        // row.id jaise "farhan_2026-2027_zari_stock"
-                        // Isme se clean local key nikaalenge
                         let localKey = row.id;
-                        const uid = getSafeUserId();
                         const sess = getActiveSessionVal();
                         const prefix = `${uid}_${sess}_`;
 
@@ -390,6 +391,8 @@
         if (!supabaseClient) return;
         detachSupabaseRealtime();
 
+        const uid = getSafeUserId();
+
         try {
             realtimeChannel = supabaseClient.channel('public_db_realtime')
                 .on(
@@ -398,9 +401,9 @@
                     (payload) => {
                         if (typeof window.isBackupPreviewMode !== 'undefined' && window.isBackupPreviewMode) return;
                         const row = payload.new;
-                        if (row && row.id && row.data !== undefined) {
+                        // 🔒 Realtime security: Sirf apne user ka hi event sunega
+                        if (row && row.user_id === uid && row.id && row.data !== undefined) {
                             let localKey = row.id;
-                            const uid = getSafeUserId();
                             const sess = getActiveSessionVal();
                             const prefix = `${uid}_${sess}_`;
 
