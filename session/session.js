@@ -15,20 +15,26 @@
 
     const getEffectiveUserId = () => {
         try {
-            if (typeof window.currentUserId !== 'undefined' && window.currentUserId) {
-                return String(window.currentUserId).trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+            if (window.currentUserProfile && window.currentUserProfile.id) {
+                return String(window.currentUserProfile.id).trim();
+            }
+            const authData = localStorage.getItem('app_active_session_auth');
+            if (authData) {
+                const parsed = JSON.parse(authData);
+                if (parsed.id) return String(parsed.id).trim();
+            }
+            if (typeof window.getEffectiveUserId === 'function') {
+                const id = window.getEffectiveUserId();
+                if (id && id !== 'app') return id;
             }
             const stored = localStorage.getItem('app_current_user_id') || localStorage.getItem('currentUserId');
             if (stored) {
                 return String(stored).trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
             }
         } catch (_) {}
-        return 'farhan';
+        return '10001';
     };
 
-    /**
-     * Helper to get list of explicitly deleted sessions (Tombstone list)
-     */
     const getDeletedSessionsList = () => {
         const uId = getEffectiveUserId();
         const delKey = `${uId}_app_deleted_sessions`;
@@ -42,9 +48,6 @@
         return [];
     };
 
-    /**
-     * ⭐ UNMARK DELETED SESSION (Naya Saal bante hi use blacklist se azaad karein)
-     */
     const unmarkDeletedSession = async (sess) => {
         if (!sess) return;
         const clean = String(sess).replace(/['"]+/g, '').trim();
@@ -61,15 +64,11 @@
         }
     };
 
-    /**
-     * Auto-detects all available financial sessions across devices
-     */
     const getAppSessions = () => {
         const uId = getEffectiveUserId();
         const userKey = `${uId}_app_sessions_list`;
         const deletedSet = new Set(getDeletedSessionsList());
 
-        // ⭐ AUTO-REVIVE CHECK: Agar kisi session ka naya data ban chuka hai, to use blacklist se riha karein
         const activeRaw = localStorage.getItem(`${uId}_app_active_session`);
         if (activeRaw && /^\d{4}-\d{4}$/.test(activeRaw.trim())) {
             const cleanActive = activeRaw.trim();
@@ -104,7 +103,6 @@
             });
         }
 
-        // Auto-scan storage for any session data synced from other devices
         try {
             const len = localStorage.length;
             const prefixRegex = new RegExp(`^${uId}_(\\d{4}-\\d{4})_`);
@@ -139,9 +137,6 @@
         return finalList;
     };
 
-    /**
-     * Returns the locally stored active session
-     */
     const getActiveFinancialSession = () => {
         const uId = getEffectiveUserId();
         const userKey = `${uId}_app_active_session`;
@@ -151,7 +146,6 @@
 
         if (sess) {
             const clean = String(sess).replace(/['"]+/g, '').trim();
-            // Agar active session me naya data maujood hai to use blacklist se riha karein
             if (deletedSet.has(clean)) {
                 const hasFreshData = localStorage.getItem(`${uId}_${clean}_kariger_list`) || 
                                      localStorage.getItem(`${uId}_${clean}_saree_stock`);
@@ -195,9 +189,6 @@
         });
     };
 
-    /**
-     * ⭐ GLOBAL CLOUD ACTIVE SESSION SYNC (Cross-Device Lock)
-     */
     const initCloudSessionSync = async () => {
         const uId = getEffectiveUserId();
         const sessionsKey = `${uId}_app_sessions_list`;
@@ -207,89 +198,41 @@
         try {
             let cloudActive = null;
             let cloudSessions = null;
-            let cloudDeleted = null;
 
-            // 1. Fetch from CloudEngine
-            if (typeof window.CloudEngine?.cloudRead === 'function') {
-                cloudActive = await window.CloudEngine.cloudRead(activeKey);
-                cloudSessions = await window.CloudEngine.cloudRead(sessionsKey);
-                cloudDeleted = await window.CloudEngine.cloudRead(deletedKey);
-            } 
-            // 2. Direct Supabase Query Fallback
-            else if (window.supabaseClient || window.supabase) {
-                const client = window.supabaseClient || (window.supabase?.from ? window.supabase : null);
+            if (window.supabaseClient || window.supabase) {
+                const client = window.supabaseClient || window.supabase;
                 if (client && typeof client.from === 'function') {
-                    const { data } = await client.from('app_store').select('key, value').in('key', [activeKey, sessionsKey, deletedKey]);
+                    const { data } = await client.from('app_store').select('id, data, value, key');
                     if (data && Array.isArray(data)) {
                         data.forEach((row) => {
-                            if (row.key === activeKey) cloudActive = row.value;
-                            if (row.key === sessionsKey) cloudSessions = row.value;
-                            if (row.key === deletedKey) cloudDeleted = row.value;
+                            const rKey = row.key || row.id;
+                            const rVal = row.data !== undefined ? row.data : row.value;
+                            if (rKey.includes('app_active_session')) cloudActive = rVal;
+                            if (rKey.includes('app_sessions_list')) cloudSessions = rVal;
                         });
                     }
                 }
             }
 
-            // Sync Deleted Sessions Tombstone
-            const localDeleted = getDeletedSessionsList();
-            let parsedCloudDeleted = [];
-            if (cloudDeleted) {
-                parsedCloudDeleted = (typeof cloudDeleted === 'string') ? JSON.parse(cloudDeleted) : cloudDeleted;
-            }
-            const allDeletedSet = new Set([...localDeleted, ...(Array.isArray(parsedCloudDeleted) ? parsedCloudDeleted : [])]);
-            
-            // Auto-Revive check for Cloud as well
-            const currentLocalActive = getActiveFinancialSession();
-            if (allDeletedSet.has(currentLocalActive)) {
-                allDeletedSet.delete(currentLocalActive);
-            }
-
-            const finalDeletedList = Array.from(allDeletedSet);
-            localStorage.setItem(deletedKey, JSON.stringify(finalDeletedList));
-            if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[deletedKey] = finalDeletedList;
-            if (typeof window.idbPut === 'function') await window.idbPut(deletedKey, finalDeletedList);
-
-            // Sync Sessions List
             if (cloudSessions) {
                 let parsedList = (typeof cloudSessions === 'string') ? JSON.parse(cloudSessions) : cloudSessions;
                 if (Array.isArray(parsedList) && parsedList.length > 0) {
                     const localList = getAppSessions();
-                    const cleanLocal = localList.filter(s => !allDeletedSet.has(s));
-                    const cleanCloud = parsedList.map(s => String(s).replace(/['"]+/g, '').trim()).filter(s => /^\d{4}-\d{4}$/.test(s) && !allDeletedSet.has(s));
-
-                    let merged = Array.from(new Set([...cleanLocal, ...cleanCloud])).sort();
-                    if (merged.length === 0) merged.push(DEFAULT_BOOTSTRAP_SESSION);
-
+                    let merged = Array.from(new Set([...localList, ...parsedList])).sort();
                     localStorage.setItem(sessionsKey, JSON.stringify(merged));
                     if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[sessionsKey] = merged;
-                    if (typeof window.idbPut === 'function') await window.idbPut(sessionsKey, merged);
-
-                    if (cleanCloud.length !== parsedList.length && typeof window.CloudEngine?.cloudWrite === 'function') {
-                        await window.CloudEngine.cloudWrite(sessionsKey, merged);
-                    }
                 }
             }
 
-            // ⭐ CROSS-DEVICE ACTIVE SESSION ENFORCEMENT:
             if (cloudActive) {
                 const cleanCloudActive = String(cloudActive).replace(/['"]+/g, '').trim();
                 const curActive = getActiveFinancialSession();
 
-                if (cleanCloudActive && /^\d{4}-\d{4}$/.test(cleanCloudActive) && !allDeletedSet.has(cleanCloudActive) && cleanCloudActive !== curActive) {
-                    console.log(`[SessionSync] Cloud Master Session is '${cleanCloudActive}'. Aligning device from '${curActive}'...`);
-                    
+                if (cleanCloudActive && /^\d{4}-\d{4}$/.test(cleanCloudActive) && cleanCloudActive !== curActive) {
                     localStorage.setItem(activeKey, cleanCloudActive);
                     if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[activeKey] = cleanCloudActive;
-                    if (typeof window.idbPut === 'function') await window.idbPut(activeKey, cleanCloudActive);
-
                     window.location.reload();
                     return;
-                }
-            } else {
-                const curActive = getActiveFinancialSession();
-                if (typeof window.CloudEngine?.cloudWrite === 'function') {
-                    await window.CloudEngine.cloudWrite(activeKey, curActive);
-                    await window.CloudEngine.cloudWrite(sessionsKey, getAppSessions());
                 }
             }
 
@@ -300,7 +243,7 @@
     };
 
     /* ========================================================================
-       🌟 BULLETPROOF SESSION SWITCH (COMMITS TO CLOUD GLOBALLY)
+       ⭐ SESSION SWITCH: SUPABASE APP_STORE PAR PUSH KARKE HI RELOAD HOGA
        ======================================================================== */
     const switchAppFinancialSession = async (targetSession) => {
         const activeSess = getActiveFinancialSession();
@@ -317,11 +260,9 @@
         try {
             if (typeof window.detachSupabaseRealtime === 'function') {
                 window.detachSupabaseRealtime();
-            } else if (typeof window.detachFirebaseLiveListeners === 'function') {
-                window.detachFirebaseLiveListeners();
             }
 
-            // Save locally
+            // 1. Local update
             localStorage.setItem(`${uId}_app_active_session`, cleanTarget);
             if (window.APP_MEMORY_CACHE) {
                 window.APP_MEMORY_CACHE[`${uId}_app_active_session`] = cleanTarget;
@@ -331,17 +272,38 @@
                 await window.idbPut(`${uId}_app_active_session`, cleanTarget);
             }
 
-            // ⭐ COMMIT TO CLOUD GLOBALLY WITH AWAIT
-            if (typeof window.CloudEngine?.cloudWrite === 'function') {
-                await window.CloudEngine.cloudWrite(`${uId}_app_active_session`, cleanTarget);
-                await window.CloudEngine.cloudWrite(`${uId}_app_sessions_list`, getAppSessions());
+            // 2. ⭐ SUPABASE CLOUD APP_STORE ME DIRECT PUSH
+            const sb = window.supabaseClient || window.supabase;
+            if (sb && typeof sb.from === 'function') {
+                const now = new Date().toISOString();
+                await sb.from('app_store').upsert({
+                    id: `${uId}_app_active_session`,
+                    user_id: uId,
+                    data: cleanTarget,
+                    key: `${uId}_app_active_session`,
+                    value: cleanTarget,
+                    updated_at: now
+                }, { onConflict: 'id' });
+
+                await sb.from('app_store').upsert({
+                    id: `${uId}_app_sessions_list`,
+                    user_id: uId,
+                    data: getAppSessions(),
+                    key: `${uId}_app_sessions_list`,
+                    value: getAppSessions(),
+                    updated_at: now
+                }, { onConflict: 'id' });
             }
 
             if (typeof window.clearMemoryCache === 'function') {
                 window.clearMemoryCache();
             }
 
-            window.location.reload();
+            // 3. 300ms ka safe delay taaki network write complete ho sake
+            setTimeout(() => {
+                window.location.reload();
+            }, 300);
+
         } catch (err) {
             console.error('[SessionSwitch] Error:', err);
             window.location.reload();
@@ -366,29 +328,6 @@
             }
         }
 
-        let checklistBox = document.getElementById('session-closing-guidelines-box');
-        if (!checklistBox && newInp && newInp.parentNode) {
-            checklistBox = document.createElement('div');
-            checklistBox.id = 'session-closing-guidelines-box';
-            checklistBox.style.cssText = 'background:#f0fdf4; border:1px solid #86efac; border-radius:10px; padding:12px; margin:12px 0; text-align:left; font-size:12px;';
-            const targetBtn = document.querySelector("#session-closing-modal button[onclick*='startSequentialYearClosing']");
-            if (targetBtn && targetBtn.parentNode) {
-                targetBtn.parentNode.insertBefore(checklistBox, targetBtn);
-            }
-        }
-
-        if (checklistBox) {
-            checklistBox.innerHTML = `
-                <strong style="color:#15803d; font-size:13px; display:block; margin-bottom:6px;">📋 Naye Saal Me Kya-Kya Badlaav Honge:</strong>
-                <div style="color:#166534; line-height:1.7;">
-                    <div>🧵 <strong>Kariger Khata:</strong> Pichli mazdoori, bana & zari naye saal ki <b>Tani 1</b> ka Opening Balance banegi.</div>
-                    <div>🥻 <strong>Saree Stock:</strong> Sabhi godamon ki bachi hui saree naye saal ka <b>Opening Stock</b> banegi.</div>
-                    <div>🧶 <strong>Bana & ✨ Zari:</strong> Godam ka bacha wazan naye saal me <b>Opening Stock</b> judega.</div>
-                    <div>⚙️ <strong>Sancha & Job Work:</strong> Baki bacha maal carry-forward hoga.</div>
-                    <div>🔒 <strong>Purana Saal Safe:</strong> Pichla saal freeze ho jayega, jise aap kabhi bhi dekh sakte hain.</div>
-                </div>`;
-        }
-
         const delSel = document.getElementById('session-delete-select');
         if (delSel) {
             delSel.innerHTML = "<option value=''>-- Chunein --</option>";
@@ -407,186 +346,6 @@
         modal.style.display = 'none';
     };
 
-    const nonBlockingLocalStoragePurge = async (prefix) => {
-        const keysToRemove = [];
-        const len = localStorage.length;
-        for (let i = 0; i < len; i++) {
-            const k = localStorage.key(i);
-            if (k && k.startsWith(prefix)) keysToRemove.push(k);
-        }
-        for (let i = 0; i < keysToRemove.length; i++) {
-            localStorage.removeItem(keysToRemove[i]);
-            if ((i + 1) % LOCAL_PURGE_CHUNK_SIZE === 0) await yieldEventLoop();
-        }
-    };
-
-    const atomicIndexedDBPurge = async (prefix) => {
-        return new Promise((resolve) => {
-            if (typeof window.openEnterpriseIndexedDB !== 'function') return resolve();
-            window.openEnterpriseIndexedDB((dbase) => {
-                if (!dbase) return resolve();
-                try {
-                    const tx = dbase.transaction('app_store', 'readwrite');
-                    const store = tx.objectStore('app_store');
-                    if (typeof IDBKeyRange !== 'undefined' && IDBKeyRange.bound) {
-                        store.delete(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
-                        tx.oncomplete = () => resolve();
-                        tx.onerror = () => resolve();
-                    } else {
-                        resolve();
-                    }
-                } catch (_) { resolve(); }
-            });
-        });
-    };
-
-    /* ========================================================================
-       🗑️ SECURE SESSION DELETE
-       ======================================================================== */
-    const confirmAndDeleteSessionWithAuth = async () => {
-        const delSel = document.getElementById('session-delete-select');
-        const targetSess = delSel ? delSel.value : '';
-        const uInp = String(document.getElementById('session-del-user-id')?.value || '').trim().toLowerCase();
-        const pInp = String(document.getElementById('session-del-password')?.value || '').trim();
-
-        if (!targetSess) return alert('Pehle delete karne ke liye session chunein!');
-        if (!uInp || !pInp) return alert('User ID aur Password daalna zaroori hai!');
-
-        let authenticated = false;
-
-        try {
-            const activeSessionRaw = localStorage.getItem('app_active_session_auth');
-            if (activeSessionRaw) {
-                const s = JSON.parse(activeSessionRaw);
-                const matchId = (s.id && String(s.id).toLowerCase() === uInp);
-                const matchMob = (s.mobile && String(s.mobile).trim() === uInp);
-                if ((matchId || matchMob) && String(s.pass).trim() === pInp) {
-                    authenticated = true;
-                }
-            }
-        } catch (_) {}
-
-        if (!authenticated && typeof window.fetchUserByIdentifier === 'function') {
-            try {
-                const u = await window.fetchUserByIdentifier(uInp);
-                if (u && String(u.pass).trim() === pInp) {
-                    authenticated = true;
-                }
-            } catch (_) {}
-        }
-
-        if (!authenticated && (uInp === 'farhan' || uInp === 'admin')) {
-            authenticated = (pInp === '97438090641154' || pInp === '1234');
-        }
-
-        if (!authenticated) {
-            return alert('❌ Galat User ID ya Password! Session delete nahi hoga.');
-        }
-
-        let sessions = getAppSessions();
-        if (sessions.length <= 1) {
-            return alert('❌ Aakhri bacha hua Session delete nahi ho sakta!');
-        }
-
-        if (!confirm(`⚠️ KYA AAP SACH ME '${targetSess}' KA PURA DATA DELETE KARNA CHAHTE HAIN?\nIs saal ka sara hisab permanently delete ho jayega!`)) {
-            return;
-        }
-
-        const uId = getEffectiveUserId();
-
-        // 1. Session list se filter karein
-        sessions = sessions.filter((s) => s !== targetSess);
-        if (sessions.length === 0) sessions = [DEFAULT_BOOTSTRAP_SESSION];
-
-        localStorage.setItem(`${uId}_app_sessions_list`, JSON.stringify(sessions));
-        if (window.APP_MEMORY_CACHE) {
-            window.APP_MEMORY_CACHE[`${uId}_app_sessions_list`] = sessions;
-        }
-        if (typeof window.idbPut === 'function') {
-            await window.idbPut(`${uId}_app_sessions_list`, sessions);
-        }
-
-        // 2. Blacklist me add karein (Tombstone)
-        const delKey = `${uId}_app_deleted_sessions`;
-        let delList = getDeletedSessionsList();
-        if (!delList.includes(targetSess)) {
-            delList.push(targetSess);
-        }
-        localStorage.setItem(delKey, JSON.stringify(delList));
-        if (window.APP_MEMORY_CACHE) {
-            window.APP_MEMORY_CACHE[delKey] = delList;
-        }
-        if (typeof window.idbPut === 'function') {
-            await window.idbPut(delKey, delList);
-        }
-
-        // 3. Agar Active Session hi delete hua hai, to switch karein
-        const cur = getActiveFinancialSession();
-        let nextActive = cur;
-        if (cur === targetSess) {
-            nextActive = sessions[sessions.length - 1] || DEFAULT_BOOTSTRAP_SESSION;
-            localStorage.setItem(`${uId}_app_active_session`, nextActive);
-            if (window.APP_MEMORY_CACHE) {
-                window.APP_MEMORY_CACHE[`${uId}_app_active_session`] = nextActive;
-            }
-            if (typeof window.idbPut === 'function') {
-                await window.idbPut(`${uId}_app_active_session`, nextActive);
-            }
-        }
-
-        // 4. ⭐ CLOUD SYNC AWAIT
-        if (typeof window.CloudEngine?.cloudWrite === 'function') {
-            await window.CloudEngine.cloudWrite(`${uId}_app_sessions_list`, sessions);
-            await window.CloudEngine.cloudWrite(delKey, delList);
-            if (cur === targetSess) {
-                await window.CloudEngine.cloudWrite(`${uId}_app_active_session`, nextActive);
-            }
-        } else if (window.supabaseClient || window.supabase) {
-            const client = window.supabaseClient || (window.supabase?.from ? window.supabase : null);
-            if (client && typeof client.from === 'function') {
-                try {
-                    const upsertRows = [
-                        { key: `${uId}_app_sessions_list`, value: JSON.stringify(sessions) },
-                        { key: delKey, value: JSON.stringify(delList) }
-                    ];
-                    if (cur === targetSess) {
-                        upsertRows.push({ key: `${uId}_app_active_session`, value: nextActive });
-                    }
-                    await client.from('app_store').upsert(upsertRows);
-                    await client.from('app_store').delete().like('key', `${uId}_${targetSess}_%`);
-                } catch (cErr) {
-                    console.warn('[SessionDelete] Supabase direct cleanup:', cErr);
-                }
-            }
-        }
-
-        // 5. Purge local storage & memory
-        const prefix = `${uId}_${targetSess}_`;
-        await nonBlockingLocalStoragePurge(prefix);
-        await atomicIndexedDBPurge(prefix);
-
-        if (window.APP_MEMORY_CACHE && typeof window.APP_MEMORY_CACHE === 'object') {
-            Object.keys(window.APP_MEMORY_CACHE).forEach((k) => {
-                if (k.startsWith(prefix) || k.includes(`_${targetSess}_`)) {
-                    delete window.APP_MEMORY_CACHE[k];
-                }
-            });
-        }
-
-        if (typeof window.clearMemoryCache === 'function') {
-            window.clearMemoryCache();
-        }
-
-        closeSessionClosingModal();
-        populateSessionDropdown();
-
-        alert(`✅ Session '${targetSess}' safalata-poorvak delete ho gaya!`);
-        
-        setTimeout(() => {
-            window.location.reload();
-        }, 120);
-    };
-
     const sessionAPI = {
         getEffectiveUserId,
         getAppSessions,
@@ -595,7 +354,6 @@
         switchAppFinancialSession,
         openSessionClosingModal,
         closeSessionClosingModal,
-        confirmAndDeleteSessionWithAuth,
         initCloudSessionSync,
         unmarkDeletedSession
     };
@@ -616,15 +374,4 @@
     } else {
         initRunner();
     }
-
-    document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) {
-            initCloudSessionSync();
-        }
-    });
-
-    window.addEventListener('focus', () => {
-        initCloudSessionSync();
-    });
-
 })();
