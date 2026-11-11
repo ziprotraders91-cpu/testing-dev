@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - HIGH-PERFORMANCE PAYMENTS, BAKAYA & CASH TRANSFER ENGINE (WITH A6 PRINT)
    File: payment/payment.js • Developed by Farhan Jawed
-   Architecture: Zero-Reflow Virtualized DOM | Double-Entry Atomic Ledger | A6 Print
+   Architecture: Zero-Reflow Virtualized DOM | Dedicated Payments Store | A6 Print
    Scale: 1,000,000 - 2,000,000 Active Users | Epsilon Currency Precision
 ============================================================================ */
 
@@ -21,12 +21,12 @@
     let paymentSearchDebounceTimer = null;
     let passbookSearchDebounceTimer = null;
 
-    // Main Payment Table Pagination State
+    // Main Payment Table Pagination State (15 Items / Page)
     let paymentTableCurrentPage = 1;
     const PAYMENT_TABLE_PAGE_SIZE = 15;
     let currentPaymentFilteredRowsCache = [];
 
-    // Passbook Pagination State
+    // Passbook Pagination State (20 Items / Page)
     let paymentPassbookCurrentPage = 1;
     const PAYMENT_PASSBOOK_PAGE_SIZE = 20;
     let filteredPaymentPassbookCache = [];
@@ -338,7 +338,7 @@
     };
 
     /* ========================================================================
-       6. QUICK PAY MODAL & ATOMIC DAYBOOK DISPATCHER
+       6. QUICK PAY MODAL & DEDICATED PAYMENTS STORE DISPATCHER
        ------------------------------------------------------------------------
     ======================================================================== */
 
@@ -377,15 +377,12 @@
                                 <input type="date" id="quick-pay-date" value="${today}" style="width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; box-sizing:border-box;">
                             </div>
                         </div>
-                        <div style="margin-bottom:12px;">
+                        <div style="margin-bottom:14px;">
                             <label style="font-size:12px; font-weight:700; color:#374151;">Note / Vivran (Optional):</label><br>
                             <input type="text" id="quick-pay-note" placeholder="e.g. Weekly Hafta payment" style="width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; box-sizing:border-box;">
                         </div>
-                        <div style="margin-bottom:14px; background:#f8fafc; border:1px solid #e2e8f0; padding:8px; border-radius:6px; font-size:12px; color:#475569;">
-                            <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
-                                <input type="checkbox" id="quick-pay-sync-daybook" checked style="cursor:pointer;">
-                                <strong>Karkhana Daybook me bhi kharch darj karein</strong>
-                            </label>
+                        <div style="margin-bottom:14px; background:#f0fdf4; border:1px solid #86efac; padding:8px 10px; border-radius:6px; font-size:12px; color:#15803d; font-weight:700;">
+                            ℹ️ Ye payment sidhe aapke Payments Register & Kariger Khata me darj hoga.
                         </div>
                         <button type="button" onclick="submitQuickPayForm('${esc(karigerId)}', '${safeKName}', '${safeKid}')" style="background:#10b981; color:#ffffff; border:none; width:100%; padding:10px; border-radius:6px; font-weight:bold; font-size:14px; cursor:pointer;">
                             ✅ Payment Jama Karein
@@ -409,7 +406,6 @@
         const amt = roundCurrency(document.getElementById('quick-pay-amount')?.value);
         const payDate = document.getElementById('quick-pay-date')?.value || getToday();
         const note = String(document.getElementById('quick-pay-note')?.value || '').trim();
-        const syncDaybook = document.getElementById('quick-pay-sync-daybook')?.checked ?? true;
 
         if (amt <= 0) return alert('Kripya sahi raqam (Amount ₹) daalein!');
 
@@ -465,27 +461,25 @@
                 window.saveKarigerSheets(karigerId, sheets);
             }
 
-            // 2. ⭐ AUTO DAYBOOK EXPENSE RECORD
-            if (syncDaybook) {
-                const daybook = window.safeArray ? window.safeArray(window.getStore('daybook_entries')) : [];
-                daybook.push({
-                    id: `db_pay_${Date.now()}`,
-                    date: payDate,
-                    type: 'payment',
-                    category: 'Kariger Mazdoori',
-                    party: karigerName,
-                    karigerId: karigerId,
-                    karkhanaId: karkhanaId,
-                    amount: amt,
-                    paymentMode: 'Cash',
-                    remarks: `Kariger Mazdoori: ${karigerName}${note ? ` (${note})` : ''}`,
-                    refId: payRef,
-                    timestamp: Date.now()
-                });
+            // 2. ⭐ DEDICATED PAYMENTS STORE RECORD (Saved to payment_records / payments table)
+            const payRecords = window.safeArray ? window.safeArray(window.getStore('payment_records')) : [];
+            payRecords.push({
+                id: `pay_rec_${Date.now()}`,
+                date: payDate,
+                type: 'kariger_mazdoori',
+                category: 'Kariger Mazdoori',
+                party: karigerName,
+                karigerId: karigerId,
+                karkhanaId: karkhanaId,
+                amount: amt,
+                paymentMode: 'Cash',
+                remarks: `Kariger Mazdoori: ${karigerName}${note ? ` (${note})` : ''}`,
+                refId: payRef,
+                timestamp: Date.now()
+            });
 
-                if (typeof window.setStore === 'function') {
-                    window.setStore('daybook_entries', daybook);
-                }
+            if (typeof window.setStore === 'function') {
+                window.setStore('payment_records', payRecords);
             }
 
             invalidatePaymentCache(karigerId);
@@ -496,7 +490,7 @@
             closeQuickPayModal();
             renderPaymentTable();
 
-            alert(`✅ ₹ ${amt.toFixed(2)} safalta-poorvak ${karigerName} ki sheet aur Daybook me darj ho gaya!`);
+            alert(`✅ ₹ ${amt.toFixed(2)} safalta-poorvak ${karigerName} ki sheet aur Payments Table me darj ho gaya!`);
         } catch (err) {
             console.error('[PaymentEngine] Quick pay execution failure:', err);
             alert('Payment process karne me takleef aayi.');
@@ -566,7 +560,7 @@
                             <input type="text" id="cash-transfer-note" placeholder="e.g. Weekly Mazdoori ke liye bheja" style="width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; box-sizing:border-box;">
                         </div>
                         <div style="font-size:11px; color:#4b5563; background:#ecfdf5; padding:8px; border-radius:6px; margin-bottom:12px; border:1px solid #a7f3d0;">
-                            ℹ️ Bhejne wale godam ki Daybook se minus hoga aur Paane wale karkhane ki Daybook me aamad jama hogi.
+                            ℹ️ Ye record sidhe aapke Payments Register aur Material Transfers me darj hoga.
                         </div>
                         <button type="button" onclick="submitCashTransferForm()" style="background:#059669; color:#ffffff; border:none; width:100%; padding:10px; border-radius:6px; font-weight:bold; font-size:14px; cursor:pointer;">
                             🚀 Cash Transfer Confirm Karein
@@ -605,13 +599,14 @@
 
             const trRef = `tr_cash_${Date.now()}`;
 
-            const daybook = window.safeArray ? window.safeArray(window.getStore('daybook_entries')) : [];
+            // ⭐ DEDICATED PAYMENTS STORE RECORD (Saved to payment_records / payments table)
+            const payRecords = window.safeArray ? window.safeArray(window.getStore('payment_records')) : [];
 
             // Source Outward Entry
-            daybook.push({
-                id: `db_out_${Date.now()}`,
+            payRecords.push({
+                id: `pay_tr_out_${Date.now()}`,
                 date,
-                type: 'payment',
+                type: 'cash_transfer_out',
                 category: 'Karkhana Fund Transfer',
                 party: toName,
                 karkhanaId: fromKid,
@@ -623,10 +618,10 @@
             });
 
             // Destination Inward Entry
-            daybook.push({
-                id: `db_in_${Date.now() + 1}`,
+            payRecords.push({
+                id: `pay_tr_in_${Date.now() + 1}`,
                 date,
-                type: 'receipt',
+                type: 'cash_transfer_in',
                 category: 'Karkhana Fund Transfer',
                 party: fromName,
                 karkhanaId: toKid,
@@ -638,7 +633,7 @@
             });
 
             if (typeof window.setStore === 'function') {
-                window.setStore('daybook_entries', daybook);
+                window.setStore('payment_records', payRecords);
             }
 
             if (typeof window.recordTransferEntry === 'function') {
@@ -654,7 +649,7 @@
             }
 
             closeCashTransferModal();
-            alert(`✅ ₹ ${amt.toFixed(2)} safalta-poorvak transfer ho gaya aur Daybook sync ho gayi!`);
+            alert(`✅ ₹ ${amt.toFixed(2)} safalta-poorvak transfer ho gaya aur Payments Table sync ho gayi!`);
         } catch (err) {
             console.error('[PaymentEngine] Cash transfer failure:', err);
             alert('Cash transfer execute karne me takleef aayi.');
@@ -839,7 +834,6 @@
         return kId;
     };
 
-    // 1. Main Payment & Bakaya Report Print (Filters ke mutabiq)
     const printPaymentReport = () => {
         const rows = currentPaymentFilteredRowsCache;
         if (!rows || !rows.length) {
@@ -938,7 +932,6 @@
         printWindow.document.close();
     };
 
-    // 2. Filtered Payment Passbook Statement Print (Date Filter Supported)
     const printPaymentPassbookFiltered = () => {
         const rows = filteredPaymentPassbookCache;
         if (!rows || !rows.length) {
@@ -1035,7 +1028,6 @@
         printWindow.document.close();
     };
 
-    // 3. Single Entry Slip Print (Thermal Parchi)
     const printSinglePaymentEntry = (date, sheetTitle, saree, paid, note) => {
         const karigerName = window.activePaymentKarigerName || 'Kariger';
         const paidAmt = safeNum(paid);
@@ -1120,15 +1112,12 @@
         invalidatePaymentCache
     };
 
-    // Attach to global window object for legacy callers and HTML attributes
     Object.keys(paymentAPI).forEach((fnName) => {
         window[fnName] = paymentAPI[fnName];
     });
 
-    // Dedicated namespace
     window.PaymentEngine = paymentAPI;
 
-    // Attach debounced event listener to main search input
     document.addEventListener('DOMContentLoaded', () => {
         const searchInput = document.getElementById('search-payment-input');
         if (searchInput) {
@@ -1142,7 +1131,6 @@
         }
     });
 
-    // Unit test export
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = paymentAPI;
     }
