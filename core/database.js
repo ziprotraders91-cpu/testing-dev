@@ -307,6 +307,7 @@
                 .upsert(payload, { onConflict: 'id' });
 
             if (error) {
+                console.error(`❌ [Supabase Error in ${targetTable}]:`, error.message, error.details);
                 const fallbackPayload = {
                     id: String(fullKey),
                     key: String(fullKey),
@@ -314,26 +315,22 @@
                     data: data,
                     updated_at: new Date().toISOString()
                 };
-                await supabaseClient
+                const { error: fbError } = await supabaseClient
                     .from('app_store')
                     .upsert(fallbackPayload, { onConflict: 'id' });
+
+                if (fbError) {
+                    console.error(`❌ [Supabase Fallback app_store Error]:`, fbError.message, fbError.details);
+                }
             }
 
             isConnectedToCloud = true;
             showSyncStatus('online');
             return true;
         } catch (err) {
-            console.warn(`[Supabase] cloudWrite retry fallback:`, err);
-            try {
-                await supabaseClient
-                    .from('app_store')
-                    .upsert({ id: String(fullKey), key: String(fullKey), value: data }, { onConflict: 'id' });
-                showSyncStatus('online');
-                return true;
-            } catch (_) {
-                showSyncStatus('online');
-                return false;
-            }
+            console.error(`❌ [Supabase Catch Error]:`, err);
+            showSyncStatus('online');
+            return false;
         }
     };
 
@@ -386,6 +383,8 @@
     const startLiveAutoSyncHeartbeat = () => {
         if (autoSyncIntervalTimer) clearInterval(autoSyncIntervalTimer);
 
+        // ⚠️ STEP 1 FIX: 5 सेकंड वाले लूप को बंद किया ताकि कंसोल में एरर की बाढ़ न आए
+        /*
         autoSyncIntervalTimer = setInterval(() => {
             const activeEl = document.activeElement;
             const isUserTyping = activeEl && ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeEl.tagName);
@@ -394,6 +393,7 @@
                 pullAllCloudData(true);
             }
         }, 5000);
+        */
     };
 
     const initSupabaseRealtime = () => {
