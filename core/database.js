@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - ENTERPRISE AUTO-POLLING & LIVE REALTIME ENGINE (ALL MODULES)
-   File: core/database.js • Developed by Farhan Jawed (Strict Privacy Architecture)
-   Architecture: User-Level Isolation • Encrypted Sync • Instant Local Repaint
+   File: core/database.js • Developed by Farhan Jawed (Strict Privacy & Zero-Data-Loss)
+   Architecture: User-Level Isolation • Bi-directional Key Mapping • Instant Sync
 ============================================================================ */
 
 (() => {
@@ -76,14 +76,14 @@
     };
 
     /**
-     * ⭐ SMART ROUTER - HAR DATA KO USKI APNI TABLE ME ROUTE KARTA HAI
+     * ⭐ SMART ROUTER - HAR LOCAL KEY KO USKI ASLI SUPABASE TABLE PAR ROUTE KARTA HAI
      */
     const resolveTargetTable = (fullKey) => {
         const k = String(fullKey).toLowerCase();
 
-        // 1. Saree Module
+        // 1. Saree Module (Stock & History)
         if (k.includes('saree_history')) return 'saree_history';
-        if (k.includes('saree_stock') || k.includes('saree')) return 'saree_stock';
+        if (k.includes('saree_stock') || k.includes('saree_items') || k.includes('saree')) return 'saree_stock';
 
         // 2. Zari Module
         if (k.includes('zari_history')) return 'zari_history';
@@ -93,13 +93,13 @@
         if (k.includes('bana_history')) return 'bana_history';
         if (k.includes('bana_stock') || k.includes('bana')) return 'bana_stock';
 
-        // 4. Sancha Module
+        // 4. Sancha Module (⭐ FIXED: sancha_items aur sancha_list dono handle honge)
         if (k.includes('sancha_history')) return 'sancha_history';
-        if (k.includes('sancha')) return 'sancha_list';
+        if (k.includes('sancha_items') || k.includes('sancha_list') || k.includes('sancha')) return 'sancha_list';
 
         // 5. Kariger & Tani Sheets
-        if (k.includes('kariger_sheet') || k.includes('tani_sheet')) return 'tani_sheets';
-        if (k.includes('kariger')) return 'karigers';
+        if (k.includes('kariger_sheet') || k.includes('tani_sheet') || k.includes('tani_sheets')) return 'tani_sheets';
+        if (k.includes('kariger_list') || k.includes('karigers') || k.includes('kariger')) return 'karigers';
 
         // 6. Payments Module
         if (k.includes('payment') || k.includes('kharcha')) return 'payments';
@@ -108,7 +108,7 @@
         if (k.includes('material_transfer') || k.includes('transfer')) return 'material_transfers';
         if (k.includes('dukan')) return 'dukan_challans';
 
-        // 8. Job Work Departments
+        // 8. Job Work Specific Departments
         if (k.includes('cutting_history') || k.includes('cutting_sheet')) return 'cutting_history';
         if (k.includes('cutting')) return 'cutting';
 
@@ -118,9 +118,32 @@
         if (k.includes('calender_history') || k.includes('calender_sheet')) return 'calender_history';
         if (k.includes('calender')) return 'calender';
 
-        if (k.includes('jw_bill') || k.includes('jobwork_bill') || k.includes('jw_payment')) return 'job_work_bills';
+        // 9. ⭐ FIXED: Job Work Hub, Workers, Monthly Sheets, Bills & Payments
+        if (k.includes('jobwork_sheets') || k.includes('jw_sheet')) return 'cutting_history';
+        if (k.includes('jobwork_workers') || k.includes('jw_worker')) return 'cutting';
+        if (k.includes('jw_bill') || k.includes('jobwork_bill') || k.includes('jw_payment') || k.includes('jobwork')) {
+            return 'job_work_bills';
+        }
 
         return null;
+    };
+
+    /**
+     * ⭐ BI-DIRECTIONAL TRANSLATOR: Supabase table/key se Local UI Key ka milaan
+     */
+    const mapCloudKeyToLocalKey = (cloudKey, tableName) => {
+        const k = String(cloudKey).toLowerCase();
+
+        // Sancha mapping
+        if (k.includes('sancha_list') || tableName === 'sancha_list') return 'sancha_items';
+        // Kariger mapping
+        if (k.includes('karigers') || tableName === 'karigers') return 'kariger_list';
+        // Jobwork mapping
+        if (tableName === 'job_work_bills' && k.includes('jw_payments_list')) return 'jw_payments_list';
+        if (tableName === 'job_work_bills' && k.includes('jw_bills_list')) return 'jw_bills_list';
+        if (tableName === 'cutting' && k.includes('jobwork_workers')) return 'jobwork_workers';
+
+        return cloudKey;
     };
 
     const showSyncStatus = (status) => {
@@ -202,11 +225,17 @@
                 if (typeof window.applySareePassbookFilters === 'function') window.applySareePassbookFilters();
             }
 
+            const sanchaSec = document.getElementById('sancha-section');
+            if (sanchaSec && sanchaSec.style.display !== 'none') {
+                if (typeof window.renderSanchaTable === 'function') window.renderSanchaTable();
+            }
+
             const jwSec = document.getElementById('jobwork-section');
             if (jwSec && jwSec.style.display !== 'none') {
                 if (typeof window.renderJobWorkersTable === 'function') window.renderJobWorkersTable();
                 if (typeof window.renderJobWorkMovementDaybook === 'function') window.renderJobWorkMovementDaybook();
                 if (typeof window.renderJobWorkBillsTable === 'function') window.renderJobWorkBillsTable();
+                if (typeof window.updateJobWorkHubBadges === 'function') window.updateJobWorkHubBadges();
             }
 
             if (typeof window.renderDashboardDayBook === 'function') {
@@ -276,7 +305,7 @@
     };
 
     /**
-     * 🚀 SECURE WRITE: Sirf aur sirf valid User ID ke saath hi write karega
+     * 🚀 SECURE WRITE: Local Data ko Supabase Cloud Table me Save karta hai
      */
     const cloudWrite = async (fullKey, data) => {
         if (!supabaseClient) return false;
@@ -288,7 +317,6 @@
         const tid = getSafeTenantId();
         const sess = getActiveSessionVal();
 
-        // 🔒 Security check: Agar User ID blank hai to write nahi karega
         if (!uid || uid === 'null' || uid === 'undefined') {
             console.warn('[CloudEngine] Write blocked: User ID missing!');
             return false;
@@ -296,6 +324,7 @@
 
         showSyncStatus('syncing');
 
+        // Clean unique record ID banate hain
         const cleanKey = String(fullKey).replace(`${uid}_${sess}_`, '').replace(`${uid}_`, '');
         const recordId = `${uid}_${sess}_${cleanKey}`;
 
@@ -330,7 +359,7 @@
     };
 
     /**
-     * 📥 SECURE PULL: 🔒 SIRF LOGGED-IN USER KA HI DATA AAYEGA
+     * 📥 SECURE PULL: 🔒 Sabhi 21+ Tables Se Data Lekar Sahi Local Key Me Set Karta Hai
      */
     const pullAllCloudData = async (silent = true) => {
         if (!supabaseClient || !navigator.onLine) return;
@@ -356,7 +385,6 @@
 
         for (const tbl of tables) {
             try {
-                // 🔒 PRIVACY FILTER: Sirf is user_id ka data maangein
                 const { data, error } = await supabaseClient
                     .from(tbl)
                     .select('*')
@@ -372,8 +400,15 @@
                             localKey = localKey.replace(prefix, '');
                         }
 
-                        if (localKey && row.data !== undefined) {
-                            const updated = smartApplyRemoteData(localKey, row.data);
+                        // ⭐ Bi-directional mapping apply karein (jaise sancha_list -> sancha_items)
+                        const mappedLocalKey = mapCloudKeyToLocalKey(localKey, tbl);
+
+                        if (mappedLocalKey && row.data !== undefined) {
+                            const updated = smartApplyRemoteData(mappedLocalKey, row.data);
+                            // Agar original key alag thi to dono sync rakhein
+                            if (mappedLocalKey !== localKey) {
+                                smartApplyRemoteData(localKey, row.data);
+                            }
                             if (updated) hasNewData = true;
                         }
                     });
@@ -401,7 +436,6 @@
                     (payload) => {
                         if (typeof window.isBackupPreviewMode !== 'undefined' && window.isBackupPreviewMode) return;
                         const row = payload.new;
-                        // 🔒 Realtime security: Sirf apne user ka hi event sunega
                         if (row && row.user_id === uid && row.id && row.data !== undefined) {
                             let localKey = row.id;
                             const sess = getActiveSessionVal();
@@ -410,7 +444,11 @@
                             if (localKey.startsWith(prefix)) {
                                 localKey = localKey.replace(prefix, '');
                             }
-                            smartApplyRemoteData(localKey, row.data);
+                            const mappedLocalKey = mapCloudKeyToLocalKey(localKey, payload.table);
+                            smartApplyRemoteData(mappedLocalKey, row.data);
+                            if (mappedLocalKey !== localKey) {
+                                smartApplyRemoteData(localKey, row.data);
+                            }
                             triggerSmartUIRepaint();
                             showSyncStatus('online');
                         }
