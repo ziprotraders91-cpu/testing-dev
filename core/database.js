@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - ENTERPRISE AUTO-POLLING & LIVE REALTIME ENGINE (ALL MODULES)
    File: core/database.js • Developed by Farhan Jawed
-   Architecture: Direct Workers Synchronizer (Cutting + Calender) • 100% Reliable
+   Architecture: Loop-Protected Realtime • Smooth Repaint • 100% Reliable Sync
 ============================================================================ */
 
 (() => {
@@ -17,6 +17,8 @@
     let isConnectedToCloud = false;
     let renderDebounceTimer = null;
     let realtimeChannel = null;
+    let isSyncingInProgress = false;
+    let hasInitialPushed = false;
 
     try {
         if (typeof window.supabase !== 'undefined' && typeof window.supabase.createClient === 'function') {
@@ -76,9 +78,6 @@
         return '2026-2027';
     };
 
-    /**
-     * ⭐ LOCALSTORAGE DIRECT WORKERS SCANNER
-     */
     const getAllLocalWorkers = () => {
         let workers = [];
         try {
@@ -90,18 +89,13 @@
                 const k = localStorage.key(i);
                 if (k && k.includes('jobwork_workers')) {
                     const parsed = JSON.parse(localStorage.getItem(k) || '[]');
-                    if (Array.isArray(parsed) && parsed.length > 0) {
-                        return parsed;
-                    }
+                    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
                 }
             }
         } catch (_) {}
         return [];
     };
 
-    /**
-     * ⭐ DIRECT PUSH: Cutting aur Calender ko sidhe unki tables me daalo
-     */
     const syncWorkersDirectToCuttingAndCalender = async () => {
         if (!supabaseClient || !navigator.onLine) return;
 
@@ -117,31 +111,22 @@
         const calenderWorkers = allWorkers.filter(w => String(w?.type || '').toLowerCase() === 'calender');
         const embroideryWorkers = allWorkers.filter(w => String(w?.type || '').toLowerCase() === 'embroidery');
 
-        // 1. Push Cutting
         if (cuttingWorkers.length > 0) {
-            const { error: cErr } = await supabaseClient.from('cutting').upsert({
+            await supabaseClient.from('cutting').upsert({
                 id: `${uid}_${sess}_cutting_workers`,
                 user_id: uid, tenant_id: tid, session: sess,
                 data: cuttingWorkers, updated_at: now
             }, { onConflict: 'id' });
-
-            if (cErr) console.error("❌ [Cutting Push Error]:", cErr);
-            else console.log(`🟢 [Sync] Cutting table updated with ${cuttingWorkers.length} Kariger!`);
         }
 
-        // 2. Push Calender
         if (calenderWorkers.length > 0) {
-            const { error: calErr } = await supabaseClient.from('calender').upsert({
+            await supabaseClient.from('calender').upsert({
                 id: `${uid}_${sess}_calender_workers`,
                 user_id: uid, tenant_id: tid, session: sess,
                 data: calenderWorkers, updated_at: now
             }, { onConflict: 'id' });
-
-            if (calErr) console.error("❌ [Calender Push Error]:", calErr);
-            else console.log(`🟢 [Sync] Calender table updated with ${calenderWorkers.length} Kariger!`);
         }
 
-        // 3. Push Embroidery
         if (embroideryWorkers.length > 0) {
             await supabaseClient.from('embroidery').upsert({
                 id: `${uid}_${sess}_embroidery_workers`,
@@ -154,34 +139,26 @@
     const resolveTargetTable = (fullKey) => {
         const k = String(fullKey).toLowerCase();
 
-        // Saree
         if (k.includes('saree_history')) return 'saree_history';
         if (k.includes('saree_stock') || k.includes('saree_items') || k.includes('saree')) return 'saree_stock';
 
-        // Zari
         if (k.includes('zari_history')) return 'zari_history';
         if (k.includes('zari_stock') || k.includes('zari')) return 'zari_stock';
 
-        // Bana
         if (k.includes('bana_history')) return 'bana_history';
         if (k.includes('bana_stock') || k.includes('bana')) return 'bana_stock';
 
-        // Sancha
         if (k.includes('sancha_history')) return 'sancha_history';
         if (k.includes('sancha_items') || k.includes('sancha_list') || k.includes('sancha')) return 'sancha_list';
 
-        // Karigers
         if (k.includes('kariger_sheet') || k.includes('tani_sheet') || k.includes('tani_sheets')) return 'tani_sheets';
         if (k.includes('kariger_list') || k.includes('karigers') || k.includes('kariger')) return 'karigers';
 
-        // Payments
         if (k.includes('payments') || k.includes('payment_list') || k.includes('kharcha')) return 'payments';
 
-        // Transfers
         if (k.includes('material_transfer') || k.includes('transfer')) return 'material_transfers';
         if (k.includes('dukan')) return 'dukan_challans';
 
-        // Monthly Sheets History (Cutting vs Calender)
         if (k.includes('jobwork_sheets_') || k.includes('jw_sheet_')) {
             const workerId = k.replace(/.*jobwork_sheets_/, '').replace(/.*jw_sheet_/, '');
             const workers = getAllLocalWorkers();
@@ -193,12 +170,10 @@
             return 'cutting_history';
         }
 
-        // Job Workers List
         if (k.includes('jobwork_workers') || k.includes('cutting_workers') || k.includes('calender_workers')) {
             return 'WORKERS_SPLIT_ACTION';
         }
 
-        // Bills
         if (k.includes('jw_bill') || k.includes('jobwork_bill') || k.includes('jw_payment') || k.includes('jobwork')) {
             return 'job_work_bills';
         }
@@ -256,6 +231,7 @@
         }
     };
 
+    // ⭐ SMOOTH DEBOUNCED REPAINT (Screen bar-bar nahi hilegi)
     const triggerSmartUIRepaint = () => {
         const activeEl = document.activeElement;
         const isUserTyping = activeEl && ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeEl.tagName);
@@ -275,7 +251,7 @@
             if (typeof window.updateJobWorkHubBadges === 'function') window.updateJobWorkHubBadges();
             if (typeof window.renderDashboardDayBook === 'function') window.renderDashboardDayBook();
             if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-        }, 50);
+        }, 150);
     };
 
     const smartApplyRemoteData = (targetKey, rowData) => {
@@ -295,12 +271,16 @@
             : `${uid}_${sess}_${shortKey}`;
 
         try {
+            const currentStr = localStorage.getItem(fullStorageKey);
+            const newStr = JSON.stringify(rowData);
+            if (currentStr === newStr) return false; // Koi badlaav nahi to repaint mat karo
+
             if (window.APP_MEMORY_CACHE) {
                 window.APP_MEMORY_CACHE[fullStorageKey] = rowData;
                 window.APP_MEMORY_CACHE[shortKey] = rowData;
             }
-            localStorage.setItem(fullStorageKey, JSON.stringify(rowData));
-            localStorage.setItem(shortKey, JSON.stringify(rowData));
+            localStorage.setItem(fullStorageKey, newStr);
+            localStorage.setItem(shortKey, newStr);
             if (typeof window.idbPut === 'function') {
                 window.idbPut(fullStorageKey, rowData);
             }
@@ -310,16 +290,12 @@
         }
     };
 
-    /**
-     * 🚀 CLOUD WRITE
-     */
     const cloudWrite = async (fullKey, data) => {
         if (!supabaseClient) return false;
 
         const targetTable = resolveTargetTable(fullKey);
         if (!targetTable) return false;
 
-        // Workers ko split karke direct cutting/calender me daalo
         if (targetTable === 'WORKERS_SPLIT_ACTION') {
             await syncWorkersDirectToCuttingAndCalender();
             return true;
@@ -355,7 +331,6 @@
                 return false;
             }
 
-            // Saree Stock Auto-Update
             if (targetTable === 'saree_history' && Array.isArray(data)) {
                 try {
                     let groupedStock = [];
@@ -383,14 +358,15 @@
     };
 
     /**
-     * 📥 CLOUD PULL
+     * 📥 CLOUD PULL (LOOP GUARDED)
      */
     const pullAllCloudData = async (silent = true) => {
-        if (!supabaseClient || !navigator.onLine) return;
+        if (!supabaseClient || !navigator.onLine || isSyncingInProgress) return;
         const uid = getSafeUserId();
         if (!uid) return;
 
-        showSyncStatus('syncing');
+        isSyncingInProgress = true;
+        if (!silent) showSyncStatus('syncing');
 
         const tables = [
             'saree_stock', 'saree_history',
@@ -436,8 +412,8 @@
 
                         const mappedLocalKey = mapCloudKeyToLocalKey(localKey, tbl);
                         if (mappedLocalKey && row.data !== undefined) {
-                            smartApplyRemoteData(mappedLocalKey, row.data);
-                            hasNewData = true;
+                            const updated = smartApplyRemoteData(mappedLocalKey, row.data);
+                            if (updated) hasNewData = true;
                         }
                     });
                 }
@@ -446,14 +422,21 @@
 
         if (collectedWorkersMap.size > 0) {
             const allWorkers = Array.from(collectedWorkersMap.values());
-            smartApplyRemoteData('jobwork_workers', allWorkers);
-            hasNewData = true;
+            const updated = smartApplyRemoteData('jobwork_workers', allWorkers);
+            if (updated) hasNewData = true;
         }
 
-        // ⭐ Sabhi local workers ko turant Cutting aur Calender me push karein
-        await syncWorkersDirectToCuttingAndCalender();
+        // Pehli baar khulne par hi push karo, bar-bar loop me nahi
+        if (!hasInitialPushed) {
+            hasInitialPushed = true;
+            await syncWorkersDirectToCuttingAndCalender();
+        }
 
-        triggerSmartUIRepaint();
+        isSyncingInProgress = false;
+
+        if (hasNewData || !silent) {
+            triggerSmartUIRepaint();
+        }
         showSyncStatus('online');
     };
 
@@ -470,7 +453,8 @@
                     (payload) => {
                         if (typeof window.isBackupPreviewMode !== 'undefined' && window.isBackupPreviewMode) return;
                         const row = payload.new;
-                        if (row && row.user_id === uid && row.id && row.data !== undefined) {
+                        // Dusre device ka event aane par hi pull karo, khud ke loop ko roko
+                        if (row && row.user_id === uid && !isSyncingInProgress) {
                             pullAllCloudData(true);
                         }
                     }
