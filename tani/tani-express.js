@@ -12,6 +12,7 @@
    - Zero-Mouse Rapid Enter Chaining between Inputs
    - Instant A6 Thermal / Physical Pad Urdu Slip Print [Alt + P]
    - Instant WhatsApp Parchi Sharing [Alt + W]
+   - Auto-Push to Sancha Mobile Portal
 ============================================================================ */
 
 (() => {
@@ -60,7 +61,6 @@
         return isNaN(n) || !isFinite(n) ? fallback : n;
     };
 
-    // Valid YYYY-MM-DD date format
     const getToday = () => {
         let rawDate = (typeof window.getTodayDate === 'function') 
             ? window.getTodayDate() 
@@ -125,11 +125,9 @@
     };
 
     const getTaniExpressDatalists = () => {
-        // 1. Karigers strictly from master
         const allKarigers = toArray(getFromStore('kariger_list')).filter(k => k && k.name && String(k.name).trim());
         let karigerOpts = allKarigers.map(k => `<option value="${esc(k.name)}">`).join('');
 
-        // 2. Sanchas from stock (tani category)
         const sanchaItems = toArray(getFromStore('sancha_items')).filter(s => (s?.category || 'tani').toLowerCase() === 'tani');
         const sanchaNames = [...new Set([
             ...sanchaItems.map(s => s.name).filter(Boolean),
@@ -137,7 +135,6 @@
         ])];
         let sanchaOpts = sanchaNames.map(s => `<option value="${esc(s)}">`).join('');
 
-        // 3. Learned Rangis
         const learnedRangi = toArray(getFromStore('tani_learned_rangi'));
         const existingRangi = [...new Set([
             ...learnedRangi,
@@ -145,7 +142,6 @@
         ])];
         let rangiOpts = existingRangi.map(r => `<option value="${esc(r)}">`).join('');
 
-        // 4. Learned Colors
         const colors = getLearnedColors();
         let colorOpts = colors.map(c => `<option value="${esc(c)}">`).join('');
 
@@ -163,7 +159,6 @@
         const nextOrderNo = getNextParchiNumber();
         const { karigerOpts, sanchaOpts, rangiOpts, colorOpts } = getTaniExpressDatalists();
 
-        // 8 Row Color Inputs Generator (Completely Blank - No Placeholders)
         let colorRowsHtml = '';
         for (let i = 1; i <= 8; i++) {
             colorRowsHtml += `
@@ -356,7 +351,6 @@
 
         setTimeout(() => { if (karigerInp) karigerInp.focus(); }, 120);
 
-        // Enter Chaining between inputs
         const allInputs = modal.querySelectorAll('input[data-next]');
         allInputs.forEach((inp) => {
             inp.addEventListener('keydown', (e) => {
@@ -376,7 +370,6 @@
             });
         });
 
-        // Kariger Auto-Fill Mohalla
         if (karigerInp && mohallaInp) {
             const autoFill = () => {
                 const kName = String(karigerInp.value || '').trim().toUpperCase();
@@ -399,7 +392,6 @@
         const modal = document.getElementById('master-tani-express-modal');
         if (!modal || modal.style.display === 'none') return;
 
-        // Escape to Close
         if (e.key === 'Escape') {
             e.preventDefault();
             e.stopPropagation();
@@ -408,7 +400,6 @@
             return;
         }
 
-        // Alt + P -> Print A6 Slip
         if (e.altKey && (e.key === 'p' || e.key === 'P')) {
             e.preventDefault();
             e.stopPropagation();
@@ -417,7 +408,6 @@
             return;
         }
 
-        // Alt + W -> WhatsApp Parchi
         if (e.altKey && (e.key === 'w' || e.key === 'W')) {
             e.preventDefault();
             e.stopPropagation();
@@ -434,7 +424,7 @@
     };
 
     /* ========================================================================
-       5. ATOMIC SUBMIT (SAVES TO TANI_ORDERS_LIST & REFRESHES SYSTEM)
+       5. ATOMIC SUBMIT (SAVES TO TANI_ORDERS_LIST & PUSHES TO SANCHA PORTAL)
        ======================================================================== */
     window.submitTaniExpress = () => {
         const orderNo = String(document.getElementById('texp-order-no')?.value || '').trim() || getNextParchiNumber();
@@ -456,7 +446,6 @@
             return;
         }
 
-        // Kariger Master Validation
         const allKarigers = toArray(getFromStore('kariger_list'));
         const karigerExists = allKarigers.some(k => k && String(k.name || '').trim().toUpperCase() === kariger);
         if (!karigerExists) {
@@ -483,10 +472,8 @@
             }
         }
 
-        // Memory save for dynamic colors
         saveNewLearnedColors(usedColors);
 
-        // Memory save for Rangi wala
         if (rangi) {
             const rList = toArray(getFromStore('tani_learned_rangi'));
             if (!rList.includes(rangi)) {
@@ -495,7 +482,6 @@
             }
         }
 
-        // Multi-contrast styles
         const selectedContrasts = [];
         const contrastLabels = [];
         document.querySelectorAll('input[name="texp_contrast"]:checked').forEach(c => {
@@ -529,6 +515,7 @@
             contrastLabel: contrastLabel,
             selectedContrasts: selectedContrasts,
             status: 'sancha',
+            sanchaPortalStatus: 'pending',
             statusHistory: [
                 { status: 'sancha', date: date, note: 'Tani Express Entry' }
             ],
@@ -540,7 +527,19 @@
 
         lastSavedTaniExpressOrder = newOrderObj;
 
-        // Sync and refresh main tani order tables/badges if open in background
+        if (sancha && window.SanchaPortalSync && typeof window.SanchaPortalSync.pushTaniOrderToSanchaPortal === 'function') {
+            window.SanchaPortalSync.pushTaniOrderToSanchaPortal(newOrderObj).then((ok) => {
+                if (ok) {
+                    const latest = getTaniOrders();
+                    const found = latest.find(x => String(x.id) === String(newOrderObj.id));
+                    if (found && !found.sanchaPortalPushed) {
+                        found.sanchaPortalPushed = true;
+                        setToStore('tani_orders_list', latest);
+                    }
+                }
+            });
+        }
+
         if (typeof window.updateTaniOrderBadges === 'function') window.updateTaniOrderBadges();
         if (typeof window.renderTaniMonthTabs === 'function') window.renderTaniMonthTabs();
         if (typeof window.renderTaniOrdersTable === 'function') window.renderTaniOrdersTable();
@@ -550,7 +549,6 @@
             statusMsg.innerHTML = `✅ Parchi #${orderNo} (${kariger}) safalta-poorvak save ho gayi!`;
         }
 
-        // Reset inputs for next parchi immediately
         const nextNum = getNextParchiNumber();
         const noEl = document.getElementById('texp-order-no');
         if (noEl) noEl.value = nextNum;
@@ -578,7 +576,6 @@
             if (bnEl) bnEl.value = '';
         }
 
-        // Ask for A6 print confirmation
         if (confirm(`✅ Parchi #${orderNo} save ho gayi!\n\nKya aap iski Urdu A6 Parchi print karna chahte hain?`)) {
             printLastSavedTaniExpressSlip();
         }
