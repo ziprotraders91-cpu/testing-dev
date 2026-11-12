@@ -19,7 +19,17 @@
 ============================================================================ */
 
 (() => {
-    'use strict';
+    'use strict';if (!window.SanchaPortalSync && !document.getElementById('sancha-portal-sync-script')) {
+        const s = document.createElement('script');
+        s.id = 'sancha-portal-sync-script';
+        s.src = 'tani/sancha-portal-sync.js?v=3.2';
+        s.onload = () => {
+            if (window.SanchaPortalSync && typeof window.SanchaPortalSync.injectSanchaPortalButtons === 'function') {
+                window.SanchaPortalSync.injectSanchaPortalButtons();
+            }
+        };
+        document.head.appendChild(s);
+    }
 
     /* ========================================================================
        1. GLOBAL STATE & CONTEXT
