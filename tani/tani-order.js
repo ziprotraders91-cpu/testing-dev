@@ -2,8 +2,12 @@
    SIMPLICITY ERP - TANI ORDER, RANGAI & A6 PARCHI ENGINE
    File: tani/tani-order.js • Developed by Farhan Jawed
    Features: 
-   - 8-Colors Matching Table (Paper Parchi Replica)
-   - 4-Tier Flexible Tracking (Sancha ➔ Baithak ➔ Rangai ➔ Karkhana Ready)
+   - Kariger Auto-Select + Auto-Fill Mohalla (Address from Kariger Master)
+   - Sancha, Rangai, and 8-Colors Smart Auto-Complete Datalists
+   - Multi-Select Checkboxes for Contrast Styles (Multiple tick supported)
+   - Auto-Increment Locked Serial Parchi No. (No typing required)
+   - Form strictly hidden by default, toggles on demand
+   - Har Mahine ka Alag Page / Monthly Tabs Bar
    - Built-in Clean Pagination (15 Orders Per Page)
    - High-Precision A6 Physical Slip Print (Matches Physical Pad)
    - WhatsApp Parchi Sharing & Realtime Cloud Sync
@@ -16,11 +20,19 @@
        1. GLOBAL STATE & CONTEXT
        ======================================================================== */
     window.currentTaniOrderTab = 'all';
+    window.currentTaniMonthFilter = 'all';
     window.activeTaniStatusOrderId = null;
 
     let taniOrderCurrentPage = 1;
     const TANI_PAGE_SIZE = 15;
     let filteredTaniOrdersCache = [];
+
+    // Banarasi Karkhana Standard Color Palette
+    const POPULAR_COLORS = [
+        'Rani', 'Firozi', 'Lal', 'Mehendi', 'Blue', 'Peela', 'Wine', 
+        'Mungia', 'Rama Green', 'Bottle Green', 'Jamuni', 'Peach', 
+        'Gajari', 'Morpankhi', 'Mustard', 'Black', 'White', 'Zari', 'Resham'
+    ];
 
     /* ========================================================================
        2. SAFE SANITIZATION & STORAGE BRIDGES
@@ -90,13 +102,14 @@
     };
 
     /* ========================================================================
-       3. DATA REPOSITORY
+       3. DATA REPOSITORY & AUTO SERIAL NUMBER
        ======================================================================== */
     const getTaniOrders = () => toArray(getFromStore('tani_orders_list'));
 
     const saveTaniOrdersList = (list) => {
         setToStore('tani_orders_list', toArray(list));
         updateTaniOrderBadges();
+        renderTaniMonthTabs();
         renderTaniOrdersTable();
     };
 
@@ -112,7 +125,76 @@
     };
 
     /* ========================================================================
-       4. VIEW INITIALIZER & 8-COLOR TABLE BUILDER
+       4. SMART AUTO-COMPLETE DATALISTS & AUTO-FILL MOHALLA
+       ======================================================================== */
+    const setupAutoDatalists = () => {
+        // 1. Color Datalist
+        let dlColors = document.getElementById('dl-tani-colors');
+        if (!dlColors) {
+            dlColors = document.createElement('datalist');
+            dlColors.id = 'dl-tani-colors';
+            document.body.appendChild(dlColors);
+        }
+        dlColors.innerHTML = POPULAR_COLORS.map(c => `<option value="${c}">`).join('');
+
+        // 2. Rangai Wala Datalist
+        let dlRangi = document.getElementById('dl-tani-rangi');
+        if (!dlRangi) {
+            dlRangi = document.createElement('datalist');
+            dlRangi.id = 'dl-tani-rangi';
+            document.body.appendChild(dlRangi);
+        }
+        const existingRangi = [...new Set(getTaniOrders().map(o => o.rangi).filter(Boolean))];
+        dlRangi.innerHTML = existingRangi.map(r => `<option value="${esc(r)}">`).join('');
+
+        const rangiInp = document.getElementById('tani-order-rangi');
+        if (rangiInp) rangiInp.setAttribute('list', 'dl-tani-rangi');
+
+        // 3. Sancha Datalist
+        let dlSancha = document.getElementById('dl-tani-sancha');
+        if (!dlSancha) {
+            dlSancha = document.createElement('datalist');
+            dlSancha.id = 'dl-tani-sancha';
+            document.body.appendChild(dlSancha);
+        }
+        const sanchaItems = toArray(getFromStore('sancha_items') || getFromStore('sancha_list'));
+        const sanchaNames = [...new Set([
+            ...sanchaItems.map(s => s.name || s.sanchaName).filter(Boolean),
+            ...getTaniOrders().map(o => o.sancha).filter(Boolean)
+        ])];
+        dlSancha.innerHTML = sanchaNames.map(s => `<option value="${esc(s)}">`).join('');
+
+        const sanchaInp = document.getElementById('tani-order-sancha');
+        if (sanchaInp) sanchaInp.setAttribute('list', 'dl-tani-sancha');
+
+        // 4. Kariger selection ➔ Auto-Fill Mohalla
+        const karigerInp = document.getElementById('tani-order-kariger');
+        if (karigerInp) {
+            karigerInp.setAttribute('list', 'dl-karigers-list');
+            karigerInp.oninput = autoFillKarigerMohalla;
+            karigerInp.onchange = autoFillKarigerMohalla;
+        }
+    };
+
+    const autoFillKarigerMohalla = () => {
+        const karigerInp = document.getElementById('tani-order-kariger');
+        const mohallaInp = document.getElementById('tani-order-mohalla');
+        if (!karigerInp || !mohallaInp) return;
+
+        const kName = String(karigerInp.value || '').trim().toUpperCase();
+        if (!kName) return;
+
+        const allKarigers = toArray(getFromStore('kariger_list'));
+        const found = allKarigers.find(k => k && String(k.name || '').trim().toUpperCase() === kName);
+
+        if (found) {
+            const addr = found.address || found.mohalla || found.pata || '';
+            if (addr) mohallaInp.value = addr;
+        }
+    };
+
+    /* ========================================================================
+       5. 8-COLORS TABLE BUILDER & MULTI-CONTRAST CHECKBOXES
        ======================================================================== */
     const build8ColorInputs = () => {
         const tbody = document.getElementById('tani-colors-table-tbody');
@@ -136,24 +218,37 @@
             const def = defaultPlaceholders[i - 1];
             html += `<tr>
                 <td style="text-align:center; font-weight:800; color:#b45309; background:#fffbeb;">${i}</td>
-                <td><input type="text" id="tani-col-saree-${i}" placeholder="${def.s}" style="width:100%; box-sizing:border-box; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-weight:bold;"></td>
-                <td><input type="text" id="tani-col-border-${i}" placeholder="${def.b}" style="width:100%; box-sizing:border-box; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-weight:bold;"></td>
-                <td><input type="text" id="tani-col-bana-${i}" placeholder="${def.bn}" style="width:100%; box-sizing:border-box; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-weight:bold;"></td>
+                <td><input type="text" id="tani-col-saree-${i}" list="dl-tani-colors" placeholder="${def.s}" style="width:100%; box-sizing:border-box; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-weight:bold;"></td>
+                <td><input type="text" id="tani-col-border-${i}" list="dl-tani-colors" placeholder="${def.b}" style="width:100%; box-sizing:border-box; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-weight:bold;"></td>
+                <td><input type="text" id="tani-col-bana-${i}" list="dl-tani-colors" placeholder="${def.bn}" style="width:100%; box-sizing:border-box; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-weight:bold;"></td>
             </tr>`;
         }
 
         tbody.innerHTML = html;
+        upgradeContrastToMultiCheckboxes();
     };
 
+    const upgradeContrastToMultiCheckboxes = () => {
+        const rRadios = document.querySelectorAll('input[name="tani_contrast_style"]');
+        if (!rRadios.length) return;
+        rRadios.forEach(r => {
+            r.type = 'checkbox';
+        });
+    };
+
+    /* ========================================================================
+       6. VIEW INITIALIZER (FORM STRICTLY CLOSED BY DEFAULT)
+       ======================================================================== */
     const initTaniOrderView = () => {
+        // Form strictly band rahega by default
+        setDisplay('add-tani-order-form', 'none');
+
+        setupAutoDatalists();
         build8ColorInputs();
-        const dEl = document.getElementById('tani-order-date');
-        const noEl = document.getElementById('tani-order-no');
-        if (dEl && !dEl.value) dEl.value = getToday();
-        if (noEl && !noEl.value) noEl.value = getNextParchiNumber();
 
         taniOrderCurrentPage = 1;
         updateTaniOrderBadges();
+        renderTaniMonthTabs();
         renderTaniOrdersTable();
     };
 
@@ -165,9 +260,10 @@
         f.style.display = isOpening ? 'block' : 'none';
 
         if (isOpening) {
+            setupAutoDatalists();
             build8ColorInputs();
             resetTaniOrderForm();
-            window.scrollTo({ top: f.offsetTop - 40, behavior: 'smooth' });
+            window.scrollTo({ top: f.offsetTop - 30, behavior: 'smooth' });
         }
     };
 
@@ -179,7 +275,17 @@
 
         setVal('tani-edit-id', '');
         setVal('tani-order-date', getToday());
-        setVal('tani-order-no', getNextParchiNumber());
+
+        // Serial No. Automatic aur Locked (No typing needed)
+        const noEl = document.getElementById('tani-order-no');
+        if (noEl) {
+            noEl.value = getNextParchiNumber();
+            noEl.readOnly = true;
+            noEl.style.backgroundColor = '#fef3c7';
+            noEl.style.cursor = 'not-allowed';
+            noEl.title = 'Automatic Serial Number';
+        }
+
         setVal('tani-order-sancha', '');
         setVal('tani-order-kariger', '');
         setVal('tani-order-mohalla', '');
@@ -196,15 +302,70 @@
             setVal(`tani-col-bana-${i}`, '');
         }
 
-        const rDefault = document.querySelector('input[name="tani_contrast_style"][value="aanchal_blouse"]');
-        if (rDefault) rDefault.checked = true;
+        upgradeContrastToMultiCheckboxes();
+        document.querySelectorAll('input[name="tani_contrast_style"]').forEach(c => {
+            c.checked = (c.value === 'aanchal_blouse');
+        });
 
         const rInit = document.querySelector('input[name="tani_initial_status"][value="sancha"]');
         if (rInit) rInit.checked = true;
     };
 
     /* ========================================================================
-       5. SAVE & UPDATE ORDER PARCHI
+       7. HAR MAHINE KA ALAG PAGE (MONTHLY TABS ENGINE)
+       ======================================================================== */
+    const renderTaniMonthTabs = () => {
+        let bar = document.getElementById('tani-monthly-tabs-bar');
+        const orderSection = document.getElementById('tani-order-section');
+        const filterTabsBar = document.querySelector('#tani-order-section .sheet-tabs-bar');
+
+        if (!bar && orderSection && filterTabsBar) {
+            bar = document.createElement('div');
+            bar.id = 'tani-monthly-tabs-bar';
+            bar.className = 'sheet-tabs-bar';
+            bar.style.cssText = 'margin-bottom:10px; display:flex; gap:6px; flex-wrap:wrap; align-items:center; background:#f8fafc; padding:8px 12px; border-radius:8px; border:1px solid #e2e8f0;';
+            filterTabsBar.parentNode.insertBefore(bar, filterTabsBar.nextSibling);
+        }
+
+        if (!bar) return;
+
+        const list = getTaniOrders();
+        const monthsSet = new Set();
+
+        list.forEach(item => {
+            if (item.date && item.date.length >= 7) {
+                monthsSet.add(item.date.substring(0, 7)); // e.g. "2026-11"
+            }
+        });
+
+        const curMonthStr = getToday().substring(0, 7);
+        monthsSet.add(curMonthStr);
+
+        const sortedMonths = Array.from(monthsSet).sort().reverse();
+
+        let html = `<span style="font-size:12px; font-weight:800; color:#b45309; margin-right:4px;">📅 Mahina:</span>`;
+        const isAllActive = (window.currentTaniMonthFilter === 'all') ? 'active' : '';
+        html += `<button type="button" class="sheet-tab ${isAllActive}" style="padding:4px 10px; font-size:12px;" onclick="TaniOrderEngine.switchTaniMonth('all')">Sabhi Mahine</button>`;
+
+        sortedMonths.forEach(m => {
+            const isActive = (window.currentTaniMonthFilter === m) ? 'active' : '';
+            const dObj = new Date(`${m}-01`);
+            const label = dObj.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+            html += `<button type="button" class="sheet-tab ${isActive}" style="padding:4px 10px; font-size:12px;" onclick="TaniOrderEngine.switchTaniMonth('${m}')">${label}</button>`;
+        });
+
+        bar.innerHTML = html;
+    };
+
+    const switchTaniMonth = (monthKey) => {
+        window.currentTaniMonthFilter = monthKey;
+        taniOrderCurrentPage = 1;
+        renderTaniMonthTabs();
+        renderTaniOrdersTable();
+    };
+
+    /* ========================================================================
+       8. SAVE & UPDATE ORDER PARCHI
        ======================================================================== */
     const saveTaniOrder = () => {
         const editId = document.getElementById('tani-edit-id')?.value || '';
@@ -235,11 +396,18 @@
             }
         }
 
-        const contrastRadio = document.querySelector('input[name="tani_contrast_style"]:checked');
-        const contrastVal = contrastRadio ? contrastRadio.value : 'aanchal_blouse';
-        let contrastLabel = 'آنچل بلاؤز کنٹراس (Aanchal Blouse Contrast)';
-        if (contrastVal === 'border_only') contrastLabel = 'صرف بارڈر کنٹراس (Border Contrast)';
-        else if (contrastVal === 'self') contrastLabel = 'سیلف (Self)';
+        // Multi-select contrast checkboxes
+        const selectedContrasts = [];
+        const contrastLabels = [];
+        document.querySelectorAll('input[name="tani_contrast_style"]:checked').forEach(c => {
+            selectedContrasts.push(c.value);
+            if (c.value === 'aanchal_blouse') contrastLabels.push('آنچل بلاؤز');
+            else if (c.value === 'border_only') contrastLabels.push('صرف بارڈر');
+            else if (c.value === 'self') contrastLabels.push('سیلف');
+        });
+
+        const contrastVal = selectedContrasts.length ? selectedContrasts.join(', ') : 'aanchal_blouse';
+        const contrastLabel = contrastLabels.length ? contrastLabels.join(' + ') : 'آنچل بلاؤز کنٹراس';
 
         const initRadio = document.querySelector('input[name="tani_initial_status"]:checked');
         const initialStatus = initRadio ? initRadio.value : 'sancha';
@@ -264,6 +432,7 @@
                 it.matchingTable = matchingTable;
                 it.contrastVal = contrastVal;
                 it.contrastLabel = contrastLabel;
+                it.selectedContrasts = selectedContrasts;
                 it.updatedAt = Date.now();
             }
         } else {
@@ -284,6 +453,7 @@
                 matchingTable,
                 contrastVal,
                 contrastLabel,
+                selectedContrasts,
                 status: initialStatus,
                 statusHistory: [
                     { status: initialStatus, date: getToday(), note: 'Order Diya Gaya' }
@@ -293,12 +463,12 @@
         }
 
         saveTaniOrdersList(list);
-        toggleTaniOrderForm();
+        setDisplay('add-tani-order-form', 'none'); // Save hote hi band
         alert(`✅ Parchi No: #${orderNo} save ho gayi!`);
     };
 
     /* ========================================================================
-       6. TRACKING PIPELINE & STATUS CONTROLLER
+       9. TRACKING PIPELINE & STATUS CONTROLLER
        ======================================================================== */
     const switchTaniOrderTab = (tab) => {
         window.currentTaniOrderTab = tab;
@@ -392,22 +562,29 @@
     };
 
     /* ========================================================================
-       7. TABLE RENDERER WITH BUILT-IN PAGINATION
+       10. TABLE RENDERER WITH BUILT-IN PAGINATION & MONTH FILTER
        ======================================================================== */
     const renderTaniOrdersTable = () => {
         const tbody = document.getElementById('tani-orders-table-body');
         if (!tbody) return;
 
         let list = getTaniOrders();
+
+        // 1. Month Filter
+        if (window.currentTaniMonthFilter !== 'all') {
+            list = list.filter((item) => item.date && item.date.startsWith(window.currentTaniMonthFilter));
+        }
+
+        // 2. Search Text Filter
         const searchInput = document.getElementById('search-tani-order-input');
         const txt = searchInput ? searchInput.value.toLowerCase().trim() : '';
-
         if (txt) {
             list = list.filter((item) => 
                 `${item.orderNo || ''} ${item.sancha || ''} ${item.kariger || ''} ${item.mohalla || ''} ${item.rangi || ''}`.toLowerCase().includes(txt)
             );
         }
 
+        // 3. Pipeline Tab Filter
         if (window.currentTaniOrderTab !== 'all') {
             list = list.filter((item) => String(item.status || 'sancha').toLowerCase() === window.currentTaniOrderTab);
         }
@@ -415,7 +592,7 @@
         filteredTaniOrdersCache = list;
         const totalEntries = list.length;
 
-        // Pagination Container
+        // Pagination Controls Container
         let pager = document.getElementById('tani-order-pagination-controls');
         if (!pager) {
             const tbl = tbody.closest('table') || tbody.parentElement;
@@ -478,7 +655,7 @@
                 <td><strong style="color:#7c3aed;">🎨 ${esc(item.rangi || '-')}</strong></td>
                 <td>
                     <span style="font-size:11px; font-weight:bold; color:#0f766e;">${matchingCount} Colors</span><br>
-                    <small style="color:#64748b; font-size:10px;">${esc(item.contrastVal || 'Self')}</small>
+                    <small style="color:#64748b; font-size:10px;">${esc(item.contrastLabel || 'Self')}</small>
                 </td>
                 <td>${statusBadge}</td>
                 <td style="text-align:center; white-space:nowrap;">
@@ -524,6 +701,7 @@
         if (!item) return;
 
         setDisplay('add-tani-order-form', 'block');
+        setupAutoDatalists();
         build8ColorInputs();
 
         const setVal = (fid, v) => {
@@ -560,10 +738,11 @@
             });
         }
 
-        if (item.contrastVal) {
-            const r = document.querySelector(`input[name="tani_contrast_style"][value="${item.contrastVal}"]`);
-            if (r) r.checked = true;
-        }
+        upgradeContrastToMultiCheckboxes();
+        const selContrasts = Array.isArray(item.selectedContrasts) ? item.selectedContrasts : (item.contrastVal ? item.contrastVal.split(',').map(s => s.trim()) : []);
+        document.querySelectorAll('input[name="tani_contrast_style"]').forEach(c => {
+            c.checked = selContrasts.includes(c.value);
+        });
 
         const formEl = document.getElementById('add-tani-order-form');
         if (formEl) window.scrollTo({ top: formEl.offsetTop - 30, behavior: 'smooth' });
@@ -576,7 +755,7 @@
     };
 
     /* ========================================================================
-       8. 🖨️ A6 PHYSICAL SLIP PRINT (EXACT REPLICA OF THE PAPER PAD)
+       11. 🖨️ A6 PHYSICAL SLIP PRINT (EXACT REPLICA OF THE PAPER PAD)
        ======================================================================== */
     const printTaniOrderA6 = (id) => {
         const item = getTaniOrders().find((x) => String(x.id) === String(id));
@@ -595,9 +774,10 @@
                 </tr>`;
         }
 
-        const isAanchal = (item.contrastVal === 'aanchal_blouse') ? '☑' : '☐';
-        const isBorder = (item.contrastVal === 'border_only') ? '☑' : '☐';
-        const isSelf = (item.contrastVal === 'self') ? '☑' : '☐';
+        const selContrasts = Array.isArray(item.selectedContrasts) ? item.selectedContrasts : (item.contrastVal ? item.contrastVal.split(',').map(s => s.trim()) : ['aanchal_blouse']);
+        const isAanchal = selContrasts.includes('aanchal_blouse') ? '☑' : '☐';
+        const isBorder = selContrasts.includes('border_only') ? '☑' : '☐';
+        const isSelf = selContrasts.includes('self') ? '☑' : '☐';
 
         const printWin = window.open('', '', 'width=450,height=700');
         if (!printWin) return alert('Popup block hai! Browser me popup allow karein.');
@@ -683,7 +863,7 @@
     };
 
     /* ========================================================================
-       9. 📲 WHATSAPP PARCHI SHARING
+       12. 📲 WHATSAPP PARCHI SHARING
        ======================================================================== */
     const sendTaniOrderWhatsApp = (id) => {
         const item = getTaniOrders().find((x) => String(x.id) === String(id));
@@ -717,7 +897,7 @@
     };
 
     /* ========================================================================
-       10. GLOBAL WINDOW EXPORTS (DIRECT ACCESSIBILITY)
+       13. GLOBAL WINDOW EXPORTS (DIRECT ACCESSIBILITY)
        ======================================================================== */
     const taniOrderAPI = {
         initTaniOrderView,
@@ -725,12 +905,14 @@
         resetTaniOrderForm,
         saveTaniOrder,
         switchTaniOrderTab,
+        switchTaniMonth,
         updateTaniOrderBadges,
         openTaniStatusModal,
         closeTaniStatusModal,
         applyTaniStatusChange,
         quickStatusMove,
         renderTaniOrdersTable,
+        renderTaniMonthTabs,
         editTaniOrder,
         deleteTaniOrder,
         printTaniOrderA6,
@@ -739,18 +921,19 @@
         changeTaniOrderPage
     };
 
-    // Direct Window binding taaki HTML onclick bina rukawat chale
     window.initTaniOrderView = initTaniOrderView;
     window.toggleTaniOrderForm = toggleTaniOrderForm;
     window.resetTaniOrderForm = resetTaniOrderForm;
     window.saveTaniOrder = saveTaniOrder;
     window.switchTaniOrderTab = switchTaniOrderTab;
+    window.switchTaniMonth = switchTaniMonth;
     window.updateTaniOrderBadges = updateTaniOrderBadges;
     window.openTaniStatusModal = openTaniStatusModal;
     window.closeTaniStatusModal = closeTaniStatusModal;
     window.applyTaniStatusChange = applyTaniStatusChange;
     window.quickStatusMove = quickStatusMove;
     window.renderTaniOrdersTable = renderTaniOrdersTable;
+    window.renderTaniMonthTabs = renderTaniMonthTabs;
     window.editTaniOrder = editTaniOrder;
     window.deleteTaniOrder = deleteTaniOrder;
     window.printTaniOrderA6 = printTaniOrderA6;
@@ -758,7 +941,6 @@
     window.changeTaniOrderPage = changeTaniOrderPage;
     window.TaniOrderEngine = taniOrderAPI;
 
-    // Search bar listener
     const bindSearch = () => {
         const searchInput = document.getElementById('search-tani-order-input');
         if (searchInput) {
