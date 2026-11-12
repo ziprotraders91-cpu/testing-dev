@@ -2,6 +2,7 @@
    SIMPLICITY ERP - SANCHA PORTAL 2-WAY SYNC & WORKER ACCOUNT MANAGER
    File: tani/sancha-portal-sync.js • Developed for: Farhan Jawed
    Features:
+   - Auto-Injects Sancha Logins & Sync Buttons in Tani Order Header
    - Owner-Only Sancha Worker ID Manager (Create / Edit / Block / Delete)
    - WhatsApp Login & Portal Link Sender for Sancha Makers
    - Auto-Push Tani Orders to Sancha Mobile Portal
@@ -88,6 +89,43 @@
             return href.replace(/[^/]*$/, 'sancha.html');
         } catch (_) {
             return 'sancha.html';
+        }
+    };
+
+    /* ========================================================================
+       0. AUTO-INJECT BUTTONS INTO #tani-order-section (NO index.html EDIT NEEDED)
+       ======================================================================== */
+    const injectSanchaPortalButtons = () => {
+        const header = document.querySelector('#tani-order-section .module-header');
+        if (!header || document.getElementById('sancha-portal-btn-group')) return;
+
+        const existingAddBtn = header.querySelector('button[onclick="toggleTaniOrderForm()"]');
+        const wrap = document.createElement('div');
+        wrap.id = 'sancha-portal-btn-group';
+        wrap.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;';
+
+        const syncBtn = document.createElement('button');
+        syncBtn.type = 'button';
+        syncBtn.className = 'add-btn';
+        syncBtn.style.background = '#0284c7';
+        syncBtn.textContent = '🔄 Sync Sancha';
+        syncBtn.onclick = () => syncSanchaPortalNow(syncBtn);
+
+        const mgrBtn = document.createElement('button');
+        mgrBtn.type = 'button';
+        mgrBtn.className = 'add-btn';
+        mgrBtn.style.background = '#0f766e';
+        mgrBtn.textContent = '👷 Sancha Logins';
+        mgrBtn.onclick = () => openSanchaWorkerManagerModal();
+
+        wrap.appendChild(syncBtn);
+        wrap.appendChild(mgrBtn);
+
+        if (existingAddBtn && existingAddBtn.parentNode === header) {
+            header.insertBefore(wrap, existingAddBtn);
+            wrap.appendChild(existingAddBtn);
+        } else {
+            header.appendChild(wrap);
         }
     };
 
@@ -179,6 +217,7 @@
     };
 
     const pullSanchaOrderStatuses = async (silent = true) => {
+        injectSanchaPortalButtons();
         const sb = getSupabase();
         const creds = getOwnerCreds();
         if (!sb || !creds || !navigator.onLine || isPulling) return false;
@@ -311,7 +350,6 @@
 
                 <div style="padding:16px; overflow-y:auto; flex:1;">
                     
-                    <!-- Portal Link Banner -->
                     <div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:10px 12px; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
                         <div style="font-size:12px; color:#1e3a8a; word-break:break-all;">
                             <strong>📱 Sancha Mobile Link:</strong><br>
@@ -322,7 +360,6 @@
                         </button>
                     </div>
 
-                    <!-- Add / Edit Form -->
                     <div style="background:#f8fafc; border:1.5px solid #cbd5e1; border-radius:10px; padding:12px; margin-bottom:14px;">
                         <div id="swm-form-title" style="font-weight:800; color:#0f766e; font-size:13px; margin-bottom:10px;">➕ Naya Sancha Login Banayein:</div>
                         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:8px; margin-bottom:8px;">
@@ -363,7 +400,6 @@
                         <div id="swm-msg" style="font-size:12px; font-weight:bold; margin-top:8px; display:none;"></div>
                     </div>
 
-                    <!-- Existing Workers Table -->
                     <div class="table-responsive" style="border:1px solid #cbd5e1; border-radius:8px;">
                         <table style="width:100%; border-collapse:collapse; font-size:12px;">
                             <thead>
@@ -606,9 +642,16 @@
         }
     });
 
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', injectSanchaPortalButtons);
+    } else {
+        injectSanchaPortalButtons();
+    }
+
     startPolling();
 
     const api = {
+        injectSanchaPortalButtons,
         pushTaniOrderToSanchaPortal,
         deleteTaniOrderFromSanchaPortal,
         pullSanchaOrderStatuses,
