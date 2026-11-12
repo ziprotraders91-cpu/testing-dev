@@ -4,10 +4,10 @@
    Features:
    - Kariger Master with Dynamic Mohalla / Address Box
    - Strict Gatekeeper: No New Sheet without 'Ready' Tani
+   - Instant Tani Order Deduction as soon as Sheet is Created
    - Auto-Populates Sancha + Rangai Name into Sancha Box
-   - Auto-Fills Bana Color & 8 Colors into Master Sheet
+   - Auto-Fills Bana Color & 8 New Colors into Master Sheet
    - 100% Untouched Manual Wazan System (Sancha Stock Safe)
-   - Auto-Minus Tani Order when Mounted on Loom
 ============================================================================ */
 
 (() => {
@@ -71,7 +71,6 @@
        1. NAVIGATION & KARIGER MASTER (WITH MOHALLA BOX INJECTION)
        ------------------------------------------------------------------------
     ======================================================================== */
-    // कारीगर मास्टर फॉर्म में मोहल्ले का डिब्बा खुद जोड़ना
     const ensureKarigerMohallaField = () => {
         if (document.getElementById('kar-mohalla')) return;
 
@@ -565,12 +564,12 @@
         loadCurrentSheetData();
     };
 
-    // ⭐ STRICT GATEKEEPER: Jab tak Tani Ready na ho, nayi sheet banne hi na de!
+    // ⭐ STRICT GATEKEEPER + INSTANT ORDER MINUS
     const addNewTaniSheet = () => {
         const kariger = sanitizeKarigerList().find((x) => String(x.id) === String(window.activeKarigerId));
         const kName = kariger ? String(kariger.name || '').trim().toUpperCase() : '';
 
-        // Tani Order me check karein ki kya is kariger ki Ready Tani maujood hai
+        // 1. Tani Order me check karein ki kya is kariger ki Ready Tani maujood hai
         const rawOrders = (typeof window.getStore === 'function') ? window.getStore('tani_orders_list') : localStorage.getItem('tani_orders_list');
         const orders = window.safeArray ? window.safeArray(rawOrders) : (Array.isArray(rawOrders) ? rawOrders : []);
 
@@ -581,7 +580,7 @@
             return isReady && oKariger === kName;
         });
 
-        // Agar Ready nahi hai to aage badhne hi na de!
+        // Agar Ready nahi hai to aage badhne hi na de (STRICT GATEKEEPER)
         if (!readyTani) {
             return alert(`⚠️ تانی ابھی تیار نہیں ہے!\n\nکاریگر [${kariger?.name || 'Kariger'}] کا نیا تانہ ابھی رنگائی سے تیار ہو کر نہیں آیا ہے (Status: 'Ready' نہیں ہے)۔\n\nپہلے Tani Order & Rangai ماڈیول میں جا کر تانے کو 'Ready' مارک کریں، تبھی نئی شیٹ کھلے گی!`);
         }
@@ -594,7 +593,7 @@
 
         const nextNum = sheets.length + 1;
 
-        // Naye ready taane ke colors extract karein
+        // 2. Naye ready taane ke 8 colors extract karein (purani sheet se copy nahi hoga!)
         const newColors = [];
         if (Array.isArray(readyTani.matchingTable)) {
             readyTani.matchingTable.forEach(m => {
@@ -602,9 +601,27 @@
             });
         }
 
-        // Saancha box me Sancha aur Rangai dono ka naam set karein
+        // 3. Saancha box me Sancha aur Rangai dono ka naam
         const sanchaRangiCombined = `${readyTani.sancha || ''}${readyTani.rangi ? ' | Rangi: ' + readyTani.rangi : ''}`.trim();
 
+        // 4. ⭐ SHEET BANATE HI TANI ORDER LIST SE TURANT MINUS KARNA (INSTANT DEDUCTION)
+        if (window.TaniOrderEngine && typeof window.TaniOrderEngine.markTaniMountedOnLoom === 'function') {
+            window.TaniOrderEngine.markTaniMountedOnLoom(readyTani.id, kName);
+        } else {
+            readyTani.status = 'loom';
+            if (!Array.isArray(readyTani.statusHistory)) readyTani.statusHistory = [];
+            readyTani.statusHistory.push({
+                status: 'loom',
+                date: (typeof window.getTodayDate === 'function') ? window.getTodayDate() : new Date().toISOString().split('T')[0],
+                note: `🪡 Kariger ${kName} ne Loom par taana chadha liya (Consumed)`,
+                timestamp: Date.now()
+            });
+            if (typeof window.setStore === 'function') {
+                window.setStore('tani_orders_list', orders);
+            }
+        }
+
+        // 5. Nayi Sheet create karein
         sheets.push({
             id: `tani_${nextNum}`,
             title: `Tani ${nextNum}`,
@@ -632,7 +649,7 @@
         renderSheetTabs();
         loadCurrentSheetData();
 
-        alert(`✅ Tani #${readyTani.orderNo} load ho gayi!\n• Saancha: ${readyTani.sancha || '-'}\n• Rangi: ${readyTani.rangi || '-'}\n• Bana: ${readyTani.bana || '-'}`);
+        alert(`✅ Tani #${readyTani.orderNo} safalta-poorvak load ho gayi aur Tani Order list se minus ho gayi!\n• Saancha: ${readyTani.sancha || '-'}\n• Rangi: ${readyTani.rangi || '-'}\n• Bana: ${readyTani.bana || '-'}`);
     };
 
     const revertSanchaStock = (itemName, category, wazan) => {
@@ -839,7 +856,7 @@
             if (typeof window.setStore === 'function') window.setStore('sancha_history', sHist2);
         }
 
-        // ⭐ TANI ORDER SE AUTO-MINUS (LOOM DISPATCH)
+        // TANI ORDER AUTO-MINUS SYNC
         const linkedId = sh.linkedTaniOrderId || sh.linkedTaniOrderNo;
         if (linkedId) {
             if (window.TaniOrderEngine && typeof window.TaniOrderEngine.markTaniMountedOnLoom === 'function') {
@@ -1052,7 +1069,6 @@
         const savedSheetIndex = window.activeSheetIndex;
 
         if (!isEditing && isLastSheet && targetTaniPcs > 0 && deliveredSoFar >= targetTaniPcs) {
-            // Target poora hone par alert
             alert(`🎉 मुबारक!\n\n${kName} की [${sh.title}] (${targetTaniPcs} साड़ी) पूरी हो गई!\n\nनई तानी जोड़ने के लिए '+ Nayi Tani Sheet' बटन दबाएं (अगर नया ताना तैयार है)।`);
             renderSheetRows(sh);
             updateLiveStockDisplay();
