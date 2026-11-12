@@ -142,6 +142,12 @@
         if (k.includes('material_transfer') || k.includes('transfer')) return 'material_transfers';
         if (k.includes('dukan')) return 'dukan_challans';
 
+        // Explicit history passbook routing
+        if (k.includes('embroidery_history')) return 'embroidery_history';
+        if (k.includes('cutting_history')) return 'cutting_history';
+        if (k.includes('calender_history')) return 'calender_history';
+
+        // ⭐ KHATA SHEETS ROUTING (Kariger Type ke anusaar Master Table me)
         if (k.includes('jobwork_sheets_') || k.includes('jw_sheet_')) {
             const workerId = k.replace(/.*jobwork_sheets_/, '').replace(/.*jw_sheet_/, '');
             let workers = [];
@@ -150,10 +156,15 @@
                 if (!workers.length) workers = JSON.parse(localStorage.getItem('jobwork_workers') || '[]');
             } catch (_) {}
             const found = workers.find(w => w && String(w.id).toLowerCase() === workerId.toLowerCase());
-            return String(found?.type || '').toLowerCase() === 'calender' ? 'calender_history' : 'cutting_history';
+            const wType = String(found?.type || '').toLowerCase();
+
+            if (wType === 'embroidery') return 'embroidery';
+            if (wType === 'calender') return 'calender';
+            return 'cutting';
         }
 
-        if (k.includes('jobwork_workers') || k.includes('cutting_workers') || k.includes('calender_workers')) {
+        // ⭐ JOB WORK KARIGERS (Routing to respective tables)
+        if (k.includes('jobwork_workers') || k.includes('cutting_workers') || k.includes('calender_workers') || k.includes('embroidery_workers')) {
             return 'WORKERS_ACTION';
         }
 
@@ -292,6 +303,60 @@
         showSyncStatus('syncing');
 
         try {
+            // ⭐ 1. WORKERS SYNC (Embroidery, Cutting, Calender)
+            if (targetTable === 'WORKERS_ACTION') {
+                const workersList = Array.isArray(data) ? data : [];
+
+                // Master copy app_store me taaki data safe rahe
+                try {
+                    await supabaseClient.from('app_store').upsert({
+                        id: `${uid}_${sess}_jobwork_workers`,
+                        user_id: uid, tenant_id: tid, session: sess,
+                        key: 'jobwork_workers',
+                        data: workersList,
+                        value: workersList,
+                        updated_at: new Date().toISOString()
+                    }, { onConflict: 'id' });
+                } catch (_) {}
+
+                // Embroidery Table (Embroidery Karigers)
+                try {
+                    const embWorkers = workersList.filter(w => String(w?.type || '').toLowerCase() === 'embroidery');
+                    await supabaseClient.from('embroidery').upsert({
+                        id: `${uid}_${sess}_embroidery_workers`,
+                        user_id: uid, tenant_id: tid, session: sess,
+                        data: embWorkers,
+                        updated_at: new Date().toISOString()
+                    }, { onConflict: 'id' });
+                } catch (_) {}
+
+                // Cutting Table (Cutting Karigers)
+                try {
+                    const cutWorkers = workersList.filter(w => String(w?.type || '').toLowerCase() === 'cutting');
+                    await supabaseClient.from('cutting').upsert({
+                        id: `${uid}_${sess}_cutting_workers`,
+                        user_id: uid, tenant_id: tid, session: sess,
+                        data: cutWorkers,
+                        updated_at: new Date().toISOString()
+                    }, { onConflict: 'id' });
+                } catch (_) {}
+
+                // Calender Table (Calender Karigers)
+                try {
+                    const calWorkers = workersList.filter(w => String(w?.type || '').toLowerCase() === 'calender');
+                    await supabaseClient.from('calender').upsert({
+                        id: `${uid}_${sess}_calender_workers`,
+                        user_id: uid, tenant_id: tid, session: sess,
+                        data: calWorkers,
+                        updated_at: new Date().toISOString()
+                    }, { onConflict: 'id' });
+                } catch (_) {}
+
+                isConnectedToCloud = true;
+                showSyncStatus('online');
+                return true;
+            }
+
             const cleanKey = String(fullKey).replace(`${uid}_${sess}_`, '').replace(`${uid}_`, '');
             const recordId = `${uid}_${sess}_${cleanKey}`;
 
@@ -331,7 +396,9 @@
                 return false;
             }
 
+            // ⭐ 2. PASSBOOK / LEN-DEN SYNC (Aai, Gai, Kab Aai) TO RESPECTIVE HISTORY TABLES
             if (targetTable === 'saree_history' && Array.isArray(data)) {
+                // Saree stock grouped
                 try {
                     let groupedStock = [];
                     if (typeof window.groupSareeStockByTab === 'function') {
@@ -342,6 +409,60 @@
                             id: `${uid}_${sess}_saree_stock`,
                             user_id: uid, tenant_id: tid, session: sess,
                             data: groupedStock, updated_at: new Date().toISOString()
+                        }, { onConflict: 'id' });
+                    }
+                } catch (_) {}
+
+                // 🪡 Embroidery Passbook History -> embroidery_history
+                try {
+                    const embHistory = data.filter(r => {
+                        if (!r) return false;
+                        const t = String(r.type || '').toLowerCase();
+                        const lbl = String(r.typeLabel || '').toLowerCase();
+                        const p = String(r.partyName || r.targetWorker || r.note || '').toLowerCase();
+                        return t === 'embroidery' || lbl.includes('embroidery') || p.includes('embroidery') || lbl.includes('कढ़ाई');
+                    });
+                    if (embHistory.length > 0) {
+                        await supabaseClient.from('embroidery_history').upsert({
+                            id: `${uid}_${sess}_embroidery_history`,
+                            user_id: uid, tenant_id: tid, session: sess,
+                            data: embHistory, updated_at: new Date().toISOString()
+                        }, { onConflict: 'id' });
+                    }
+                } catch (_) {}
+
+                // ✂️ Cutting Passbook History -> cutting_history
+                try {
+                    const cutHistory = data.filter(r => {
+                        if (!r) return false;
+                        const t = String(r.type || '').toLowerCase();
+                        const lbl = String(r.typeLabel || '').toLowerCase();
+                        const p = String(r.partyName || r.targetWorker || r.note || '').toLowerCase();
+                        return t === 'cutting' || lbl.includes('cutting') || p.includes('cutting') || lbl.includes('कटिंग');
+                    });
+                    if (cutHistory.length > 0) {
+                        await supabaseClient.from('cutting_history').upsert({
+                            id: `${uid}_${sess}_cutting_history`,
+                            user_id: uid, tenant_id: tid, session: sess,
+                            data: cutHistory, updated_at: new Date().toISOString()
+                        }, { onConflict: 'id' });
+                    }
+                } catch (_) {}
+
+                // 🎛️ Calender Passbook History -> calender_history
+                try {
+                    const calHistory = data.filter(r => {
+                        if (!r) return false;
+                        const t = String(r.type || '').toLowerCase();
+                        const lbl = String(r.typeLabel || '').toLowerCase();
+                        const p = String(r.partyName || r.targetWorker || r.note || '').toLowerCase();
+                        return t === 'finished' || lbl.includes('calender') || p.includes('calender') || lbl.includes('कैलेंडर');
+                    });
+                    if (calHistory.length > 0) {
+                        await supabaseClient.from('calender_history').upsert({
+                            id: `${uid}_${sess}_calender_history`,
+                            user_id: uid, tenant_id: tid, session: sess,
+                            data: calHistory, updated_at: new Date().toISOString()
                         }, { onConflict: 'id' });
                     }
                 } catch (_) {}
@@ -376,12 +497,11 @@
                 }));
                 smartApplyRemoteData('karkhana_list', kList);
             } else {
-                // Agar cloud khali hai toh auto push karo
                 await autoPushKarkhanasToSupabase();
             }
         } catch (_) {}
 
-        // ⭐ 2. Baaki Tables
+        // ⭐ 2. Baaki Sabhi Tables
         const tables = [
             'app_store',
             'saree_stock', 'saree_history',
@@ -420,8 +540,20 @@
                         const rowData = row.data !== undefined ? row.data : (row.value !== undefined ? row.value : row);
 
                         if (mappedLocalKey && rowData !== undefined) {
-                            const updated = smartApplyRemoteData(mappedLocalKey, rowData);
-                            if (updated) hasNewData = true;
+                            // Agar workers table se aa raha hai toh local jobwork_workers me merge karein
+                            if (mappedLocalKey === 'embroidery_workers' || mappedLocalKey === 'cutting_workers' || mappedLocalKey === 'calender_workers') {
+                                const existing = (typeof window.getStore === 'function') 
+                                    ? (window.getStore('jobwork_workers') || []) 
+                                    : JSON.parse(localStorage.getItem('jobwork_workers') || '[]');
+                                const incomingType = mappedLocalKey.replace('_workers', '');
+                                const others = existing.filter(w => String(w?.type || '').toLowerCase() !== incomingType);
+                                const merged = [...others, ...(Array.isArray(rowData) ? rowData : [])];
+                                const updated = smartApplyRemoteData('jobwork_workers', merged);
+                                if (updated) hasNewData = true;
+                            } else {
+                                const updated = smartApplyRemoteData(mappedLocalKey, rowData);
+                                if (updated) hasNewData = true;
+                            }
                         }
                     });
                 }
