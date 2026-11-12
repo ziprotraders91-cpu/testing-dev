@@ -4,9 +4,10 @@
    Features: 
    - 100% Clean Blank Input Boxes (No Placeholder / Pre-filled text)
    - Serial No Starts from #1 (Auto-Increment & Locked)
-   - Kariger Dropdown Strictly from Kariger Master + 100% Auto-Fill Mohalla
+   - Kariger Dropdown Strictly from Kariger Master + Auto-Fill Mohalla
    - Dynamic Auto-Learning Colors Datalist (No hardcoded colors)
    - Sancha & Rangai Auto-Complete Datalists
+   - Smart Date Normalizer (Fixed 'Invalid Date' & Month Filter Bug)
    - Multi-Select Checkboxes for Contrast Styles
    - Form strictly hidden by default, toggles on demand
    - Har Mahine ka Alag Page / Monthly Tabs Bar
@@ -98,7 +99,36 @@
     };
 
     /* ========================================================================
-       3. DATA REPOSITORY & AUTO SERIAL NUMBER (STARTS AT #1)
+       ⭐ 3. SMART DATE NORMALIZER (FIXES 'INVALID DATE' & MONTH TABS)
+       ======================================================================== */
+    const getMonthKeyFromDate = (dStr) => {
+        if (!dStr) return '';
+        const s = String(dStr).trim();
+        
+        // Agar YYYY-MM-DD ya YYYY/MM/DD hai
+        if (/^\d{4}[-/]\d{1,2}/.test(s)) {
+            const parts = s.split(/[-/]/);
+            return `${parts[0]}-${parts[1].padStart(2, '0')}`;
+        }
+        
+        // Agar DD-MM-YYYY ya DD/MM/YYYY hai (Jaise 12-11-2026)
+        if (/^\d{1,2}[-/]\d{1,2}[-/]\d{4}/.test(s)) {
+            const parts = s.split(/[-/]/);
+            return `${parts[2]}-${parts[1].padStart(2, '0')}`;
+        }
+        
+        // Fallback Date Parser
+        const dt = new Date(s);
+        if (!isNaN(dt.getTime())) {
+            const y = dt.getFullYear();
+            const m = String(dt.getMonth() + 1).padStart(2, '0');
+            return `${y}-${m}`;
+        }
+        return '';
+    };
+
+    /* ========================================================================
+       4. DATA REPOSITORY & AUTO SERIAL NUMBER (STARTS AT #1)
        ======================================================================== */
     const getTaniOrders = () => toArray(getFromStore('tani_orders_list'));
 
@@ -122,7 +152,7 @@
     };
 
     /* ========================================================================
-       4. DYNAMIC LEARNED COLORS (MEMORY BASED)
+       5. DYNAMIC LEARNED COLORS (MEMORY BASED)
        ======================================================================== */
     const getLearnedColors = () => {
         const stored = toArray(getFromStore('tani_learned_colors'));
@@ -152,7 +182,7 @@
     };
 
     /* ========================================================================
-       5. SMART AUTO-COMPLETE & 100% MOHALLA AUTO-FILL
+       6. SMART AUTO-COMPLETE & 100% MOHALLA AUTO-FILL
        ======================================================================== */
     const setupAutoDatalists = () => {
         // 1. Dynamic Color Datalist
@@ -217,7 +247,6 @@
             karigerInp.onchange = autoFillKarigerMohalla;
         }
 
-        // Sabhi main inputs se placeholder saaf karein
         clearAllInputPlaceholders();
     };
 
@@ -255,7 +284,7 @@
     };
 
     /* ========================================================================
-       6. 8-COLORS TABLE (EMPTY & CLEAN - NO PLACEHOLDER)
+       7. 8-COLORS TABLE (EMPTY & CLEAN - NO PLACEHOLDER)
        ======================================================================== */
     const build8ColorInputs = () => {
         const tbody = document.getElementById('tani-colors-table-tbody');
@@ -284,7 +313,7 @@
     };
 
     /* ========================================================================
-       7. VIEW INITIALIZER & STRICTLY CLEAN RESET
+       8. VIEW INITIALIZER & STRICTLY CLEAN RESET
        ======================================================================== */
     const initTaniOrderView = () => {
         setDisplay('add-tani-order-form', 'none');
@@ -362,7 +391,7 @@
     };
 
     /* ========================================================================
-       8. MONTHLY TABS ENGINE
+       9. MONTHLY TABS ENGINE (NO MORE 'INVALID DATE')
        ======================================================================== */
     const renderTaniMonthTabs = () => {
         let bar = document.getElementById('tani-monthly-tabs-bar');
@@ -383,13 +412,14 @@
         const monthsSet = new Set();
 
         list.forEach(item => {
-            if (item.date && item.date.length >= 7) {
-                monthsSet.add(item.date.substring(0, 7));
+            const mKey = getMonthKeyFromDate(item.date);
+            if (mKey && mKey.length === 7) {
+                monthsSet.add(mKey); // e.g. "2026-11"
             }
         });
 
-        const curMonthStr = getToday().substring(0, 7);
-        monthsSet.add(curMonthStr);
+        const curMonthStr = getMonthKeyFromDate(getToday());
+        if (curMonthStr) monthsSet.add(curMonthStr);
 
         const sortedMonths = Array.from(monthsSet).sort().reverse();
 
@@ -399,7 +429,8 @@
 
         sortedMonths.forEach(m => {
             const isActive = (window.currentTaniMonthFilter === m) ? 'active' : '';
-            const dObj = new Date(`${m}-01`);
+            const parts = m.split('-');
+            const dObj = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, 1);
             const label = dObj.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
             html += `<button type="button" class="sheet-tab ${isActive}" style="padding:4px 10px; font-size:12px;" onclick="TaniOrderEngine.switchTaniMonth('${m}')">${label}</button>`;
         });
@@ -415,7 +446,7 @@
     };
 
     /* ========================================================================
-       9. SAVE & UPDATE ORDER PARCHI
+       10. SAVE & UPDATE ORDER PARCHI
        ======================================================================== */
     const saveTaniOrder = () => {
         const editId = document.getElementById('tani-edit-id')?.value || '';
@@ -541,7 +572,7 @@
     };
 
     /* ========================================================================
-       10. PIPELINE TRACKING & STATUS
+       11. PIPELINE TRACKING & BADGES
        ======================================================================== */
     const switchTaniOrderTab = (tab) => {
         window.currentTaniOrderTab = tab;
@@ -639,7 +670,7 @@
     };
 
     /* ========================================================================
-       11. TABLE RENDERER
+       12. TABLE RENDERER (SMART MONTH FILTER FIXED)
        ======================================================================== */
     const renderTaniOrdersTable = () => {
         const tbody = document.getElementById('tani-orders-table-body');
@@ -647,14 +678,17 @@
 
         let list = getTaniOrders();
 
+        // 1. Filter out 'loom' status so active list stays clean
         if (window.currentTaniOrderTab !== 'loom') {
             list = list.filter(item => String(item.status || 'sancha').toLowerCase() !== 'loom');
         }
 
+        // 2. Smart Month Filter (12-11-2026 ya 2026-11 dono match karega)
         if (window.currentTaniMonthFilter !== 'all') {
-            list = list.filter((item) => item.date && item.date.startsWith(window.currentTaniMonthFilter));
+            list = list.filter((item) => getMonthKeyFromDate(item.date) === window.currentTaniMonthFilter);
         }
 
+        // 3. Search Text Filter
         const searchInput = document.getElementById('search-tani-order-input');
         const txt = searchInput ? searchInput.value.toLowerCase().trim() : '';
         if (txt) {
@@ -663,6 +697,7 @@
             );
         }
 
+        // 4. Pipeline Tab Filter
         if (window.currentTaniOrderTab !== 'all') {
             list = list.filter((item) => String(item.status || 'sancha').toLowerCase() === window.currentTaniOrderTab);
         }
@@ -834,7 +869,7 @@
     };
 
     /* ========================================================================
-       12. 🖨️ A6 PHYSICAL SLIP PRINT (EXACT REPLICA)
+       13. 🖨️ A6 PHYSICAL SLIP PRINT (EXACT REPLICA)
        ======================================================================== */
     const printTaniOrderA6 = (id) => {
         const item = getTaniOrders().find((x) => String(x.id) === String(id));
@@ -942,7 +977,7 @@
     };
 
     /* ========================================================================
-       13. 📲 WHATSAPP PARCHI SHARING
+       14. 📲 WHATSAPP PARCHI SHARING
        ======================================================================== */
     const sendTaniOrderWhatsApp = (id) => {
         const item = getTaniOrders().find((x) => String(x.id) === String(id));
@@ -976,7 +1011,7 @@
     };
 
     /* ========================================================================
-       14. KARIGER MODULE BRIDGE
+       15. KARIGER MODULE BRIDGE
        ======================================================================== */
     const getAvailableReadyTanis = (karigerName = '') => {
         const list = getTaniOrders();
@@ -1010,7 +1045,7 @@
     };
 
     /* ========================================================================
-       15. GLOBAL WINDOW EXPORTS
+       16. GLOBAL WINDOW EXPORTS
        ======================================================================== */
     const taniOrderAPI = {
         initTaniOrderView,
@@ -1034,7 +1069,8 @@
         changeTaniOrderPage,
         getLearnedColors,
         getAvailableReadyTanis,
-        markTaniMountedOnLoom
+        markTaniMountedOnLoom,
+        getMonthKeyFromDate
     };
 
     Object.keys(taniOrderAPI).forEach(fn => { window[fn] = taniOrderAPI[fn]; });
