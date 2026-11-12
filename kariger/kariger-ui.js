@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - WEAVER (KARIGER) UI & SHEET CONTROLLER (WITH AUTO-TANI ROLLOVER)
    File: kariger/kariger-ui.js • Developed by Farhan Jawed
-   (Accurate Fresh/Lott Saree Math • Live Realtime Sheet Sync • Auto-Tani Rollover Alert)
+   (Accurate Fresh/Lott Saree Math • Live Realtime Sheet Sync • Auto-Tani Loom Bridge)
 ============================================================================ */
 
 (() => {
@@ -341,7 +341,7 @@
     };
 
     /* ========================================================================
-       2. LIVE STOCK DISPLAY & DATALISTS
+       2. LIVE STOCK DISPLAY & DATALISTS (WITH TANI BRIDGE)
        ------------------------------------------------------------------------
     ======================================================================== */
     const populateSheetDatalists = () => {
@@ -355,6 +355,17 @@
                     uB.push(b.name.trim().toLowerCase());
                     const opt = document.createElement('option');
                     opt.value = b.name.trim();
+                    banaDl.appendChild(opt);
+                }
+            });
+
+            // Tani order ke bana colors bhi suggest hon
+            const rawTaniOrders = window.safeArray ? window.safeArray(window.getStore('tani_orders_list')) : [];
+            rawTaniOrders.forEach((o) => {
+                if (o && o.bana && uB.indexOf(o.bana.trim().toLowerCase()) === -1) {
+                    uB.push(o.bana.trim().toLowerCase());
+                    const opt = document.createElement('option');
+                    opt.value = o.bana.trim();
                     banaDl.appendChild(opt);
                 }
             });
@@ -403,6 +414,92 @@
                     chukDl.appendChild(opt);
                 }
             });
+        }
+
+        // Tani Auto-Fill Listener Attach karna
+        bindTaniAutoFillListeners();
+    };
+
+    /* ========================================================================
+       ⭐ POINT 5 & 4: TANI SELECTION & BANA AUTO-FILL ENGINE
+       ------------------------------------------------------------------------
+    ======================================================================== */
+    const bindTaniAutoFillListeners = () => {
+        const sanchaInp = document.getElementById('sheet-tani-sancha');
+        const itemInp = document.getElementById('sheet-tani-item');
+
+        if (sanchaInp && !sanchaInp.dataset.taniBound) {
+            sanchaInp.dataset.taniBound = 'true';
+            sanchaInp.addEventListener('change', autoFillFromTaniOrder);
+            sanchaInp.addEventListener('input', autoFillFromTaniOrder);
+        }
+
+        if (itemInp && !itemInp.dataset.taniBound) {
+            itemInp.dataset.taniBound = 'true';
+            itemInp.addEventListener('change', autoFillFromTaniOrder);
+        }
+    };
+
+    // ⭐ POINT 5: Tani select hote hi Bana ka rang apne aap aayega
+    const autoFillFromTaniOrder = () => {
+        const kariger = sanitizeKarigerList().find((x) => String(x.id) === String(window.activeKarigerId));
+        if (!kariger) return;
+        const kName = String(kariger.name || '').trim().toUpperCase();
+
+        const sanchaVal = String(document.getElementById('sheet-tani-sancha')?.value || '').trim().toUpperCase();
+        const itemVal = String(document.getElementById('sheet-tani-item')?.value || '').trim().toUpperCase();
+
+        const rawOrders = (typeof window.getStore === 'function') ? window.getStore('tani_orders_list') : localStorage.getItem('tani_orders_list');
+        const orders = window.safeArray ? window.safeArray(rawOrders) : (Array.isArray(rawOrders) ? rawOrders : []);
+
+        // Chuna gaya kariger ya sancha ki matching Ready / Unconsumed Tani
+        const matched = orders.find((o) => {
+            if (!o) return false;
+            const oKariger = String(o.kariger || '').trim().toUpperCase();
+            const oSancha = String(o.sancha || '').trim().toUpperCase();
+            const oNo = String(o.orderNo || '').trim();
+            const isNotLoom = String(o.status || '').toLowerCase() !== 'loom';
+
+            if (!isNotLoom) return false;
+
+            // Agar orderNo match ho ya sancha match ho ya kariger match ho
+            return (itemVal && oNo === itemVal) ||
+                   (sanchaVal && oSancha === sanchaVal && (oKariger === kName || !oKariger)) ||
+                   (oKariger === kName && String(o.status || '').toLowerCase() === 'ready');
+        });
+
+        if (matched) {
+            // 1. Bana Color auto fill
+            const banaInput = document.getElementById('line-bana-name');
+            if (banaInput && matched.bana) {
+                banaInput.value = matched.bana;
+            }
+
+            // 2. 8 Colors auto fill
+            if (Array.isArray(matched.matchingTable) && matched.matchingTable.length > 0) {
+                matched.matchingTable.forEach((m) => {
+                    if (m && m.row) {
+                        const colEl = document.getElementById(`sheet-color-${m.row}`);
+                        if (colEl && !colEl.value) {
+                            colEl.value = m.saree || m.bana || m.border || '';
+                        }
+                    }
+                });
+            }
+
+            // 3. Saree Target PCS auto fill
+            const pcsInp = document.getElementById('sheet-tani-pcs');
+            if (pcsInp && matched.pcs) {
+                pcsInp.value = matched.pcs;
+            }
+
+            // Sheet me reference id tag karein
+            const sheets = (typeof window.getKarigerSheets === 'function') ? window.getKarigerSheets(window.activeKarigerId) : [];
+            const sh = sheets[window.activeSheetIndex];
+            if (sh) {
+                sh.linkedTaniOrderId = matched.id;
+                sh.linkedTaniOrderNo = matched.orderNo;
+            }
         }
     };
 
@@ -493,7 +590,6 @@
             if (typeof window.saveKarigerSheets === 'function') window.saveKarigerSheets(window.activeKarigerId, sheets);
         }
 
-        // 👈 हमेशा चालू (आखिरी) तानी पर ही खुलेगा
         window.activeSheetIndex = sheets.length ? sheets.length - 1 : 0;
 
         populateSheetDatalists();
@@ -630,6 +726,10 @@
         updateLiveStockDisplay();
     };
 
+    /* ========================================================================
+       ⭐ SAVE SHEET CONFIG (MANUAL WAZAN INTACT + TANI MINUS TRIGGER)
+       ------------------------------------------------------------------------
+    ======================================================================== */
     const saveCurrentSheetConfig = () => {
         if (!window.activeKarigerId) return;
         const sheets = (typeof window.getKarigerSheets === 'function') ? window.getKarigerSheets(window.activeKarigerId) : [];
@@ -661,6 +761,7 @@
             if (cVal) sh.colors.push(cVal);
         }
 
+        // ⚠️ AAPKI HIYADAT: MANUAL WAZAN SYSTEM 100% SURAKSHIT AUR EXACT HAI
         const oldTaniWazan = safeNum(sh.taniWazan);
         const newTaniWazan = safeNum(document.getElementById('sheet-tani-wazan')?.value);
         const oldChukkaWazan = safeNum(sh.chukkaWazan);
@@ -676,6 +777,7 @@
         sh.chukkaSancha = String(document.getElementById('sheet-chukka-sancha')?.value || '').trim();
         sh.chukkaWazan = newChukkaWazan;
 
+        // Manual Tani Wazan stock deduction (Intact)
         if (sh.taniItem && (newTaniWazan !== oldTaniWazan || sh.taniItem !== oldTaniItem)) {
             const sList = window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [];
             if (oldTaniItem && oldTaniItem !== sh.taniItem && oldTaniWazan > 0) {
@@ -714,6 +816,7 @@
             if (typeof window.setStore === 'function') window.setStore('sancha_history', sHist);
         }
 
+        // Manual Chukka Wazan stock deduction (Intact)
         if (sh.chukkaItem && (newChukkaWazan !== oldChukkaWazan || sh.chukkaItem !== oldChukkaItem)) {
             const sList2 = window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [];
             if (oldChukkaItem && oldChukkaItem !== sh.chukkaItem && oldChukkaWazan > 0) {
@@ -752,13 +855,29 @@
             if (typeof window.setStore === 'function') window.setStore('sancha_history', sHist2);
         }
 
+        // ⭐ POINT 4: TANI ORDER SE AUTOMATIC MINUS (LOOM DISPATCH)
+        const linkedId = sh.linkedTaniOrderId || sh.linkedTaniOrderNo;
+        if (linkedId) {
+            if (window.TaniOrderEngine && typeof window.TaniOrderEngine.markTaniMountedOnLoom === 'function') {
+                window.TaniOrderEngine.markTaniMountedOnLoom(linkedId, kName);
+            } else {
+                const rawOrders = (typeof window.getStore === 'function') ? window.getStore('tani_orders_list') : localStorage.getItem('tani_orders_list');
+                const orders = window.safeArray ? window.safeArray(rawOrders) : (Array.isArray(rawOrders) ? rawOrders : []);
+                const it = orders.find(x => String(x.id) === String(linkedId) || String(x.orderNo) === String(linkedId));
+                if (it) {
+                    it.status = 'loom';
+                    if (typeof window.setStore === 'function') window.setStore('tani_orders_list', orders);
+                }
+            }
+        }
+
         if (typeof window.saveKarigerSheets === 'function') window.saveKarigerSheets(window.activeKarigerId, sheets);
         renderSheetRows(sh);
         updateLiveStockDisplay();
     };
 
     /* ========================================================================
-       4. LINE ROW SAVE / EDIT / DELETE (WITH AUTO-TANI COMPLETE & ROLLOVER)
+       4. LINE ROW SAVE / EDIT / DELETE
        ------------------------------------------------------------------------
     ======================================================================== */
     const saveTaniRow = () => {
@@ -791,7 +910,6 @@
         sh.banaItem = banaItemName;
         sh.zariItem = zariItemName;
 
-        // 👈 स्क्रीन से लाइव टारगेट पढ़ें (अगर 65/70 लिखा हो तो तुरंत पकड़े)
         const liveTargetInput = document.getElementById('sheet-tani-pcs')?.value;
         const targetTaniPcs = safeNum(liveTargetInput !== undefined && liveTargetInput !== '' ? liveTargetInput : sh.taniPcs, 72);
         sh.taniPcs = targetTaniPcs;
@@ -852,7 +970,6 @@
             window.saveKarigerSheets(window.activeKarigerId, sheets);
         }
 
-        // 🎯 EXACT FRESH & LOTT CALCULATION
         const freshSaree = Math.max(0, saree - lott);
 
         if (typeof window.recordSareeFromKariger === 'function') {
@@ -932,7 +1049,6 @@
             if (typeof window.setStore === 'function') window.setStore('zari_history', zHist);
         }
 
-        // इनपुट साफ करें
         setVal('row-saree', '');
         setVal('row-lott', '');
         setVal('row-cone', '');
@@ -943,7 +1059,6 @@
         setVal('row-retbana', '');
         setVal('row-retzari', '');
 
-        // ⭐ AUTO-TANI COMPLETE & ROLLOVER चेक
         const totalsAfter = (typeof window.calculateSheetTotals === 'function')
             ? window.calculateSheetTotals(sh)
             : { remainingAmt: 0, remainingBana: 0, remainingZari: 0, totSaree: 0 };
@@ -952,7 +1067,6 @@
         const isLastSheet = (window.activeSheetIndex === sheets.length - 1);
         const savedSheetIndex = window.activeSheetIndex;
 
-        // अगर एडिट नहीं हो रहा, आखिरी तानी है, और टारगेट पूरा हो गया:
         if (!isEditing && isLastSheet && targetTaniPcs > 0 && deliveredSoFar >= targetTaniPcs) {
             const nextNum = sheets.length + 1;
             const nextTaniTitle = `Tani ${nextNum}`;
@@ -991,15 +1105,12 @@
                 window.saveKarigerSheets(window.activeKarigerId, sheets);
             }
 
-            // ⭐ 1. सबसे पहले स्क्रीन पर बड़ा अलर्ट आएगा!
             alert(`🎉 मुबारक!\n\n${kName} की [${sh.title}] (${targetTaniPcs} साड़ी) पूरी हो गई!\n\n✨ नई [${nextTaniTitle}] अपने आप शुरू हो गई है।\n• बचा बाना: +${pBana.toFixed(2)} Kg\n• बची जरी: +${pZari.toFixed(2)} Kg\n• बकाया रुपया: ₹ ${pBani.toFixed(2)}\nनई तानी में जुड़ गया है!`);
 
-            // ⭐ 2. नई शीट पर स्विच करें
             window.activeSheetIndex = sheets.length - 1;
             renderSheetTabs();
             loadCurrentSheetData();
 
-            // ⭐ 3. इसके बाद पर्ची प्रिंट का सवाल
             if (confirm('✅ Line jud gayi aur Nayi Tani ban gayi!\n\nKya aap is le-den ki A6 Thermal Parchi print karna chahte hain?')) {
                 printSingleKarigerRowSlip(savedIndex, savedSheetIndex);
             }
@@ -1483,6 +1594,7 @@
         deleteTaniSheet,
         loadCurrentSheetData,
         saveCurrentSheetConfig,
+        autoFillFromTaniOrder,
         saveTaniRow,
         editTaniRow,
         deleteTaniRow,
