@@ -245,7 +245,7 @@
                     <div id="kexp-tani-tabs-bar" style="display:none; margin-bottom:12px; background:#f1f5f9; padding:8px 12px; border-radius:8px; border:1px solid #cbd5e1; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
                         <div id="kexp-tani-chips-container" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;"></div>
                         <button type="button" onclick="openExpressNewTaniModal()" style="background:#0284c7; color:#fff; border:none; padding:6px 12px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer;">
-                            ➕ Nayi Tani [Alt+T]
+                            ➕ Nayi Tani [Alt+N]
                         </button>
                     </div>
 
@@ -1018,8 +1018,8 @@
             return;
         }
 
-        // Alt + T -> Nayi Tani Modal
-        if (e.altKey && (e.key === 't' || e.key === 'T')) {
+        // Alt + N -> Nayi Tani Modal
+        if (e.altKey && (e.key === 'n' || e.key === 'N')) {
             e.preventDefault();
             e.stopImmediatePropagation();
             openExpressNewTaniModal();
@@ -1429,7 +1429,7 @@
                     .header { text-align: center; border-bottom: 1.5px dashed #000; padding-bottom: 5px; margin-bottom: 6px; }
                     .header h2 { margin: 0; font-size: 15px; text-transform: uppercase; }
                     .header p { margin: 2px 0 0; font-size: 10px; font-weight: bold; }
-                    .meta { margin-bottom: 6px; font-size: 10.5px; border-bottom: 1px dashed #666; padding-bottom: 4px; }
+                    .meta { margin-bottom: 6px; font-size: 10.5px; border-bottom: 1.5px dashed #666; padding-bottom: 4px; }
                     .meta-row { display: flex; justify-content: space-between; margin-bottom: 2px; }
                     table { width: 100%; border-collapse: collapse; font-size: 10.5px; margin: 6px 0; }
                     th, td { padding: 3px 2px; text-align: left; border-bottom: 1px dashed #ccc; }
