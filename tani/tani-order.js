@@ -4,7 +4,7 @@
    Features: 
    - 8-Colors Matching Table (Paper Parchi Replica)
    - 4-Tier Flexible Tracking (Sancha ➔ Baithak ➔ Rangai ➔ Karkhana Ready)
-   - Direct Sancha-to-Rangai Bypass Support
+   - Built-in Clean Pagination (15 Orders Per Page)
    - High-Precision A6 Physical Slip Print (Matches Physical Pad)
    - WhatsApp Parchi Sharing & Realtime Cloud Sync
 ============================================================================ */
@@ -17,6 +17,10 @@
        ======================================================================== */
     window.currentTaniOrderTab = 'all';
     window.activeTaniStatusOrderId = null;
+
+    let taniOrderCurrentPage = 1;
+    const TANI_PAGE_SIZE = 15;
+    let filteredTaniOrdersCache = [];
 
     /* ========================================================================
        2. SAFE SANITIZATION & STORAGE BRIDGES
@@ -110,22 +114,10 @@
     /* ========================================================================
        4. VIEW INITIALIZER & 8-COLOR TABLE BUILDER
        ======================================================================== */
-    const initTaniOrderView = () => {
-        build8ColorInputs();
-        const dEl = document.getElementById('tani-order-date');
-        const noEl = document.getElementById('tani-order-no');
-        if (dEl && !dEl.value) dEl.value = getToday();
-        if (noEl && !noEl.value) noEl.value = getNextParchiNumber();
-
-        updateTaniOrderBadges();
-        renderTaniOrdersTable();
-    };
-
     const build8ColorInputs = () => {
         const tbody = document.getElementById('tani-colors-table-tbody');
         if (!tbody) return;
 
-        // Agar pehle se rows bani hain toh dobara generate na karein
         if (tbody.children.length === 8) return;
 
         let html = '';
@@ -153,6 +145,18 @@
         tbody.innerHTML = html;
     };
 
+    const initTaniOrderView = () => {
+        build8ColorInputs();
+        const dEl = document.getElementById('tani-order-date');
+        const noEl = document.getElementById('tani-order-no');
+        if (dEl && !dEl.value) dEl.value = getToday();
+        if (noEl && !noEl.value) noEl.value = getNextParchiNumber();
+
+        taniOrderCurrentPage = 1;
+        updateTaniOrderBadges();
+        renderTaniOrdersTable();
+    };
+
     const toggleTaniOrderForm = () => {
         const f = document.getElementById('add-tani-order-form');
         if (!f) return;
@@ -163,6 +167,7 @@
         if (isOpening) {
             build8ColorInputs();
             resetTaniOrderForm();
+            window.scrollTo({ top: f.offsetTop - 40, behavior: 'smooth' });
         }
     };
 
@@ -220,7 +225,6 @@
             return alert('Sancha naam ya Kariger ka naam zaroori hai!');
         }
 
-        // 8 Colors Matching read karein
         const matchingTable = [];
         for (let i = 1; i <= 8; i++) {
             const sCol = String(document.getElementById(`tani-col-saree-${i}`)?.value || '').trim();
@@ -231,14 +235,12 @@
             }
         }
 
-        // Contrast style
         const contrastRadio = document.querySelector('input[name="tani_contrast_style"]:checked');
         const contrastVal = contrastRadio ? contrastRadio.value : 'aanchal_blouse';
         let contrastLabel = 'آنچل بلاؤز کنٹراس (Aanchal Blouse Contrast)';
         if (contrastVal === 'border_only') contrastLabel = 'صرف بارڈر کنٹراس (Border Contrast)';
         else if (contrastVal === 'self') contrastLabel = 'سیلف (Self)';
 
-        // Initial Route / Status
         const initRadio = document.querySelector('input[name="tani_initial_status"]:checked');
         const initialStatus = initRadio ? initRadio.value : 'sancha';
 
@@ -282,7 +284,7 @@
                 matchingTable,
                 contrastVal,
                 contrastLabel,
-                status: initialStatus, // 'sancha' | 'baithak' | 'rangai' | 'ready'
+                status: initialStatus,
                 statusHistory: [
                     { status: initialStatus, date: getToday(), note: 'Order Diya Gaya' }
                 ],
@@ -300,6 +302,8 @@
        ======================================================================== */
     const switchTaniOrderTab = (tab) => {
         window.currentTaniOrderTab = tab;
+        taniOrderCurrentPage = 1;
+
         const tabs = ['all', 'sancha', 'baithak', 'rangai', 'ready'];
         tabs.forEach((t) => {
             const el = document.getElementById(`tab-tani-${t}`);
@@ -329,7 +333,6 @@
         setText('tani-stat-rangai', rangaiCount);
         setText('tani-stat-ready', readyCount);
 
-        // Dashboard Badge update
         const dashBadge = document.getElementById('btn-total-tani-orders');
         if (dashBadge) {
             dashBadge.textContent = `${rangaiCount} Rangai | ${readyCount} Ready`;
@@ -389,7 +392,7 @@
     };
 
     /* ========================================================================
-       7. TABLE RENDERER
+       7. TABLE RENDERER WITH BUILT-IN PAGINATION
        ======================================================================== */
     const renderTaniOrdersTable = () => {
         const tbody = document.getElementById('tani-orders-table-body');
@@ -409,13 +412,36 @@
             list = list.filter((item) => String(item.status || 'sancha').toLowerCase() === window.currentTaniOrderTab);
         }
 
-        if (!list.length) {
+        filteredTaniOrdersCache = list;
+        const totalEntries = list.length;
+
+        // Pagination Container
+        let pager = document.getElementById('tani-order-pagination-controls');
+        if (!pager) {
+            const tbl = tbody.closest('table') || tbody.parentElement;
+            if (tbl && tbl.parentElement) {
+                pager = document.createElement('div');
+                pager.id = 'tani-order-pagination-controls';
+                pager.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding:8px 4px; border-top:1px solid #e2e8f0; flex-wrap:wrap; gap:8px;';
+                tbl.parentElement.appendChild(pager);
+            }
+        }
+
+        if (!totalEntries) {
             tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; padding:25px; color:#888;">Koi Tani Order Parchi nahi mili.</td></tr>';
+            if (pager) pager.innerHTML = '';
             return;
         }
 
+        const totalPages = Math.ceil(totalEntries / TANI_PAGE_SIZE) || 1;
+        if (taniOrderCurrentPage > totalPages) taniOrderCurrentPage = totalPages;
+        if (taniOrderCurrentPage < 1) taniOrderCurrentPage = 1;
+
+        const startIndex = (taniOrderCurrentPage - 1) * TANI_PAGE_SIZE;
+        const pageRows = list.slice(startIndex, startIndex + TANI_PAGE_SIZE);
+
         let html = '';
-        list.forEach((item) => {
+        pageRows.forEach((item) => {
             const st = String(item.status || 'sancha').toLowerCase();
             let statusBadge = '';
             let nextBtnHtml = '';
@@ -423,14 +449,14 @@
             if (st === 'sancha') {
                 statusBadge = '<span style="background:#fef9c3; color:#a16207; border:1px solid #fde047; padding:3px 8px; border-radius:12px; font-weight:bold; font-size:11px;">🟡 1. Sancha Par</span>';
                 nextBtnHtml = `
-                    <button type="button" class="quick-btn btn-in" style="background:#ea580c; color:white; font-size:11px; padding:3px 6px;" onclick="TaniOrderEngine.quickStatusMove('${esc(item.id)}', 'baithak')">📦 Baithak Aayi</button>
-                    <button type="button" class="quick-btn btn-out" style="background:#be185d; color:white; font-size:11px; padding:3px 6px; margin-left:3px;" onclick="TaniOrderEngine.quickStatusMove('${esc(item.id)}', 'rangai')">⚡ Direct Rangai</button>`;
+                    <button type="button" class="quick-btn btn-in" style="background:#ea580c; color:white; font-size:11px; padding:3px 6px;" onclick="quickStatusMove('${esc(item.id)}', 'baithak')">📦 Baithak Aayi</button>
+                    <button type="button" class="quick-btn btn-out" style="background:#be185d; color:white; font-size:11px; padding:3px 6px; margin-left:3px;" onclick="quickStatusMove('${esc(item.id)}', 'rangai')">⚡ Direct Rangai</button>`;
             } else if (st === 'baithak') {
                 statusBadge = '<span style="background:#ffedd5; color:#c2410c; border:1px solid #fed7aa; padding:3px 8px; border-radius:12px; font-weight:bold; font-size:11px;">📦 2. Baithak Me Padi</span>';
-                nextBtnHtml = `<button type="button" class="quick-btn btn-out" style="background:#be185d; color:white; font-size:11px; padding:3px 8px;" onclick="TaniOrderEngine.quickStatusMove('${esc(item.id)}', 'rangai')">🟣 Rangai Ko Bhejo</button>`;
+                nextBtnHtml = `<button type="button" class="quick-btn btn-out" style="background:#be185d; color:white; font-size:11px; padding:3px 8px;" onclick="quickStatusMove('${esc(item.id)}', 'rangai')">🟣 Rangai Ko Bhejo</button>`;
             } else if (st === 'rangai') {
                 statusBadge = '<span style="background:#fce7f3; color:#be185d; border:1px solid #fbcfe8; padding:3px 8px; border-radius:12px; font-weight:bold; font-size:11px;">🟣 3. Rangai Par</span>';
-                nextBtnHtml = `<button type="button" class="quick-btn btn-in" style="background:#15803d; color:white; font-size:11px; padding:3px 8px;" onclick="TaniOrderEngine.quickStatusMove('${esc(item.id)}', 'ready')">🟢 Rang Ke Aayi (Ready)</button>`;
+                nextBtnHtml = `<button type="button" class="quick-btn btn-in" style="background:#15803d; color:white; font-size:11px; padding:3px 8px;" onclick="quickStatusMove('${esc(item.id)}', 'ready')">🟢 Rang Ke Aayi (Ready)</button>`;
             } else if (st === 'ready') {
                 statusBadge = '<span style="background:#dcfce7; color:#15803d; border:1px solid #86efac; padding:3px 8px; border-radius:12px; font-weight:bold; font-size:11px;">🟢 4. Karkhana Ready!</span>';
                 nextBtnHtml = '<span style="color:#15803d; font-size:11px; font-weight:bold;">✅ Loom Ready</span>';
@@ -457,18 +483,35 @@
                 <td>${statusBadge}</td>
                 <td style="text-align:center; white-space:nowrap;">
                     ${nextBtnHtml}
-                    <button type="button" title="Manually Select" style="padding:2px 5px; font-size:11px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:4px; cursor:pointer; margin-left:3px;" onclick="TaniOrderEngine.openTaniStatusModal('${esc(item.id)}')">⚙️</button>
+                    <button type="button" title="Manually Select" style="padding:2px 5px; font-size:11px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:4px; cursor:pointer; margin-left:3px;" onclick="openTaniStatusModal('${esc(item.id)}')">⚙️</button>
                 </td>
                 <td style="text-align:center; white-space:nowrap;">
-                    <button type="button" class="sheet-btn" style="background:#b45309; color:white; padding:4px 8px; font-size:11px;" onclick="TaniOrderEngine.printTaniOrderA6('${esc(item.id)}')">🖨️ A6 Print</button>
-                    <button type="button" class="whatsapp-btn" style="padding:4px 8px; font-size:11px;" onclick="TaniOrderEngine.sendTaniOrderWhatsApp('${esc(item.id)}')">📲</button>
-                    <button type="button" class="edit-btn" onclick="TaniOrderEngine.editTaniOrder('${esc(item.id)}')">✏️</button>
-                    <button type="button" class="delete-btn" onclick="TaniOrderEngine.deleteTaniOrder('${esc(item.id)}')">🗑️</button>
+                    <button type="button" class="sheet-btn" style="background:#b45309; color:white; padding:4px 8px; font-size:11px;" onclick="printTaniOrderA6('${esc(item.id)}')">🖨️ A6 Print</button>
+                    <button type="button" class="whatsapp-btn" style="padding:4px 8px; font-size:11px;" onclick="sendTaniOrderWhatsApp('${esc(item.id)}')">📲</button>
+                    <button type="button" class="edit-btn" onclick="editTaniOrder('${esc(item.id)}')">✏️</button>
+                    <button type="button" class="delete-btn" onclick="deleteTaniOrder('${esc(item.id)}')">🗑️</button>
                 </td>
             </tr>`;
         });
 
         tbody.innerHTML = html;
+
+        if (pager) {
+            pager.innerHTML = `
+                <div style="font-size:12px; color:#475569; font-weight:600;">
+                    Showing <strong>${startIndex + 1}</strong> - <strong>${Math.min(startIndex + TANI_PAGE_SIZE, totalEntries)}</strong> of <strong>${totalEntries}</strong> Parchi
+                </div>
+                <div style="display:flex; gap:6px;">
+                    <button type="button" class="sheet-btn" style="background:${taniOrderCurrentPage <= 1 ? '#cbd5e1' : '#b45309'}; color:white; padding:4px 10px; border-radius:4px; border:none; cursor:${taniOrderCurrentPage <= 1 ? 'not-allowed' : 'pointer'};" ${taniOrderCurrentPage <= 1 ? 'disabled' : ''} onclick="changeTaniOrderPage(-1)">◀ Prev</button>
+                    <span style="font-size:12px; font-weight:bold; padding:4px 8px; background:#f1f5f9; border-radius:4px;">${taniOrderCurrentPage} / ${totalPages}</span>
+                    <button type="button" class="sheet-btn" style="background:${taniOrderCurrentPage >= totalPages ? '#cbd5e1' : '#b45309'}; color:white; padding:4px 10px; border-radius:4px; border:none; cursor:${taniOrderCurrentPage >= totalPages ? 'not-allowed' : 'pointer'};" ${taniOrderCurrentPage >= totalPages ? 'disabled' : ''} onclick="changeTaniOrderPage(1)">Next ▶</button>
+                </div>`;
+        }
+    };
+
+    const changeTaniOrderPage = (delta) => {
+        taniOrderCurrentPage += delta;
+        renderTaniOrdersTable();
     };
 
     const quickStatusMove = (id, newStatus) => {
@@ -501,7 +544,6 @@
         setVal('tani-order-pcs', item.pcs || '');
         setVal('tani-order-rangi', item.rangi || '');
 
-        // 8 colors populate
         for (let i = 1; i <= 8; i++) {
             setVal(`tani-col-saree-${i}`, '');
             setVal(`tani-col-border-${i}`, '');
@@ -523,7 +565,8 @@
             if (r) r.checked = true;
         }
 
-        window.scrollTo({ top: 100, behavior: 'smooth' });
+        const formEl = document.getElementById('add-tani-order-form');
+        if (formEl) window.scrollTo({ top: formEl.offsetTop - 30, behavior: 'smooth' });
     };
 
     const deleteTaniOrder = (id) => {
@@ -546,9 +589,9 @@
             const rowData = matching.find((m) => m.row === i) || { saree: '', border: '', bana: '' };
             rowsHtml += `
                 <tr>
-                    <td style="border:1px solid #8b0000; padding:4px; text-align:center; font-weight:bold;">${esc(rowData.saree || '-')}</td>
-                    <td style="border:1px solid #8b0000; padding:4px; text-align:center; font-weight:bold;">${esc(rowData.border || '-')}</td>
-                    <td style="border:1px solid #8b0000; padding:4px; text-align:center; font-weight:bold;">${esc(rowData.bana || '-')}</td>
+                    <td style="border:1.5px solid #8b0000; padding:4px; text-align:center; font-weight:bold;">${esc(rowData.saree || '-')}</td>
+                    <td style="border:1.5px solid #8b0000; padding:4px; text-align:center; font-weight:bold;">${esc(rowData.border || '-')}</td>
+                    <td style="border:1.5px solid #8b0000; padding:4px; text-align:center; font-weight:bold;">${esc(rowData.bana || '-')}</td>
                 </tr>`;
         }
 
@@ -674,7 +717,7 @@
     };
 
     /* ========================================================================
-       10. GLOBAL EXPORT
+       10. GLOBAL WINDOW EXPORTS (DIRECT ACCESSIBILITY)
        ======================================================================== */
     const taniOrderAPI = {
         initTaniOrderView,
@@ -692,23 +735,49 @@
         deleteTaniOrder,
         printTaniOrderA6,
         sendTaniOrderWhatsApp,
-        getTaniOrders
+        getTaniOrders,
+        changeTaniOrderPage
     };
 
-    Object.keys(taniOrderAPI).forEach((fnName) => {
-        window[fnName] = taniOrderAPI[fnName];
-    });
-
+    // Direct Window binding taaki HTML onclick bina rukawat chale
+    window.initTaniOrderView = initTaniOrderView;
+    window.toggleTaniOrderForm = toggleTaniOrderForm;
+    window.resetTaniOrderForm = resetTaniOrderForm;
+    window.saveTaniOrder = saveTaniOrder;
+    window.switchTaniOrderTab = switchTaniOrderTab;
+    window.updateTaniOrderBadges = updateTaniOrderBadges;
+    window.openTaniStatusModal = openTaniStatusModal;
+    window.closeTaniStatusModal = closeTaniStatusModal;
+    window.applyTaniStatusChange = applyTaniStatusChange;
+    window.quickStatusMove = quickStatusMove;
+    window.renderTaniOrdersTable = renderTaniOrdersTable;
+    window.editTaniOrder = editTaniOrder;
+    window.deleteTaniOrder = deleteTaniOrder;
+    window.printTaniOrderA6 = printTaniOrderA6;
+    window.sendTaniOrderWhatsApp = sendTaniOrderWhatsApp;
+    window.changeTaniOrderPage = changeTaniOrderPage;
     window.TaniOrderEngine = taniOrderAPI;
 
-    document.addEventListener('DOMContentLoaded', () => {
+    // Search bar listener
+    const bindSearch = () => {
         const searchInput = document.getElementById('search-tani-order-input');
         if (searchInput) {
-            searchInput.addEventListener('input', () => {
+            searchInput.oninput = () => {
+                taniOrderCurrentPage = 1;
                 renderTaniOrdersTable();
-            });
+            };
         }
-    });
+    };
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            bindSearch();
+            initTaniOrderView();
+        });
+    } else {
+        bindSearch();
+        initTaniOrderView();
+    }
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = taniOrderAPI;
