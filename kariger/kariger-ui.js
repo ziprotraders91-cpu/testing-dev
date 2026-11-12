@@ -1,7 +1,13 @@
 /* ============================================================================
-   SIMPLICITY ERP - WEAVER (KARIGER) UI & SHEET CONTROLLER (WITH AUTO-TANI ROLLOVER)
+   SIMPLICITY ERP - WEAVER (KARIGER) UI & SHEET CONTROLLER
    File: kariger/kariger-ui.js • Developed by Farhan Jawed
-   (Accurate Fresh/Lott Saree Math • Live Realtime Sheet Sync • Auto-Tani Loom Bridge)
+   Features:
+   - Kariger Master with Dynamic Mohalla / Address Box
+   - Strict Gatekeeper: No New Sheet without 'Ready' Tani
+   - Auto-Populates Sancha + Rangai Name into Sancha Box
+   - Auto-Fills Bana Color & 8 Colors into Master Sheet
+   - 100% Untouched Manual Wazan System (Sancha Stock Safe)
+   - Auto-Minus Tani Order when Mounted on Loom
 ============================================================================ */
 
 (() => {
@@ -62,9 +68,30 @@
     };
 
     /* ========================================================================
-       1. NAVIGATION & DIRECTORY
+       1. NAVIGATION & KARIGER MASTER (WITH MOHALLA BOX INJECTION)
        ------------------------------------------------------------------------
     ======================================================================== */
+    // कारीगर मास्टर फॉर्म में मोहल्ले का डिब्बा खुद जोड़ना
+    const ensureKarigerMohallaField = () => {
+        if (document.getElementById('kar-mohalla')) return;
+
+        const mobileInp = document.getElementById('kar-mobile');
+        if (!mobileInp) return;
+
+        const container = mobileInp.closest('div') || mobileInp.parentElement;
+        if (!container || !container.parentElement) return;
+
+        const wrap = document.createElement('div');
+        wrap.id = 'kar-mohalla-wrapper';
+        wrap.style.cssText = 'margin-bottom:10px;';
+        wrap.innerHTML = `
+            <label style="font-size:12px; font-weight:700; color:#374151;">محلہ / پتہ (MOHALLA / ADDRESS):</label><br>
+            <input type="text" id="kar-mohalla" placeholder="" style="width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; margin-top:4px; box-sizing:border-box;">
+        `;
+
+        container.parentElement.insertBefore(wrap, container.nextSibling);
+    };
+
     const openKarigerModule = () => {
         const dView = document.getElementById('dashboard-view');
         const shView = document.getElementById('kariger-sheet-section');
@@ -74,6 +101,7 @@
         if (kSec) kSec.style.display = 'block';
 
         window.currentKarigerPage = 1;
+        ensureKarigerMohallaField();
         renderKarigerKarkhanaTabs();
         populateKarigerKarkhanaDropdown();
         renderKarigerTable();
@@ -162,7 +190,7 @@
         if (txt) {
             list = list.filter((k) => {
                 const kName = k.karkhanaName || ((typeof window.getKarkhanaNameById === 'function') ? window.getKarkhanaNameById(k.karkhanaId) : '');
-                return `${k.name || ''} ${k.saree || ''} ${k.mobile || ''} ${kName || ''} ${k.date || ''}`.toLowerCase().includes(txt);
+                return `${k.name || ''} ${k.saree || ''} ${k.mobile || ''} ${k.mohalla || ''} ${kName || ''} ${k.date || ''}`.toLowerCase().includes(txt);
             });
         }
 
@@ -222,10 +250,12 @@
                 absentBadge = ` <span style="background:#fffbeb; color:#b45309; border:1px solid #fcd34d; font-size:10px; font-weight:800; padding:2px 6px; border-radius:4px;">⚠️ ${absentDays} Din Gayab</span>`;
             }
 
+            const mohallaDisplay = k.mohalla ? `<br><small style="color:#64748b; font-size:11px;">📍 ${esc(k.mohalla)}</small>` : '';
+
             html += `<tr>
                 <td>${actualIdx}</td>
                 <td>${kBadge}</td>
-                <td><strong>${esc(k.name)}</strong>${absentBadge}</td>
+                <td><strong>${esc(k.name)}</strong>${absentBadge}${mohallaDisplay}</td>
                 <td>${esc(k.saree || '-')}</td>
                 <td>${esc(k.mobile || '-')}</td>
                 <td>${esc(k.date || '-')}</td>
@@ -268,16 +298,20 @@
         const isOpening = (f.style.display !== 'block');
         f.style.display = isOpening ? 'block' : 'none';
         if (isOpening) {
+            ensureKarigerMohallaField();
             setVal('kar-date', (typeof window.getTodayDate === 'function') ? window.getTodayDate() : new Date().toISOString().split('T')[0]);
+            setVal('kar-mohalla', '');
             populateKarigerKarkhanaDropdown();
         }
     };
 
     const saveKariger = () => {
+        ensureKarigerMohallaField();
         const editId = (document.getElementById('kar-edit-id')?.value) || '';
         const n = String(document.getElementById('kar-name')?.value || '').trim().toUpperCase();
         const s = String(document.getElementById('kar-saree')?.value || '').trim();
         const m = String(document.getElementById('kar-mobile')?.value || '').trim();
+        const moh = String(document.getElementById('kar-mohalla')?.value || '').trim();
         const d = String(document.getElementById('kar-date')?.value || '') || ((typeof window.getTodayDate === 'function') ? window.getTodayDate() : '');
 
         if (!n) return alert('Kariger ka naam zaroori hai!');
@@ -294,6 +328,7 @@
                 it.name = n;
                 it.saree = s;
                 it.mobile = m;
+                it.mohalla = moh;
                 it.date = d;
                 it.karkhanaId = chosenKid;
                 it.karkhanaName = kName;
@@ -304,6 +339,7 @@
                 name: n,
                 saree: s,
                 mobile: m,
+                mohalla: moh,
                 date: d,
                 karkhanaId: chosenKid,
                 karkhanaName: kName
@@ -314,6 +350,7 @@
         toggleKarigerForm();
         renderKarigerKarkhanaTabs();
         renderKarigerTable();
+        alert('✅ Kariger safalta-poorvak save ho gaya!');
     };
 
     const editKariger = (id) => {
@@ -322,10 +359,13 @@
         const f = document.getElementById('add-kariger-form');
         if (f) f.style.display = 'block';
 
+        ensureKarigerMohallaField();
+
         setVal('kar-edit-id', k.id);
         setVal('kar-name', k.name);
         setVal('kar-saree', k.saree || '');
         setVal('kar-mobile', k.mobile || '');
+        setVal('kar-mohalla', k.mohalla || k.address || k.pata || '');
         setVal('kar-date', k.date || ((typeof window.getTodayDate === 'function') ? window.getTodayDate() : ''));
 
         const kSel = document.getElementById('kar-karkhana') || document.getElementById('kar-karkhana-select');
@@ -341,7 +381,7 @@
     };
 
     /* ========================================================================
-       2. LIVE STOCK DISPLAY & DATALISTS (WITH TANI BRIDGE)
+       2. LIVE STOCK DISPLAY & DATALISTS
        ------------------------------------------------------------------------
     ======================================================================== */
     const populateSheetDatalists = () => {
@@ -355,17 +395,6 @@
                     uB.push(b.name.trim().toLowerCase());
                     const opt = document.createElement('option');
                     opt.value = b.name.trim();
-                    banaDl.appendChild(opt);
-                }
-            });
-
-            // Tani order ke bana colors bhi suggest hon
-            const rawTaniOrders = window.safeArray ? window.safeArray(window.getStore('tani_orders_list')) : [];
-            rawTaniOrders.forEach((o) => {
-                if (o && o.bana && uB.indexOf(o.bana.trim().toLowerCase()) === -1) {
-                    uB.push(o.bana.trim().toLowerCase());
-                    const opt = document.createElement('option');
-                    opt.value = o.bana.trim();
                     banaDl.appendChild(opt);
                 }
             });
@@ -415,92 +444,6 @@
                 }
             });
         }
-
-        // Tani Auto-Fill Listener Attach karna
-        bindTaniAutoFillListeners();
-    };
-
-    /* ========================================================================
-       ⭐ POINT 5 & 4: TANI SELECTION & BANA AUTO-FILL ENGINE
-       ------------------------------------------------------------------------
-    ======================================================================== */
-    const bindTaniAutoFillListeners = () => {
-        const sanchaInp = document.getElementById('sheet-tani-sancha');
-        const itemInp = document.getElementById('sheet-tani-item');
-
-        if (sanchaInp && !sanchaInp.dataset.taniBound) {
-            sanchaInp.dataset.taniBound = 'true';
-            sanchaInp.addEventListener('change', autoFillFromTaniOrder);
-            sanchaInp.addEventListener('input', autoFillFromTaniOrder);
-        }
-
-        if (itemInp && !itemInp.dataset.taniBound) {
-            itemInp.dataset.taniBound = 'true';
-            itemInp.addEventListener('change', autoFillFromTaniOrder);
-        }
-    };
-
-    // ⭐ POINT 5: Tani select hote hi Bana ka rang apne aap aayega
-    const autoFillFromTaniOrder = () => {
-        const kariger = sanitizeKarigerList().find((x) => String(x.id) === String(window.activeKarigerId));
-        if (!kariger) return;
-        const kName = String(kariger.name || '').trim().toUpperCase();
-
-        const sanchaVal = String(document.getElementById('sheet-tani-sancha')?.value || '').trim().toUpperCase();
-        const itemVal = String(document.getElementById('sheet-tani-item')?.value || '').trim().toUpperCase();
-
-        const rawOrders = (typeof window.getStore === 'function') ? window.getStore('tani_orders_list') : localStorage.getItem('tani_orders_list');
-        const orders = window.safeArray ? window.safeArray(rawOrders) : (Array.isArray(rawOrders) ? rawOrders : []);
-
-        // Chuna gaya kariger ya sancha ki matching Ready / Unconsumed Tani
-        const matched = orders.find((o) => {
-            if (!o) return false;
-            const oKariger = String(o.kariger || '').trim().toUpperCase();
-            const oSancha = String(o.sancha || '').trim().toUpperCase();
-            const oNo = String(o.orderNo || '').trim();
-            const isNotLoom = String(o.status || '').toLowerCase() !== 'loom';
-
-            if (!isNotLoom) return false;
-
-            // Agar orderNo match ho ya sancha match ho ya kariger match ho
-            return (itemVal && oNo === itemVal) ||
-                   (sanchaVal && oSancha === sanchaVal && (oKariger === kName || !oKariger)) ||
-                   (oKariger === kName && String(o.status || '').toLowerCase() === 'ready');
-        });
-
-        if (matched) {
-            // 1. Bana Color auto fill
-            const banaInput = document.getElementById('line-bana-name');
-            if (banaInput && matched.bana) {
-                banaInput.value = matched.bana;
-            }
-
-            // 2. 8 Colors auto fill
-            if (Array.isArray(matched.matchingTable) && matched.matchingTable.length > 0) {
-                matched.matchingTable.forEach((m) => {
-                    if (m && m.row) {
-                        const colEl = document.getElementById(`sheet-color-${m.row}`);
-                        if (colEl && !colEl.value) {
-                            colEl.value = m.saree || m.bana || m.border || '';
-                        }
-                    }
-                });
-            }
-
-            // 3. Saree Target PCS auto fill
-            const pcsInp = document.getElementById('sheet-tani-pcs');
-            if (pcsInp && matched.pcs) {
-                pcsInp.value = matched.pcs;
-            }
-
-            // Sheet me reference id tag karein
-            const sheets = (typeof window.getKarigerSheets === 'function') ? window.getKarigerSheets(window.activeKarigerId) : [];
-            const sh = sheets[window.activeSheetIndex];
-            if (sh) {
-                sh.linkedTaniOrderId = matched.id;
-                sh.linkedTaniOrderNo = matched.orderNo;
-            }
-        }
     };
 
     const updateLiveStockDisplay = () => {
@@ -540,7 +483,7 @@
     };
 
     /* ========================================================================
-       3. TANI KHATA CONTROLLER
+       3. TANI KHATA CONTROLLER & STRICT GATEKEEPER
        ------------------------------------------------------------------------
     ======================================================================== */
     const openKarigerSheet = (id) => {
@@ -622,7 +565,27 @@
         loadCurrentSheetData();
     };
 
+    // ⭐ STRICT GATEKEEPER: Jab tak Tani Ready na ho, nayi sheet banne hi na de!
     const addNewTaniSheet = () => {
+        const kariger = sanitizeKarigerList().find((x) => String(x.id) === String(window.activeKarigerId));
+        const kName = kariger ? String(kariger.name || '').trim().toUpperCase() : '';
+
+        // Tani Order me check karein ki kya is kariger ki Ready Tani maujood hai
+        const rawOrders = (typeof window.getStore === 'function') ? window.getStore('tani_orders_list') : localStorage.getItem('tani_orders_list');
+        const orders = window.safeArray ? window.safeArray(rawOrders) : (Array.isArray(rawOrders) ? rawOrders : []);
+
+        const readyTani = orders.find(o => {
+            if (!o) return false;
+            const isReady = String(o.status || '').toLowerCase() === 'ready';
+            const oKariger = String(o.kariger || '').trim().toUpperCase();
+            return isReady && oKariger === kName;
+        });
+
+        // Agar Ready nahi hai to aage badhne hi na de!
+        if (!readyTani) {
+            return alert(`⚠️ تانی ابھی تیار نہیں ہے!\n\nکاریگر [${kariger?.name || 'Kariger'}] کا نیا تانہ ابھی رنگائی سے تیار ہو کر نہیں آیا ہے (Status: 'Ready' نہیں ہے)۔\n\nپہلے Tani Order & Rangai ماڈیول میں جا کر تانے کو 'Ready' مارک کریں، تبھی نئی شیٹ کھلے گی!`);
+        }
+
         const sheets = (typeof window.getKarigerSheets === 'function') ? window.getKarigerSheets(window.activeKarigerId) : [];
         const cur = sheets[window.activeSheetIndex] || sheets[sheets.length - 1];
         const calc = (cur && typeof window.calculateSheetTotals === 'function')
@@ -630,25 +593,46 @@
             : { remainingBana: 0, remainingZari: 0, remainingAmt: 0 };
 
         const nextNum = sheets.length + 1;
+
+        // Naye ready taane ke colors extract karein
+        const newColors = [];
+        if (Array.isArray(readyTani.matchingTable)) {
+            readyTani.matchingTable.forEach(m => {
+                if (m) newColors.push(m.saree || m.bana || m.border || '');
+            });
+        }
+
+        // Saancha box me Sancha aur Rangai dono ka naam set karein
+        const sanchaRangiCombined = `${readyTani.sancha || ''}${readyTani.rangi ? ' | Rangi: ' + readyTani.rangi : ''}`.trim();
+
         sheets.push({
-            id: `tani_${nextNum}`, title: `Tani ${nextNum}`,
+            id: `tani_${nextNum}`,
+            title: `Tani ${nextNum}`,
             pichlaBana: safeNum(calc.remainingBana),
             pichlaZari: safeNum(calc.remainingZari),
             pichlaBani: safeNum(calc.remainingAmt),
-            banaWaste: 0, zariWaste: 0,
+            banaWaste: 0,
+            zariWaste: 0,
             rateBana: cur ? safeNum(cur.rateBana, 0.311) : 0.311,
             rateZari: cur ? safeNum(cur.rateZari, 0.110) : 0.110,
             rateBani: cur ? safeNum(cur.rateBani, 240) : 240,
-            taniPcs: cur ? safeNum(cur.taniPcs, 72) : 72,
+            taniPcs: safeNum(readyTani.pcs, 72),
             chukkaPcs: cur ? safeNum(cur.chukkaPcs, 72) : 72,
-            colors: (cur && Array.isArray(cur.colors)) ? [...cur.colors] : [],
-            note: '', rows: []
+            taniSancha: sanchaRangiCombined,
+            banaItem: readyTani.bana || '',
+            colors: newColors,
+            linkedTaniOrderId: readyTani.id,
+            linkedTaniOrderNo: readyTani.orderNo,
+            note: `Tani #${readyTani.orderNo} (Sancha: ${readyTani.sancha || '-'}, Rangi: ${readyTani.rangi || '-'})`,
+            rows: []
         });
 
         if (typeof window.saveKarigerSheets === 'function') window.saveKarigerSheets(window.activeKarigerId, sheets);
         window.activeSheetIndex = sheets.length - 1;
         renderSheetTabs();
         loadCurrentSheetData();
+
+        alert(`✅ Tani #${readyTani.orderNo} load ho gayi!\n• Saancha: ${readyTani.sancha || '-'}\n• Rangi: ${readyTani.rangi || '-'}\n• Bana: ${readyTani.bana || '-'}`);
     };
 
     const revertSanchaStock = (itemName, category, wazan) => {
@@ -727,7 +711,7 @@
     };
 
     /* ========================================================================
-       ⭐ SAVE SHEET CONFIG (MANUAL WAZAN INTACT + TANI MINUS TRIGGER)
+       ⭐ 4. SAVE CONFIG (MANUAL WAZAN INTACT + TANI ORDER MINUS)
        ------------------------------------------------------------------------
     ======================================================================== */
     const saveCurrentSheetConfig = () => {
@@ -777,7 +761,7 @@
         sh.chukkaSancha = String(document.getElementById('sheet-chukka-sancha')?.value || '').trim();
         sh.chukkaWazan = newChukkaWazan;
 
-        // Manual Tani Wazan stock deduction (Intact)
+        // Manual Tani Wazan stock deduction
         if (sh.taniItem && (newTaniWazan !== oldTaniWazan || sh.taniItem !== oldTaniItem)) {
             const sList = window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [];
             if (oldTaniItem && oldTaniItem !== sh.taniItem && oldTaniWazan > 0) {
@@ -816,7 +800,7 @@
             if (typeof window.setStore === 'function') window.setStore('sancha_history', sHist);
         }
 
-        // Manual Chukka Wazan stock deduction (Intact)
+        // Manual Chukka Wazan stock deduction
         if (sh.chukkaItem && (newChukkaWazan !== oldChukkaWazan || sh.chukkaItem !== oldChukkaItem)) {
             const sList2 = window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [];
             if (oldChukkaItem && oldChukkaItem !== sh.chukkaItem && oldChukkaWazan > 0) {
@@ -855,7 +839,7 @@
             if (typeof window.setStore === 'function') window.setStore('sancha_history', sHist2);
         }
 
-        // ⭐ POINT 4: TANI ORDER SE AUTOMATIC MINUS (LOOM DISPATCH)
+        // ⭐ TANI ORDER SE AUTO-MINUS (LOOM DISPATCH)
         const linkedId = sh.linkedTaniOrderId || sh.linkedTaniOrderNo;
         if (linkedId) {
             if (window.TaniOrderEngine && typeof window.TaniOrderEngine.markTaniMountedOnLoom === 'function') {
@@ -877,7 +861,7 @@
     };
 
     /* ========================================================================
-       4. LINE ROW SAVE / EDIT / DELETE
+       5. LINE ROW SAVE / EDIT / DELETE (WITH AUTO ROLLOVER)
        ------------------------------------------------------------------------
     ======================================================================== */
     const saveTaniRow = () => {
@@ -1068,52 +1052,10 @@
         const savedSheetIndex = window.activeSheetIndex;
 
         if (!isEditing && isLastSheet && targetTaniPcs > 0 && deliveredSoFar >= targetTaniPcs) {
-            const nextNum = sheets.length + 1;
-            const nextTaniTitle = `Tani ${nextNum}`;
-
-            const pBana = safeNum(totalsAfter.remainingBana);
-            const pZari = safeNum(totalsAfter.remainingZari);
-            const pBani = safeNum(totalsAfter.remainingAmt);
-
-            const autoNewSheet = {
-                id: `tani_${nextNum}`,
-                title: nextTaniTitle,
-                pichlaBana: pBana,
-                pichlaZari: pZari,
-                pichlaBani: pBani,
-                banaWaste: 0,
-                zariWaste: 0,
-                rateBana: safeNum(sh.rateBana, 0.311),
-                rateZari: safeNum(sh.rateZari, 0.110),
-                rateBani: safeNum(sh.rateBani, 240),
-                taniPcs: targetTaniPcs,
-                chukkaPcs: safeNum(sh.chukkaPcs, 72),
-                taniItem: sh.taniItem || '',
-                taniSancha: sh.taniSancha || '',
-                taniWazan: 0,
-                chukkaItem: sh.chukkaItem || '',
-                chukkaSancha: sh.chukkaSancha || '',
-                chukkaWazan: 0,
-                colors: Array.isArray(sh.colors) ? [...sh.colors] : [],
-                note: `Auto Rollover: ${sh.title} (${targetTaniPcs} Saree Poori Hui)`,
-                rows: []
-            };
-
-            sheets.push(autoNewSheet);
-
-            if (typeof window.saveKarigerSheets === 'function') {
-                window.saveKarigerSheets(window.activeKarigerId, sheets);
-            }
-
-            alert(`🎉 मुबारक!\n\n${kName} की [${sh.title}] (${targetTaniPcs} साड़ी) पूरी हो गई!\n\n✨ नई [${nextTaniTitle}] अपने आप शुरू हो गई है।\n• बचा बाना: +${pBana.toFixed(2)} Kg\n• बची जरी: +${pZari.toFixed(2)} Kg\n• बकाया रुपया: ₹ ${pBani.toFixed(2)}\nनई तानी में जुड़ गया है!`);
-
-            window.activeSheetIndex = sheets.length - 1;
-            renderSheetTabs();
-            loadCurrentSheetData();
-
-            if (confirm('✅ Line jud gayi aur Nayi Tani ban gayi!\n\nKya aap is le-den ki A6 Thermal Parchi print karna chahte hain?')) {
-                printSingleKarigerRowSlip(savedIndex, savedSheetIndex);
-            }
+            // Target poora hone par alert
+            alert(`🎉 मुबारक!\n\n${kName} की [${sh.title}] (${targetTaniPcs} साड़ी) पूरी हो गई!\n\nनई तानी जोड़ने के लिए '+ Nayi Tani Sheet' बटन दबाएं (अगर नया ताना तैयार है)।`);
+            renderSheetRows(sh);
+            updateLiveStockDisplay();
         } else {
             renderSheetRows(sh);
             updateLiveStockDisplay();
@@ -1176,7 +1118,7 @@
     };
 
     /* ========================================================================
-       5. 9-COLUMN SHEET ROWS RENDERER
+       6. 9-COLUMN SHEET ROWS RENDERER & CALCULATIONS
        ------------------------------------------------------------------------
     ======================================================================== */
     const renderSheetRows = (sh) => {
@@ -1261,7 +1203,7 @@
     };
 
     /* ========================================================================
-       6. A6 PRINT ENGINES & WHATSAPP
+       7. PRINT ENGINES & WHATSAPP
        ------------------------------------------------------------------------
     ======================================================================== */
     const printSingleKarigerRowSlip = (idx, sheetIdx = null) => {
@@ -1567,7 +1509,7 @@
     };
 
     /* ========================================================================
-       7. GLOBAL EXPORT
+       8. GLOBAL EXPORTS
        ------------------------------------------------------------------------
     ======================================================================== */
     const karigerUIAPI = {
@@ -1594,7 +1536,6 @@
         deleteTaniSheet,
         loadCurrentSheetData,
         saveCurrentSheetConfig,
-        autoFillFromTaniOrder,
         saveTaniRow,
         editTaniRow,
         deleteTaniRow,
@@ -1606,7 +1547,8 @@
         printKarigerTaniSheet,
         sendKarigerWhatsAppParchi,
         getKarigerAbsentDays,
-        sanitizeKarigerList
+        sanitizeKarigerList,
+        ensureKarigerMohallaField
     };
 
     Object.keys(karigerUIAPI).forEach((fnName) => {
