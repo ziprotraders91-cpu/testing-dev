@@ -98,10 +98,8 @@
         }
 
         try {
-            // Purani rows hatao
             await supabaseClient.from('karkhanas').delete().eq('user_id', uid);
 
-            // Nayi rows daalo
             const rows = list.map((k, idx) => ({
                 user_id: uid,
                 karkhana_name: String(k.name || 'Karkhana').trim(),
@@ -109,10 +107,8 @@
                 created_at: new Date().toISOString()
             }));
 
-            // Pehle bina explicit ID ke daal kar dekho
             let { error } = await supabaseClient.from('karkhanas').insert(rows);
 
-            // Agar table integer ID mangti hai toh ID ke sath daalo
             if (error) {
                 const rowsWithId = rows.map((r, i) => ({ ...r, id: i + 1 }));
                 await supabaseClient.from('karkhanas').insert(rowsWithId);
@@ -142,12 +138,11 @@
         if (k.includes('material_transfer') || k.includes('transfer')) return 'material_transfers';
         if (k.includes('dukan')) return 'dukan_challans';
 
-        // Explicit history passbook routing
         if (k.includes('embroidery_history')) return 'embroidery_history';
         if (k.includes('cutting_history')) return 'cutting_history';
         if (k.includes('calender_history')) return 'calender_history';
 
-        // ⭐ KHATA SHEETS ROUTING (Kariger Type ke anusaar Master Table me)
+        // ⭐ KHATA SHEETS ➔ HISTORY TABLES MEIN (Sheet aur Passbook dono History me)
         if (k.includes('jobwork_sheets_') || k.includes('jw_sheet_')) {
             const workerId = k.replace(/.*jobwork_sheets_/, '').replace(/.*jw_sheet_/, '');
             let workers = [];
@@ -158,12 +153,12 @@
             const found = workers.find(w => w && String(w.id).toLowerCase() === workerId.toLowerCase());
             const wType = String(found?.type || '').toLowerCase();
 
-            if (wType === 'embroidery') return 'embroidery';
-            if (wType === 'calender') return 'calender';
-            return 'cutting';
+            if (wType === 'embroidery') return 'embroidery_history';
+            if (wType === 'calender') return 'calender_history';
+            return 'cutting_history';
         }
 
-        // ⭐ JOB WORK KARIGERS (Routing to respective tables)
+        // ⭐ KARIGERS LIST ➔ MASTER TABLES (cutting, embroidery, calender)
         if (k.includes('jobwork_workers') || k.includes('cutting_workers') || k.includes('calender_workers') || k.includes('embroidery_workers')) {
             return 'WORKERS_ACTION';
         }
@@ -303,11 +298,10 @@
         showSyncStatus('syncing');
 
         try {
-            // ⭐ 1. WORKERS SYNC (Embroidery, Cutting, Calender)
+            // ⭐ 1. WORKERS LIST SYNC (Sirf Kariger List in Master Tables)
             if (targetTable === 'WORKERS_ACTION') {
                 const workersList = Array.isArray(data) ? data : [];
 
-                // Master copy app_store me taaki data safe rahe
                 try {
                     await supabaseClient.from('app_store').upsert({
                         id: `${uid}_${sess}_jobwork_workers`,
@@ -319,7 +313,6 @@
                     }, { onConflict: 'id' });
                 } catch (_) {}
 
-                // Embroidery Table (Embroidery Karigers)
                 try {
                     const embWorkers = workersList.filter(w => String(w?.type || '').toLowerCase() === 'embroidery');
                     await supabaseClient.from('embroidery').upsert({
@@ -330,7 +323,6 @@
                     }, { onConflict: 'id' });
                 } catch (_) {}
 
-                // Cutting Table (Cutting Karigers)
                 try {
                     const cutWorkers = workersList.filter(w => String(w?.type || '').toLowerCase() === 'cutting');
                     await supabaseClient.from('cutting').upsert({
@@ -341,7 +333,6 @@
                     }, { onConflict: 'id' });
                 } catch (_) {}
 
-                // Calender Table (Calender Karigers)
                 try {
                     const calWorkers = workersList.filter(w => String(w?.type || '').toLowerCase() === 'calender');
                     await supabaseClient.from('calender').upsert({
@@ -396,9 +387,8 @@
                 return false;
             }
 
-            // ⭐ 2. PASSBOOK / LEN-DEN SYNC (Aai, Gai, Kab Aai) TO RESPECTIVE HISTORY TABLES
+            // ⭐ 2. PASSBOOK (LEN-DEN) SYNC TO HISTORY TABLES
             if (targetTable === 'saree_history' && Array.isArray(data)) {
-                // Saree stock grouped
                 try {
                     let groupedStock = [];
                     if (typeof window.groupSareeStockByTab === 'function') {
@@ -486,7 +476,6 @@
         isSyncingInProgress = true;
         if (!silent) showSyncStatus('syncing');
 
-        // ⭐ 1. Karkhanas table auto-sync
         try {
             const { data: kData } = await supabaseClient.from('karkhanas').select('*').eq('user_id', uid);
             if (Array.isArray(kData) && kData.length > 0) {
@@ -501,7 +490,6 @@
             }
         } catch (_) {}
 
-        // ⭐ 2. Baaki Sabhi Tables
         const tables = [
             'app_store',
             'saree_stock', 'saree_history',
@@ -540,7 +528,6 @@
                         const rowData = row.data !== undefined ? row.data : (row.value !== undefined ? row.value : row);
 
                         if (mappedLocalKey && rowData !== undefined) {
-                            // Agar workers table se aa raha hai toh local jobwork_workers me merge karein
                             if (mappedLocalKey === 'embroidery_workers' || mappedLocalKey === 'cutting_workers' || mappedLocalKey === 'calender_workers') {
                                 const existing = (typeof window.getStore === 'function') 
                                     ? (window.getStore('jobwork_workers') || []) 
