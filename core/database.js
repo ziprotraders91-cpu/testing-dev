@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - ENTERPRISE AUTO-POLLING & LIVE REALTIME ENGINE (ALL MODULES)
    File: core/database.js • Developed by Farhan Jawed
-   Architecture: 100% Automated Multi-Godam Cloud Synchronizer (Zero Manual Console)
+   Modules: Multi-Godam + Jobwork + Tani Orders & Rangai Engine
 ============================================================================ */
 
 (() => {
@@ -138,11 +138,14 @@
         if (k.includes('material_transfer') || k.includes('transfer')) return 'material_transfers';
         if (k.includes('dukan')) return 'dukan_challans';
 
+        // ⭐ 13. TANI ORDERS & RANGAI TABLE ROUTING
+        if (k.includes('tani_order') || k.includes('tani_parchi') || k.includes('tani_rangai')) return 'tani_orders';
+
         if (k.includes('embroidery_history')) return 'embroidery_history';
         if (k.includes('cutting_history')) return 'cutting_history';
         if (k.includes('calender_history')) return 'calender_history';
 
-        // ⭐ KHATA SHEETS ➔ HISTORY TABLES MEIN (Sheet aur Passbook dono History me)
+        // KHATA SHEETS ➔ HISTORY TABLES
         if (k.includes('jobwork_sheets_') || k.includes('jw_sheet_')) {
             const workerId = k.replace(/.*jobwork_sheets_/, '').replace(/.*jw_sheet_/, '');
             let workers = [];
@@ -158,7 +161,7 @@
             return 'cutting_history';
         }
 
-        // ⭐ KARIGERS LIST ➔ MASTER TABLES (cutting, embroidery, calender)
+        // WORKERS LIST ➔ MASTER TABLES
         if (k.includes('jobwork_workers') || k.includes('cutting_workers') || k.includes('calender_workers') || k.includes('embroidery_workers')) {
             return 'WORKERS_ACTION';
         }
@@ -176,6 +179,7 @@
         if (k.includes('karigers') || tableName === 'karigers') return 'kariger_list';
         if (tableName === 'job_work_bills' && k.includes('jw_bills_list')) return 'jw_bills_list';
         if (tableName === 'job_work_bills' && k.includes('jw_payments_list')) return 'jw_payments_list';
+        if (tableName === 'tani_orders' || k.includes('tani_orders')) return 'tani_orders_list';
         return cloudKey;
     };
 
@@ -240,6 +244,8 @@
             if (typeof window.updateJobWorkHubBadges === 'function') window.updateJobWorkHubBadges();
             if (typeof window.renderDashboardDayBook === 'function') window.renderDashboardDayBook();
             if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+            if (typeof window.renderTaniOrdersTable === 'function') window.renderTaniOrdersTable();
+            if (typeof window.updateTaniOrderBadges === 'function') window.updateTaniOrderBadges();
         }, 150);
     };
 
@@ -298,7 +304,7 @@
         showSyncStatus('syncing');
 
         try {
-            // ⭐ 1. WORKERS LIST SYNC (Sirf Kariger List in Master Tables)
+            // ⭐ 1. WORKERS LIST SYNC
             if (targetTable === 'WORKERS_ACTION') {
                 const workersList = Array.isArray(data) ? data : [];
 
@@ -387,7 +393,7 @@
                 return false;
             }
 
-            // ⭐ 2. PASSBOOK (LEN-DEN) SYNC TO HISTORY TABLES
+            // ⭐ 2. PASSBOOK (LEN-DEN) SYNC
             if (targetTable === 'saree_history' && Array.isArray(data)) {
                 try {
                     let groupedStock = [];
@@ -403,7 +409,6 @@
                     }
                 } catch (_) {}
 
-                // 🪡 Embroidery Passbook History -> embroidery_history
                 try {
                     const embHistory = data.filter(r => {
                         if (!r) return false;
@@ -421,7 +426,6 @@
                     }
                 } catch (_) {}
 
-                // ✂️ Cutting Passbook History -> cutting_history
                 try {
                     const cutHistory = data.filter(r => {
                         if (!r) return false;
@@ -439,7 +443,6 @@
                     }
                 } catch (_) {}
 
-                // 🎛️ Calender Passbook History -> calender_history
                 try {
                     const calHistory = data.filter(r => {
                         if (!r) return false;
@@ -490,6 +493,7 @@
             }
         } catch (_) {}
 
+        // ⭐ Sabhi Tables (Ab isme 'tani_orders' bhi juda hai)
         const tables = [
             'app_store',
             'saree_stock', 'saree_history',
@@ -502,7 +506,8 @@
             'cutting', 'cutting_history',
             'embroidery', 'embroidery_history',
             'calender', 'calender_history',
-            'job_work_bills'
+            'job_work_bills',
+            'tani_orders'
         ];
 
         let hasNewData = false;
