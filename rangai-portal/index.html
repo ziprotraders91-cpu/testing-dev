@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Rangai Worker Portal • Simplicity ERP</title>
+    <meta name="theme-color" content="#701a75">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Rangai Portal">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="manifest" href="manifest.json">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+        body { margin: 0; background: #f1f5f9; color: #0f172a; min-height: 100vh; }
+
+        /* Login Screen */
+        .login-wrap {
+            min-height: 100vh; display: flex; align-items: center; justify-content: center;
+            padding: 16px; background: linear-gradient(135deg, #4a044e, #701a75);
+        }
+        .login-card {
+            width: 100%; max-width: 390px; background: #ffffff; border-radius: 16px;
+            padding: 24px 20px; box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+        }
+        .login-card h1 { margin: 0 0 4px; font-size: 20px; color: #4a044e; text-align: center; }
+        .login-card .sub { margin: 0 0 18px; font-size: 12px; color: #64748b; text-align: center; font-weight: 600; }
+        .field { margin-bottom: 14px; }
+        .field label { display: block; font-size: 12px; font-weight: 700; color: #334155; margin-bottom: 5px; }
+        .field input {
+            width: 100%; padding: 12px 14px; border: 1.5px solid #cbd5e1; border-radius: 10px;
+            font-size: 16px; font-weight: 700; outline: none; background: #f8fafc;
+        }
+        .field input:focus { border-color: #a21caf; background: #ffffff; }
+        .btn-primary {
+            width: 100%; padding: 13px; border: none; border-radius: 10px;
+            background: #a21caf; color: #fff; font-size: 15px; font-weight: 800; cursor: pointer;
+        }
+        .btn-primary:disabled { opacity: 0.65; cursor: not-allowed; }
+        .err-box {
+            margin-top: 12px; padding: 10px; border-radius: 8px; background: #fee2e2;
+            color: #b91c1c; font-size: 12.5px; font-weight: 700; text-align: center; display: none;
+        }
+
+        /* Portal Workspace */
+        .topbar {
+            background: #4a044e; color: #fff; padding: 14px 16px;
+            position: sticky; top: 0; z-index: 50; box-shadow: 0 4px 10px rgba(0,0,0,0.18);
+        }
+        .topbar-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+        .worker-name { font-size: 16px; font-weight: 800; color: #ffffff; }
+        .worker-meta { font-size: 11.5px; color: #f5d0fe; margin-top: 2px; }
+        .top-actions { display: flex; gap: 8px; align-items: center; }
+        .icon-btn {
+            border: 1px solid #86198f; background: #701a75; color: #fae8ff;
+            padding: 7px 11px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer;
+        }
+        .logout-btn { background: #dc2626; border-color: #dc2626; color: #fff; }
+
+        .container { max-width: 720px; margin: 0 auto; padding: 14px; }
+
+        /* Stats */
+        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+        .stat-box {
+            background: #ffffff; border-radius: 12px; padding: 10px 8px; text-align: center;
+            border: 1.5px solid #e2e8f0; cursor: pointer;
+        }
+        .stat-box small { display: block; font-size: 11px; font-weight: 700; color: #64748b; }
+        .stat-box strong { display: block; font-size: 20px; font-weight: 900; margin-top: 2px; }
+
+        /* Tabs */
+        .tabs-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+        .tab-btn {
+            padding: 10px 6px; border-radius: 10px; border: 1.5px solid #cbd5e1;
+            background: #ffffff; color: #475569; font-size: 12px; font-weight: 800; cursor: pointer;
+        }
+        .tab-btn.active-pending { background: #fef3c7; border-color: #f59e0b; color: #92400e; }
+        .tab-btn.active-processing { background: #fae8ff; border-color: #c026d3; color: #86198f; }
+        .tab-btn.active-completed { background: #dcfce7; border-color: #16a34a; color: #166534; }
+
+        .search-input {
+            width: 100%; padding: 10px 12px; border: 1.5px solid #cbd5e1; border-radius: 10px;
+            font-size: 13.5px; font-weight: 600; background: #ffffff; margin-bottom: 12px; outline: none;
+        }
+
+        /* Order Cards */
+        .order-card {
+            background: #ffffff; border-radius: 12px; padding: 14px; margin-bottom: 10px;
+            border: 1.5px solid #e2e8f0; box-shadow: 0 2px 6px rgba(15,23,42,0.04); cursor: pointer;
+        }
+        .order-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .parchi-no { font-size: 16px; font-weight: 900; color: #86198f; }
+        .badge { padding: 3px 9px; border-radius: 20px; font-size: 11px; font-weight: 800; }
+        .b-pending { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+        .b-processing { background: #fae8ff; color: #86198f; border: 1px solid #f0abfc; }
+        .b-completed { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
+
+        .order-info { font-size: 13px; color: #334155; line-height: 1.55; }
+        .order-footer {
+            margin-top: 10px; padding-top: 10px; border-top: 1px dashed #cbd5e1;
+            display: flex; justify-content: space-between; align-items: center; gap: 8px;
+        }
+        .btn-sm {
+            border: none; border-radius: 8px; padding: 8px 12px; font-size: 12px;
+            font-weight: 800; cursor: pointer;
+        }
+        .btn-accept { background: #a21caf; color: #fff; }
+        .btn-complete { background: #16a34a; color: #fff; }
+        .btn-view { background: #f1f5f9; color: #1e293b; border: 1px solid #cbd5e1; }
+
+        .empty-state {
+            background: #ffffff; border-radius: 12px; padding: 30px 16px;
+            text-align: center; color: #64748b; font-weight: 600; border: 1px dashed #cbd5e1;
+        }
+
+        /* Pagination Bar */
+        .pager-bar {
+            display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;
+            gap: 8px; margin-top: 12px; padding: 10px 12px; background: #ffffff;
+            border-radius: 12px; border: 1.5px solid #e2e8f0; font-size: 12px; font-weight: 700;
+        }
+        .pager-btns { display: flex; align-items: center; gap: 6px; }
+        .pager-btn {
+            border: none; border-radius: 8px; padding: 7px 12px; font-size: 12px; font-weight: 800;
+            background: #86198f; color: #ffffff; cursor: pointer;
+        }
+        .pager-btn:disabled { background: #cbd5e1; color: #64748b; cursor: not-allowed; }
+
+        /* Full Parchi Modal */
+        .modal-bg {
+            position: fixed; inset: 0; background: rgba(15,23,42,0.82); z-index: 999;
+            display: none; align-items: center; justify-content: center; padding: 10px;
+        }
+        .modal-box {
+            background: #ffffff; width: 100%; max-width: 560px; max-height: 94vh;
+            border-radius: 14px; overflow: hidden; display: flex; flex-direction: column;
+        }
+        .modal-head {
+            background: #701a75; color: #fff; padding: 12px 16px;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .modal-body { padding: 14px; overflow-y: auto; flex: 1; }
+        .spec-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 12px; }
+        .spec-cell { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 10px; }
+        .spec-cell small { display: block; font-size: 10.5px; color: #64748b; font-weight: 700; }
+        .spec-cell strong { display: block; font-size: 13.5px; color: #0f172a; margin-top: 2px; }
+
+        table.colors-tbl { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 12px; }
+        table.colors-tbl th { background: #701a75; color: #fff; padding: 7px 5px; text-align: center; }
+        table.colors-tbl td { border: 1px solid #cbd5e1; padding: 6px 5px; text-align: center; font-weight: 700; }
+
+        .modal-foot {
+            background: #f1f5f9; padding: 12px 16px; border-top: 1px solid #cbd5e1;
+            display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 1. LOGIN SCREEN -->
+    <div id="login-screen" class="login-wrap">
+        <div class="login-card">
+            <h1>🎨 Rangai Worker Portal</h1>
+            <p class="sub">Simplicity ERP • Sirf Aapke Rangai Orders</p>
+
+            <div class="field">
+                <label for="r-mobile">Mobile Number (10 Digits)</label>
+                <input type="tel" id="r-mobile" maxlength="10" inputmode="numeric" placeholder="Mobile number daalein">
+            </div>
+            <div class="field">
+                <label for="r-pin">4-Digit Secret PIN</label>
+                <input type="password" id="r-pin" maxlength="4" inputmode="numeric" placeholder="****">
+            </div>
+            <button type="button" id="r-login-btn" class="btn-primary" onclick="doWorkerLogin()">Login Karein</button>
+            <div id="r-login-err" class="err-box"></div>
+        </div>
+    </div>
+
+    <!-- 2. MAIN RANGAI PORTAL -->
+    <div id="portal-screen" style="display:none;">
+        <header class="topbar">
+            <div class="topbar-row">
+                <div>
+                    <div class="worker-name" id="p-worker-name">Rangai Maker</div>
+                    <div class="worker-meta" id="p-worker-meta">Firm • Mobile</div>
+                </div>
+                <div class="top-actions">
+                    <button type="button" class="icon-btn" onclick="refreshWorkerOrders(true)">🔄 Refresh</button>
+                    <button type="button" class="icon-btn logout-btn" onclick="doWorkerLogout()">Logout</button>
+                </div>
+            </div>
+        </header>
+
+        <main class="container">
+            <div class="stats-grid">
+                <div class="stat-box" onclick="switchTab('pending')">
+                    <small style="color:#b45309;">🔔 New Request</small>
+                    <strong id="cnt-pending" style="color:#b45309;">0</strong>
+                </div>
+                <div class="stat-box" onclick="switchTab('processing')">
+                    <small style="color:#86198f;">🎨 Processing</small>
+                    <strong id="cnt-processing" style="color:#86198f;">0</strong>
+                </div>
+                <div class="stat-box" onclick="switchTab('completed')">
+                    <small style="color:#15803d;">✅ Completed</small>
+                    <strong id="cnt-completed" style="color:#15803d;">0</strong>
+                </div>
+            </div>
+
+            <div class="tabs-row">
+                <button type="button" id="tab-pending" class="tab-btn active-pending" onclick="switchTab('pending')">🔔 New Request</button>
+                <button type="button" id="tab-processing" class="tab-btn" onclick="switchTab('processing')">🎨 Processing</button>
+                <button type="button" id="tab-completed" class="tab-btn" onclick="switchTab('completed')">✅ Completed</button>
+            </div>
+
+            <input type="text" id="p-search" class="search-input" placeholder="🔍 Parchi No, Sancha, ya Kariger naam se khojein..." oninput="onSearchInput()">
+
+            <div id="orders-list"></div>
+            <div id="pager-container"></div>
+        </main>
+    </div>
+
+    <!-- 3. FULL TANI PARCHI DETAIL MODAL -->
+    <div id="order-modal" class="modal-bg" onclick="if(event.target===this) closeOrderModal()">
+        <div class="modal-box">
+            <div class="modal-head">
+                <div>
+                    <strong id="m-title" style="font-size:16px;">Tani Parchi #</strong>
+                    <div id="m-sub" style="font-size:11px; opacity:0.9;"></div>
+                </div>
+                <button type="button" onclick="closeOrderModal()" style="background:transparent; border:none; color:#fff; font-size:24px; cursor:pointer;">&times;</button>
+            </div>
+            <div class="modal-body" id="m-body"></div>
+            <div class="modal-foot" id="m-foot"></div>
+        </div>
+    </div>
+
+    <script>
+        (() => {
+            'use strict';
+
+            const SUPABASE_URL = "https://mvbejtoylowskerlgfxs.supabase.co";
+            const SUPABASE_KEY = "sb_publishable_NhTU4xzRMi0gtKH4CzVf_Q_lRfzjg3c";
+            const TOKEN_STORAGE_KEY = "rangai_portal_token";
+            const PAGE_SIZE = 20;
+
+            const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+            let currentToken = localStorage.getItem(TOKEN_STORAGE_KEY) || "";
+            let currentWorker = null;
+            let allOrders = [];
+            let activeTab = "pending";
+            let currentPage = 1;
+            let pollTimer = null;
+
+            const esc = (s) => String(s || "").replace(/[&<>"']/g, (m) => ({
+                "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+            }[m]));
+
+            const fmtDate = (d) => {
+                if (!d) return "-";
+                const p = String(d).split("-");
+                return (p.length === 3 && p[0].length === 4) ? `${p[2]}-${p[1]}-${p[0]}` : d;
+            };
+
+            const fmtDateTime = (iso) => {
+                if (!iso) return "";
+                try {
+                    const dt = new Date(iso);
+                    if (isNaN(dt.getTime())) return "";
+                    return dt.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+                } catch (_) { return ""; }
+            };
+
+            const showLoginErr = (msg) => {
+                const el = document.getElementById("r-login-err");
+                if (!el) return;
+                el.textContent = msg;
+                el.style.display = msg ? "block" : "none";
+            };
+
+            const renderHeaderProfile = () => {
+                if (!currentWorker) return;
+                document.getElementById("p-worker-name").textContent = `🎨 ${currentWorker.name} (Rangai)`;
+                document.getElementById("p-worker-meta").textContent = `${currentWorker.firm_name} • 📱 ${currentWorker.mobile} • 🟢 Active`;
+            };
+
+            window.doWorkerLogin = async () => {
+                const mob = String(document.getElementById("r-mobile")?.value || "").replace(/[^0-9]/g, "");
+                const pin = String(document.getElementById("r-pin")?.value || "").replace(/[^0-9]/g, "").slice(0, 4);
+                const btn = document.getElementById("r-login-btn");
+
+                if (mob.length !== 10 || pin.length !== 4) {
+                    return showLoginErr("Kripya 10-digit Mobile Number aur 4-digit PIN daalein!");
+                }
+
+                showLoginErr("");
+                if (btn) { btn.disabled = true; btn.textContent = "Checking... ⏳"; }
+
+                try {
+                    const { data, error } = await sb.rpc("rangai_worker_login", {
+                        p_mobile: mob,
+                        p_pin: pin
+                    });
+
+                    if (btn) { btn.disabled = false; btn.textContent = "Login Karein"; }
+
+                    if (error || !data || !data.ok) {
+                        return showLoginErr(error?.message || data?.error || "Login nahi ho paya!");
+                    }
+
+                    currentToken = data.token;
+                    currentWorker = data.worker;
+                    localStorage.setItem(TOKEN_STORAGE_KEY, currentToken);
+
+                    document.getElementById("r-pin").value = "";
+                    enterPortal();
+                } catch (err) {
+                    if (btn) { btn.disabled = false; btn.textContent = "Login Karein"; }
+                    showLoginErr("Network error: Internet check karein.");
+                }
+            };
+
+            const enterPortal = () => {
+                document.getElementById("login-screen").style.display = "none";
+                document.getElementById("portal-screen").style.display = "block";
+                renderHeaderProfile();
+                refreshWorkerOrders(false);
+
+                if (pollTimer) clearInterval(pollTimer);
+                pollTimer = setInterval(() => {
+                    if (!document.hidden && navigator.onLine && currentToken) {
+                        refreshWorkerOrders(false);
+                    }
+                }, 15000);
+            };
+
+            window.doWorkerLogout = async () => {
+                if (pollTimer) clearInterval(pollTimer);
+                const tok = currentToken;
+                currentToken = "";
+                currentWorker = null;
+                allOrders = [];
+                localStorage.removeItem(TOKEN_STORAGE_KEY);
+
+                try {
+                    if (tok) await sb.rpc("rangai_worker_logout", { p_token: tok });
+                } catch (_) {}
+
+                document.getElementById("portal-screen").style.display = "none";
+                document.getElementById("login-screen").style.display = "flex";
+            };
+
+            window.refreshWorkerOrders = async (showAlertOnErr = false) => {
+                if (!currentToken) return;
+                try {
+                    const { data, error } = await sb.rpc("rangai_worker_get_orders", {
+                        p_token: currentToken
+                    });
+
+                    if (error) {
+                        if (showAlertOnErr) alert("Network error: " + error.message);
+                        return;
+                    }
+
+                    if (!data || !data.ok) {
+                        if (data && data.auth_error) {
+                            alert(data.error || "Session expire ho gaya, dubara login karein.");
+                            doWorkerLogout();
+                        } else if (showAlertOnErr) {
+                            alert(data?.error || "Data load nahi ho paya.");
+                        }
+                        return;
+                    }
+
+                    currentWorker = data.worker || currentWorker;
+                    allOrders = Array.isArray(data.orders) ? data.orders : [];
+                    renderHeaderProfile();
+                    updateStatsAndRender();
+                } catch (err) {
+                    if (showAlertOnErr) alert("Connection error!");
+                }
+            };
+
+            const updateStatsAndRender = () => {
+                let p = 0, pr = 0, c = 0;
+                allOrders.forEach((o) => {
+                    const st = String(o.rangi_status || "pending").toLowerCase();
+                    if (st === "pending") p++;
+                    else if (st === "processing") pr++;
+                    else if (st === "completed") c++;
+                });
+                document.getElementById("cnt-pending").textContent = p;
+                document.getElementById("cnt-processing").textContent = pr;
+                document.getElementById("cnt-completed").textContent = c;
+                renderOrders();
+            };
+
+            window.switchTab = (tab) => {
+                activeTab = tab;
+                currentPage = 1;
+                ["pending", "processing", "completed"].forEach((t) => {
+                    const btn = document.getElementById(`tab-${t}`);
+                    if (!btn) return;
+                    btn.className = "tab-btn";
+                    if (t === tab) btn.classList.add(`active-${t}`);
+                });
+                renderOrders();
+            };
+
+            window.onSearchInput = () => {
+                currentPage = 1;
+                renderOrders();
+            };
+
+            window.changePage = (delta) => {
+                currentPage += delta;
+                renderOrders();
+                window.scrollTo({ top: 0, behavior: "smooth" });
+            };
+
+            window.renderOrders = () => {
+                const container = document.getElementById("orders-list");
+                const pagerEl = document.getElementById("pager-container");
+                if (!container) return;
+
+                const q = String(document.getElementById("p-search")?.value || "").trim().toLowerCase();
+
+                const list = allOrders.filter((o) => {
+                    const st = String(o.rangi_status || "pending").toLowerCase();
+                    if (st !== activeTab) return false;
+                    if (!q) return true;
+                    return `${o.order_no || ""} ${o.sancha_name || ""} ${o.kariger || ""} ${o.mohalla || ""}`.toLowerCase().includes(q);
+                });
+
+                const total = list.length;
+                if (!total) {
+                    const msgMap = {
+                        pending: "Abhi koi nayi Rangai request nahi hai.",
+                        processing: "Abhi koi Tani rangai processing mein nahi hai.",
+                        completed: "Abhi koi completed Tani nahi hai."
+                    };
+                    container.innerHTML = `<div class="empty-state">${msgMap[activeTab] || "Koi order nahi mila."}</div>`;
+                    if (pagerEl) pagerEl.innerHTML = "";
+                    return;
+                }
+
+                const totalPages = Math.ceil(total / PAGE_SIZE) || 1;
+                if (currentPage > totalPages) currentPage = totalPages;
+                if (currentPage < 1) currentPage = 1;
+
+                const startIdx = (currentPage - 1) * PAGE_SIZE;
+                const pageList = list.slice(startIdx, startIdx + PAGE_SIZE);
+
+                let html = "";
+                pageList.forEach((o) => {
+                    const st = String(o.rangi_status || "pending").toLowerCase();
+                    let badgeClass = "b-pending", badgeText = "🔔 New Request";
+                    let actionBtn = `<button type="button" class="btn-sm btn-accept" onclick="event.stopPropagation(); changeOrderStatus('${esc(o.id)}', 'processing')">✅ Accept Karein</button>`;
+
+                    if (st === "processing") {
+                        badgeClass = "b-processing";
+                        badgeText = "🎨 Processing";
+                        actionBtn = `<button type="button" class="btn-sm btn-complete" onclick="event.stopPropagation(); changeOrderStatus('${esc(o.id)}', 'completed')">🏁 Complete Karein</button>`;
+                    } else if (st === "completed") {
+                        badgeClass = "b-completed";
+                        badgeText = "✅ Completed";
+                        actionBtn = "";
+                    }
+
+                    const colorsCount = Array.isArray(o.matching_table) ? o.matching_table.length : 0;
+
+                    html += `
+                    <div class="order-card" onclick="openOrderModal('${esc(o.id)}')">
+                        <div class="order-top">
+                            <span class="parchi-no">📜 Parchi #${esc(o.order_no || "-")}</span>
+                            <span class="badge ${badgeClass}">${badgeText}</span>
+                        </div>
+                        <div class="order-info">
+                            <div>📅 <strong>Tarikh:</strong> ${esc(fmtDate(o.order_date))} &nbsp;|&nbsp; 🎨 <strong>Colors:</strong> ${colorsCount}</div>
+                            <div>⚙️ <strong>Sancha:</strong> ${esc(o.sancha_name || "-")} &nbsp;|&nbsp; 👤 <strong>Kariger:</strong> ${esc(o.kariger || "-")}${o.mohalla ? ` (${esc(o.mohalla)})` : ""}</div>
+                            <div>📏 <strong>Meter:</strong> ${Number(o.meter || 0)} Mtr &nbsp;|&nbsp; 🥻 <strong>Saree:</strong> ${parseInt(o.pcs || 0, 10)} Pcs</div>
+                        </div>
+                        <div class="order-footer">
+                            <button type="button" class="btn-sm btn-view" onclick="event.stopPropagation(); openOrderModal('${esc(o.id)}')">🎨 Colors & Form Dekhein</button>
+                            ${actionBtn}
+                        </div>
+                    </div>`;
+                });
+
+                container.innerHTML = html;
+
+                if (pagerEl) {
+                    if (total > PAGE_SIZE) {
+                        pagerEl.innerHTML = `
+                        <div class="pager-bar">
+                            <div style="color:#475569;">Dikh rahe: ${startIdx + 1} - ${Math.min(startIdx + PAGE_SIZE, total)} (Kul: ${total})</div>
+                            <div class="pager-btns">
+                                <button type="button" class="pager-btn" ${currentPage <= 1 ? "disabled" : ""} onclick="changePage(-1)">◀ Prev</button>
+                                <span>Page ${currentPage} / ${totalPages}</span>
+                                <button type="button" class="pager-btn" ${currentPage >= totalPages ? "disabled" : ""} onclick="changePage(1)">Next ▶</button>
+                            </div>
+                        </div>`;
+                    } else {
+                        pagerEl.innerHTML = "";
+                    }
+                }
+            };
+
+            window.openOrderModal = (orderRowId) => {
+                const o = allOrders.find((x) => String(x.id) === String(orderRowId));
+                if (!o) return;
+
+                const st = String(o.rangi_status || "pending").toLowerCase();
+                document.getElementById("m-title").textContent = `🎨 Tani Parchi #${o.order_no || "-"}`;
+                document.getElementById("m-sub").textContent = `Tarikh: ${fmtDate(o.order_date)} • Sancha: ${o.sancha_name || "-"}`;
+
+                const matching = Array.isArray(o.matching_table) ? o.matching_table : [];
+                let rowsHtml = "";
+                for (let i = 1; i <= 8; i++) {
+                    const r = matching.find((m) => Number(m.row) === i) || { saree: "", border: "", bana: "" };
+                    rowsHtml += `<tr>
+                        <td style="background:#fdf4ff; color:#701a75;">${i}</td>
+                        <td>${esc(r.saree || "-")}</td>
+                        <td>${esc(r.border || "-")}</td>
+                        <td>${esc(r.bana || "-")}</td>
+                    </tr>`;
+                }
+
+                const selContrasts = Array.isArray(o.selected_contrasts) ? o.selected_contrasts : [];
+                const cAanchal = selContrasts.includes("aanchal_blouse") ? "☑ آنچل بلاؤز" : "☐ آنچل بلاؤز";
+                const cBorder = selContrasts.includes("border_only") ? "☑ صرف بارڈر" : "☐ صرف بارڈر";
+                const cSelf = selContrasts.includes("self") ? "☑ سیلف" : "☐ سیلف";
+
+                let timeNote = "";
+                if (o.accepted_at) timeNote += `<div>🎨 <strong>Accepted:</strong> ${esc(fmtDateTime(o.accepted_at))}</div>`;
+                if (o.completed_at) timeNote += `<div>✅ <strong>Completed:</strong> ${esc(fmtDateTime(o.completed_at))}</div>`;
+
+                document.getElementById("m-body").innerHTML = `
+                    <div class="spec-grid">
+                        <div class="spec-cell"><small>👤 Kariger Ka Naam</small><strong>${esc(o.kariger || "-")}</strong></div>
+                        <div class="spec-cell"><small>⚙️ Sancha Wala</small><strong>${esc(o.sancha_name || "-")}</strong></div>
+                        <div class="spec-cell"><small>📏 Meter (Length)</small><strong>${Number(o.meter || 0)} Mtr</strong></div>
+                        <div class="spec-cell"><small>🥻 Adad (Saree Pcs)</small><strong style="color:#dc2626;">${parseInt(o.pcs || 0, 10)} Pcs</strong></div>
+                        <div class="spec-cell"><small>🧵 Paai (Density)</small><strong>${esc(o.paai || "-")}</strong></div>
+                        <div class="spec-cell"><small>✨ Border Design</small><strong>${esc(o.border_spec || "-")}</strong></div>
+                        <div class="spec-cell"><small>🧶 Bana Spec</small><strong>${esc(o.bana_spec || "-")}</strong></div>
+                        <div class="spec-cell"><small>📍 Mohalla / Pata</small><strong>${esc(o.mohalla || "-")}</strong></div>
+                    </div>
+
+                    <div style="font-size:12.5px; font-weight:800; color:#701a75; margin-bottom:6px;">🎨 8-Colors Matching Table (Rangai Chart):</div>
+                    <table class="colors-tbl">
+                        <thead>
+                            <tr><th style="width:32px;">#</th><th>ساڑی (Saree)</th><th>بارڈر (Border)</th><th>بانا (Bana)</th></tr>
+                        </thead>
+                        <tbody>${rowsHtml}</tbody>
+                    </table>
+
+                    <div style="background:#fdf4ff; border:1px solid #f0abfc; border-radius:8px; padding:8px 10px; display:flex; justify-content:space-between; font-size:12px; font-weight:700; color:#701a75;">
+                        <span>${cAanchal}</span>
+                        <span>${cBorder}</span>
+                        <span>${cSelf}</span>
+                    </div>
+                    ${timeNote ? `<div style="margin-top:10px; font-size:11.5px; color:#475569; background:#f8fafc; padding:8px; border-radius:8px;">${timeNote}</div>` : ""}
+                `;
+
+                let footHtml = `<button type="button" class="btn-sm btn-view" onclick="closeOrderModal()">Band Karein</button>`;
+                if (st === "pending") {
+                    footHtml += `<button type="button" class="btn-sm btn-accept" onclick="changeOrderStatus('${esc(o.id)}', 'processing', true)">✅ Accept & Start Rangai</button>`;
+                } else if (st === "processing") {
+                    footHtml += `<button type="button" class="btn-sm btn-complete" onclick="changeOrderStatus('${esc(o.id)}', 'completed', true)">🏁 Rangai Complete (Baithak Bhejo)</button>`;
+                }
+                document.getElementById("m-foot").innerHTML = footHtml;
+
+                document.getElementById("order-modal").style.display = "flex";
+            };
+
+            window.closeOrderModal = () => {
+                document.getElementById("order-modal").style.display = "none";
+            };
+
+            window.changeOrderStatus = async (orderRowId, nextStatus, fromModal = false) => {
+                const label = nextStatus === "processing"
+                    ? "Kya aap is Tani ko Accept karke Rangai Processing mein daalna chahte hain?"
+                    : "Kya is Tani ki Rangai poori tarah Complete ho gayi hai?";
+
+                if (!confirm(label)) return;
+
+                try {
+                    const { data, error } = await sb.rpc("rangai_worker_update_status", {
+                        p_token: currentToken,
+                        p_order_row_id: orderRowId,
+                        p_next_status: nextStatus
+                    });
+
+                    if (error || !data || !data.ok) {
+                        if (data && data.auth_error) {
+                            alert(data.error || "Session expired!");
+                            doWorkerLogout();
+                            return;
+                        }
+                        return alert("Update nahi ho paya: " + (error?.message || data?.error || ""));
+                    }
+
+                    if (fromModal) closeOrderModal();
+                    await refreshWorkerOrders(false);
+                    switchTab(nextStatus);
+                } catch (err) {
+                    alert("Network error! Internet check karein.");
+                }
+            };
+
+            document.getElementById("r-pin")?.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    doWorkerLogin();
+                }
+            });
+
+            document.addEventListener("visibilitychange", () => {
+                if (!document.hidden && currentToken && navigator.onLine) {
+                    refreshWorkerOrders(false);
+                }
+            });
+
+            if (currentToken) {
+                enterPortal();
+            }
+
+            if ("serviceWorker" in navigator) {
+                window.addEventListener("load", () => {
+                    navigator.serviceWorker.register("sw.js", {
+                        scope: "/testing-dev/rangai-portal/"
+                    }).catch((err) => console.error("SW Error:", err));
+                });
+            }
+        })();
+    </script>
+</body>
+</html>
