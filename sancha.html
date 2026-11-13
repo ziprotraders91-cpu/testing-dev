@@ -10,6 +10,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Sancha Portal">
     <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="manifest" href="sancha-manifest.json">
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
@@ -580,6 +581,14 @@
 
             if (currentToken) {
                 enterPortal();
+            }
+
+            if ("serviceWorker" in navigator) {
+                window.addEventListener("load", () => {
+                    navigator.serviceWorker.register("sancha-sw.js", {
+                        scope: "/testing-dev/sancha.html"
+                    }).catch((err) => console.error("SW Error:", err));
+                });
             }
         })();
     </script>
