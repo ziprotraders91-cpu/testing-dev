@@ -1573,3 +1573,316 @@
 
     window.KarigerUIEngine = karigerUIAPI;
 })();
+/* ============================================================================
+   KARIGER MOBILE PORTAL ADMIN MODAL (NO index.html EDIT NEEDED)
+============================================================================ */
+(() => {
+    'use strict';
+
+    const PORTAL_LINK = 'https://ziprotraders91-cpu.github.io/testing-dev/kariger-portal/';
+    const SB_URL = 'https://mvbejtoylowskerlgfxs.supabase.co';
+    const SB_KEY = 'sb_publishable_NhTU4xzRMi0gtKH4CzVf_Q_lRfzjg3c';
+
+    let sbClient = null;
+    const getSb = () => {
+        if (sbClient) return sbClient;
+        if (window.supabase && typeof window.supabase.createClient === 'function') {
+            sbClient = window.supabase.createClient(SB_URL, SB_KEY);
+        }
+        return sbClient;
+    };
+
+    const detectTenantId = () => {
+        if (window.currentTenantId) return String(window.currentTenantId);
+        if (window.tenantId) return String(window.tenantId);
+        if (window.CloudEngine && typeof window.CloudEngine.getTenantId === 'function') {
+            const t = window.CloudEngine.getTenantId();
+            if (t) return String(t);
+        }
+        const directKeys = ['tenant_id', 'erp_tenant_id', 'current_tenant_id', 'user_id', 'kariger_portal_tenant_id'];
+        for (const k of directKeys) {
+            const v = localStorage.getItem(k);
+            if (v && v.trim()) return v.trim();
+        }
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.endsWith('_kariger_list')) {
+                return k.split('_')[0];
+            }
+        }
+        const manual = prompt('Apna Karkhana / User ID daalein (jaise: farhan):', localStorage.getItem('kariger_portal_tenant_id') || 'farhan');
+        if (manual && manual.trim()) {
+            localStorage.setItem('kariger_portal_tenant_id', manual.trim());
+            return manual.trim();
+        }
+        return 'farhan';
+    };
+
+    const escH = (s) => String(s || '').replace(/[&<>"']/g, (m) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[m]));
+
+    let cachedAccounts = [];
+
+    const loadKarigerPortalAccounts = async () => {
+        const sb = getSb();
+        if (!sb) return;
+        const tenantId = detectTenantId();
+        const tbody = document.getElementById('kp-accounts-tbody');
+        if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:12px;">Loading... ⏳</td></tr>';
+
+        const { data, error } = await sb.rpc('kariger_admin_list_accounts', { p_tenant_id: tenantId });
+        if (error || !data || !data.ok) {
+            if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#dc2626; padding:12px;">Error: ${escH(error?.message || 'Load nahi hua')}</td></tr>`;
+            return;
+        }
+        cachedAccounts = Array.isArray(data.accounts) ? data.accounts : [];
+        renderAccountsTable();
+    };
+
+    const renderAccountsTable = () => {
+        const tbody = document.getElementById('kp-accounts-tbody');
+        if (!tbody) return;
+        if (!cachedAccounts.length) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:14px; color:#64748b;">Abhi koi Kariger PIN nahi bana hai.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = cachedAccounts.map((a) => `
+            <tr style="border-bottom:1px solid #e2e8f0;">
+                <td style="padding:8px 6px; font-weight:700;">${escH(a.kariger_name)}</td>
+                <td style="padding:8px 6px;">${escH(a.mobile)}</td>
+                <td style="padding:8px 6px; font-weight:800; color:#ea580c;">${escH(a.pin)}</td>
+                <td style="padding:8px 6px;">${a.is_active ? '<span style="color:#15803d; font-weight:700;">🟢 Active</span>' : '<span style="color:#dc2626; font-weight:700;">🔴 Blocked</span>'}</td>
+                <td style="padding:8px 6px; white-space:nowrap;">
+                    <button type="button" onclick="kpShareWa('${escH(a.kariger_id)}')" style="background:#16a34a; color:#fff; border:none; border-radius:5px; padding:4px 7px; font-size:11px; cursor:pointer;">📲 WA</button>
+                    <button type="button" onclick="kpFillForm('${escH(a.kariger_id)}')" style="background:#0284c7; color:#fff; border:none; border-radius:5px; padding:4px 7px; font-size:11px; cursor:pointer;">✏️</button>
+                    <button type="button" onclick="kpDeleteAcc('${escH(a.kariger_id)}')" style="background:#dc2626; color:#fff; border:none; border-radius:5px; padding:4px 7px; font-size:11px; cursor:pointer;">🗑️</button>
+                </td>
+            </tr>
+        `).join('');
+    };
+
+    window.kpFillForm = (karigerId) => {
+        const list = typeof window.sanitizeKarigerList === 'function' ? window.sanitizeKarigerList() : [];
+        const k = list.find((x) => String(x.id) === String(karigerId));
+        const acc = cachedAccounts.find((x) => String(x.kariger_id) === String(karigerId));
+
+        const sel = document.getElementById('kp-kar-select');
+        if (sel && karigerId) sel.value = karigerId;
+
+        const mobEl = document.getElementById('kp-mobile');
+        const pinEl = document.getElementById('kp-pin');
+        const stEl = document.getElementById('kp-status');
+
+        if (mobEl) mobEl.value = (acc?.mobile || k?.mobile || '').replace(/[^0-9]/g, '').slice(-10);
+        if (pinEl) pinEl.value = acc?.pin || String(Math.floor(1000 + Math.random() * 9000));
+        if (stEl) stEl.value = (acc && acc.is_active === false) ? 'false' : 'true';
+    };
+
+    window.kpSaveAccount = async () => {
+        const sb = getSb();
+        if (!sb) return alert('Supabase library load nahi hui.');
+        const tenantId = detectTenantId();
+        const sel = document.getElementById('kp-kar-select');
+        const karigerId = sel?.value || '';
+        const karigerName = sel?.options[sel.selectedIndex]?.dataset?.name || 'Kariger';
+        const mobile = String(document.getElementById('kp-mobile')?.value || '').replace(/[^0-9]/g, '');
+        const pin = String(document.getElementById('kp-pin')?.value || '').replace(/[^0-9]/g, '');
+        const firm = String(document.getElementById('kp-firm')?.value || 'Simplicity ERP').trim();
+        const isActive = document.getElementById('kp-status')?.value === 'true';
+
+        if (!karigerId) return alert('Pehle Kariger chunein!');
+        if (mobile.length !== 10) return alert('10-digit Mobile Number daalein!');
+        if (pin.length !== 4) return alert('4-digit PIN daalein!');
+
+        localStorage.setItem('kariger_portal_firm_name', firm);
+
+        const btn = document.getElementById('kp-save-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Saving... ⏳'; }
+
+        const { data, error } = await sb.rpc('kariger_admin_save_account', {
+            p_tenant_id: tenantId,
+            p_kariger_id: karigerId,
+            p_kariger_name: karigerName,
+            p_mobile: mobile,
+            p_pin: pin,
+            p_firm_name: firm,
+            p_is_active: isActive
+        });
+
+        if (btn) { btn.disabled = false; btn.textContent = '💾 Save ID'; }
+
+        if (error || !data || !data.ok) {
+            return alert('Save nahi hua: ' + (error?.message || data?.error || ''));
+        }
+        await loadKarigerPortalAccounts();
+        alert(`✅ ${karigerName} ka App Login Save ho gaya!\nMobile: ${mobile}\nPIN: ${pin}`);
+    };
+
+    window.kpDeleteAcc = async (karigerId) => {
+        if (!confirm('Is Kariger ka Mobile Portal login delete karein?')) return;
+        const sb = getSb();
+        if (!sb) return;
+        await sb.rpc('kariger_admin_delete_account', {
+            p_tenant_id: detectTenantId(),
+            p_kariger_id: karigerId
+        });
+        await loadKarigerPortalAccounts();
+    };
+
+    window.kpShareWa = (karigerId) => {
+        const acc = cachedAccounts.find((x) => String(x.kariger_id) === String(karigerId));
+        if (!acc) return;
+        const msg = `🧵 *${acc.firm_name || 'Simplicity ERP'} - Kariger Hisab App*\n\n` +
+                    `👤 *Kariger:* ${acc.kariger_name}\n` +
+                    `📲 *App Link:* ${PORTAL_LINK}\n` +
+                    `📱 *Mobile:* ${acc.mobile}\n` +
+                    `🔑 *4-Digit PIN:* ${acc.pin}\n\n` +
+                    `*(Link Google Chrome me kholkar Install kar lein, apna Tani, Bana, Zari aur Mazdoori ka poora hisab live dekhein)*`;
+        window.open(`https://wa.me/91${acc.mobile}?text=${encodeURIComponent(msg)}`, '_blank');
+    };
+
+    window.kpCopyLink = () => {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(PORTAL_LINK)
+                .then(() => alert('✅ Link Copy ho gaya:\n' + PORTAL_LINK))
+                .catch(() => prompt('Link Copy karein:', PORTAL_LINK));
+        } else {
+            prompt('Link Copy karein:', PORTAL_LINK);
+        }
+    };
+
+    window.openKarigerPortalLoginModal = (preselectKarigerId = null) => {
+        const old = document.getElementById('kariger-portal-admin-modal');
+        if (old) old.remove();
+
+        const list = typeof window.sanitizeKarigerList === 'function' ? window.sanitizeKarigerList() : [];
+        const optionsHtml = list.map((k) =>
+            `<option value="${escH(k.id)}" data-name="${escH(k.name)}">${escH(k.name)}${k.mobile ? ' (' + escH(k.mobile) + ')' : ''}</option>`
+        ).join('');
+
+        const savedFirm = localStorage.getItem('kariger_portal_firm_name') || 'Farhan jawed';
+
+        const html = `
+        <div id="kariger-portal-admin-modal" style="position:fixed; inset:0; background:rgba(15,23,42,0.72); z-index:999999; display:flex; align-items:center; justify-content:center; padding:12px;">
+            <div style="background:#fff; width:100%; max-width:520px; max-height:92vh; border-radius:16px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 20px 40px rgba(0,0,0,0.4);">
+                <div style="background:#0f172a; color:#fff; padding:14px 16px; display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <div style="font-size:16px; font-weight:800;">🧵 Kariger Mobile Logins (Hisab Portal)</div>
+                        <div style="font-size:11.5px; color:#94a3b8;">Master list se Kariger chunein aur 4-Digit PIN banayein</div>
+                    </div>
+                    <button type="button" onclick="document.getElementById('kariger-portal-admin-modal').remove()" style="background:transparent; border:none; color:#fff; font-size:24px; cursor:pointer;">&times;</button>
+                </div>
+                <div style="padding:14px; overflow-y:auto; flex:1;">
+                    <div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:10px 12px; margin-bottom:12px;">
+                        <div style="font-size:12px; font-weight:700; color:#1e3a8a;">📱 Kariger Mobile Link:</div>
+                        <div style="font-size:12px; color:#2563eb; word-break:break-all; margin:4px 0 8px; font-weight:700;">${PORTAL_LINK}</div>
+                        <button type="button" onclick="kpCopyLink()" style="background:#0284c7; color:#fff; border:none; border-radius:7px; padding:6px 12px; font-size:12px; font-weight:700; cursor:pointer;">📋 Copy Link</button>
+                    </div>
+
+                    <div style="border:1.5px solid #e2e8f0; border-radius:12px; padding:12px; margin-bottom:14px; background:#f8fafc;">
+                        <div style="font-size:13px; font-weight:800; color:#0f172a; margin-bottom:10px;">➕ Kariger Login Banayein / Update Karein:</div>
+                        <div style="margin-bottom:8px;">
+                            <label style="font-size:11.5px; font-weight:700; color:#334155;">Kariger Chunein (Master Sheet Se):</label>
+                            <select id="kp-kar-select" onchange="kpFillForm(this.value)" style="width:100%; padding:9px; border:1px solid #cbd5e1; border-radius:8px; font-size:13px; margin-top:3px; background:#fff;">
+                                <option value="">-- Kariger Select Karein --</option>
+                                ${optionsHtml}
+                            </select>
+                        </div>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
+                            <div>
+                                <label style="font-size:11.5px; font-weight:700; color:#334155;">Mobile No (Login ID):</label>
+                                <input type="tel" id="kp-mobile" maxlength="10" placeholder="10-digit Mobile" style="width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:8px; font-size:13px; margin-top:3px;">
+                            </div>
+                            <div>
+                                <label style="font-size:11.5px; font-weight:700; color:#334155;">4-Digit PIN:</label>
+                                <input type="text" id="kp-pin" maxlength="4" value="1234" style="width:100%; padding:8px; border:1px solid #ef4444; border-radius:8px; font-size:13px; font-weight:800; margin-top:3px;">
+                            </div>
+                        </div>
+                        <div style="display:grid; grid-template-columns:1fr 1fr auto; gap:8px; align-items:end;">
+                            <div>
+                                <label style="font-size:11.5px; font-weight:700; color:#334155;">Karkhane Ka Naam:</label>
+                                <input type="text" id="kp-firm" value="${escH(savedFirm)}" style="width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:8px; font-size:13px; margin-top:3px;">
+                            </div>
+                            <div>
+                                <label style="font-size:11.5px; font-weight:700; color:#334155;">Status:</label>
+                                <select id="kp-status" style="width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:8px; font-size:13px; margin-top:3px; background:#fff;">
+                                    <option value="true">🟢 Active</option>
+                                    <option value="false">🔴 Blocked</option>
+                                </select>
+                            </div>
+                            <button type="button" id="kp-save-btn" onclick="kpSaveAccount()" style="background:#16a34a; color:#fff; border:none; border-radius:8px; padding:9px 14px; font-size:12.5px; font-weight:800; cursor:pointer;">💾 Save ID</button>
+                        </div>
+                    </div>
+
+                    <div style="overflow-x:auto;">
+                        <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                            <thead>
+                                <tr style="background:#0f172a; color:#fff; text-align:left;">
+                                    <th style="padding:8px 6px;">Kariger</th>
+                                    <th style="padding:8px 6px;">Mobile</th>
+                                    <th style="padding:8px 6px;">PIN</th>
+                                    <th style="padding:8px 6px;">Status</th>
+                                    <th style="padding:8px 6px;">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="kp-accounts-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+
+        document.body.insertAdjacentHTML('beforeend', html);
+        loadKarigerPortalAccounts().then(() => {
+            if (preselectKarigerId) kpFillForm(preselectKarigerId);
+        });
+    };
+
+    const injectPortalButtons = () => {
+        const tabsBar = document.getElementById('kariger-karkhana-tabs-bar');
+        if (tabsBar && tabsBar.parentElement && !document.getElementById('btn-kariger-portal-logins')) {
+            const btn = document.createElement('button');
+            btn.id = 'btn-kariger-portal-logins';
+            btn.type = 'button';
+            btn.textContent = '📱 Kariger App Logins (PIN)';
+            btn.style.cssText = 'background:#0f172a; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:12.5px; font-weight:800; cursor:pointer; margin:0 0 10px 0;';
+            btn.onclick = () => openKarigerPortalLoginModal();
+            tabsBar.parentElement.insertBefore(btn, tabsBar);
+        }
+
+        const waBtn = document.querySelector('button[onclick*="sendKarigerWhatsAppParchi"]');
+        if (waBtn && waBtn.parentElement && !document.getElementById('btn-sheet-kariger-pin')) {
+            const sBtn = document.createElement('button');
+            sBtn.id = 'btn-sheet-kariger-pin';
+            sBtn.type = 'button';
+            sBtn.className = 'sheet-btn';
+            sBtn.textContent = '📱 App PIN & Link';
+            sBtn.style.cssText = 'background:#0f172a; color:#fff; padding:6px 12px; font-weight:bold; border-radius:6px; border:none; cursor:pointer; margin-left:6px;';
+            sBtn.onclick = () => openKarigerPortalLoginModal(window.activeKarigerId || null);
+            waBtn.parentElement.insertBefore(sBtn, waBtn.nextSibling);
+        }
+    };
+
+    const origOpenModule = window.openKarigerModule;
+    if (typeof origOpenModule === 'function') {
+        window.openKarigerModule = function () {
+            origOpenModule.apply(this, arguments);
+            injectPortalButtons();
+        };
+    }
+
+    const origOpenSheet = window.openKarigerSheet;
+    if (typeof origOpenSheet === 'function') {
+        window.openKarigerSheet = function () {
+            origOpenSheet.apply(this, arguments);
+            injectPortalButtons();
+        };
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', injectPortalButtons);
+    } else {
+        injectPortalButtons();
+    }
+})();
