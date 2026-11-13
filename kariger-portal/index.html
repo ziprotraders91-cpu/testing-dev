@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Kariger Hisab Portal • Simplicity ERP</title>
+    <meta name="theme-color" content="#0f172a">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Kariger Hisab">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="manifest" href="manifest.json">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+        body { margin: 0; background: #f1f5f9; color: #0f172a; min-height: 100vh; }
+
+        /* Login */
+        .login-wrap {
+            min-height: 100vh; display: flex; align-items: center; justify-content: center;
+            padding: 16px; background: linear-gradient(135deg, #0f172a, #1e293b);
+        }
+        .login-card {
+            width: 100%; max-width: 390px; background: #ffffff; border-radius: 16px;
+            padding: 24px 20px; box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+        }
+        .login-card h1 { margin: 0 0 4px; font-size: 20px; text-align: center; color: #0f172a; }
+        .login-card .sub { margin: 0 0 18px; font-size: 12px; text-align: center; color: #64748b; font-weight: 600; }
+        .field { margin-bottom: 14px; }
+        .field label { display: block; font-size: 12px; font-weight: 700; color: #334155; margin-bottom: 5px; }
+        .field input {
+            width: 100%; padding: 12px 14px; border: 1.5px solid #cbd5e1; border-radius: 10px;
+            font-size: 16px; font-weight: 700; outline: none; background: #f8fafc;
+        }
+        .field input:focus { border-color: #0284c7; background: #ffffff; }
+        .btn-primary {
+            width: 100%; padding: 13px; border: none; border-radius: 10px;
+            background: #0284c7; color: #fff; font-size: 15px; font-weight: 800; cursor: pointer;
+        }
+        .btn-primary:disabled { opacity: 0.65; cursor: not-allowed; }
+        .err-box {
+            margin-top: 12px; padding: 10px; border-radius: 8px; background: #fee2e2;
+            color: #b91c1c; font-size: 12.5px; font-weight: 700; text-align: center; display: none;
+        }
+
+        /* Header */
+        .topbar {
+            background: #0f172a; color: #fff; padding: 14px 16px;
+            position: sticky; top: 0; z-index: 50; box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+        }
+        .topbar-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+        .w-name { font-size: 16px; font-weight: 800; color: #fff; }
+        .w-meta { font-size: 11.5px; color: #94a3b8; margin-top: 2px; }
+        .top-actions { display: flex; gap: 8px; }
+        .icon-btn {
+            border: 1px solid #334155; background: #1e293b; color: #e2e8f0;
+            padding: 7px 11px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer;
+        }
+        .logout-btn { background: #dc2626; border-color: #dc2626; color: #fff; }
+
+        .container { max-width: 740px; margin: 0 auto; padding: 12px; }
+
+        /* Sheet Tabs */
+        .sheet-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 10px; }
+        .tab-pill {
+            white-space: nowrap; padding: 8px 14px; border-radius: 20px; border: 1.5px solid #cbd5e1;
+            background: #fff; color: #334155; font-size: 13px; font-weight: 800; cursor: pointer;
+        }
+        .tab-pill.active { background: #0f172a; border-color: #0f172a; color: #fff; }
+
+        /* Summary Cards */
+        .cards-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 12px; }
+        .card {
+            background: #fff; border-radius: 12px; padding: 12px; border: 1.5px solid #e2e8f0;
+            box-shadow: 0 2px 5px rgba(15,23,42,0.04);
+        }
+        .card small { display: block; font-size: 11px; font-weight: 700; color: #64748b; }
+        .card strong { display: block; font-size: 19px; font-weight: 900; margin-top: 4px; }
+        .card .sub-line { font-size: 11px; color: #475569; margin-top: 4px; font-weight: 600; }
+
+        .card-money { border-color: #bbf7d0; background: #f0fdf4; }
+        .card-saree { border-color: #bfdbfe; background: #eff6ff; }
+        .card-bana { border-color: #fde68a; background: #fffbeb; }
+        .card-zari { border-color: #fed7aa; background: #fff7ed; }
+
+        /* Tani Info Strip */
+        .info-box {
+            background: #fff; border: 1.5px solid #e2e8f0; border-radius: 12px;
+            padding: 12px; margin-bottom: 12px; font-size: 12.5px; color: #334155; line-height: 1.6;
+        }
+        .colors-wrap { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+        .color-chip {
+            background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px;
+            padding: 3px 8px; font-size: 11px; font-weight: 700; color: #0f172a;
+        }
+
+        /* Ledger Rows */
+        .section-title { font-size: 13.5px; font-weight: 800; color: #0f172a; margin: 10px 0 8px; }
+        .row-card {
+            background: #fff; border: 1.5px solid #e2e8f0; border-radius: 12px;
+            padding: 12px; margin-bottom: 8px;
+        }
+        .row-head {
+            display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 1px dashed #e2e8f0; padding-bottom: 6px; margin-bottom: 8px;
+        }
+        .row-date { font-size: 13px; font-weight: 800; color: #0f172a; }
+        .row-paid { font-size: 13.5px; font-weight: 900; color: #15803d; background: #dcfce7; padding: 2px 8px; border-radius: 12px; }
+        .row-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; font-size: 12.5px; color: #334155; }
+        .empty-state {
+            background: #fff; border: 1.5px dashed #cbd5e1; border-radius: 12px;
+            padding: 26px 14px; text-align: center; color: #64748b; font-weight: 700;
+        }
+        .calc-box {
+            background: #fff; border: 1.5px solid #e2e8f0; border-radius: 12px;
+            padding: 12px; margin-top: 12px; font-size: 12.5px;
+        }
+        .calc-row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px dashed #e2e8f0; }
+        .calc-row:last-child { border-bottom: none; font-weight: 900; font-size: 14px; padding-top: 8px; }
+    </style>
+</head>
+<body>
+
+    <!-- 1. LOGIN SCREEN -->
+    <div id="login-screen" class="login-wrap">
+        <div class="login-card">
+            <h1>🧵 Kariger Hisab Portal</h1>
+            <p class="sub">Simplicity ERP • Apna Tani, Bana, Zari aur Mazdoori Hisab Dekhein</p>
+            <div class="field">
+                <label for="k-mobile">Mobile Number (10 Digits)</label>
+                <input type="tel" id="k-mobile" maxlength="10" inputmode="numeric" placeholder="Mobile number daalein">
+            </div>
+            <div class="field">
+                <label for="k-pin">4-Digit PIN</label>
+                <input type="password" id="k-pin" maxlength="4" inputmode="numeric" placeholder="****">
+            </div>
+            <button type="button" id="k-login-btn" class="btn-primary" onclick="doKarigerLogin()">Login Karein</button>
+            <div id="k-login-err" class="err-box"></div>
+        </div>
+    </div>
+
+    <!-- 2. PORTAL SCREEN -->
+    <div id="portal-screen" style="display:none;">
+        <header class="topbar">
+            <div class="topbar-row">
+                <div>
+                    <div class="w-name" id="p-name">Kariger</div>
+                    <div class="w-meta" id="p-meta">Firm • Saree</div>
+                </div>
+                <div class="top-actions">
+                    <button type="button" class="icon-btn" onclick="refreshHisab(true)">🔄 Refresh</button>
+                    <button type="button" class="icon-btn logout-btn" onclick="doKarigerLogout()">Logout</button>
+                </div>
+            </div>
+        </header>
+
+        <main class="container">
+            <div id="sheet-tabs" class="sheet-tabs"></div>
+            <div id="sheet-content"></div>
+        </main>
+    </div>
+
+    <script>
+        (() => {
+            'use strict';
+
+            const SUPABASE_URL = "https://mvbejtoylowskerlgfxs.supabase.co";
+            const SUPABASE_KEY = "sb_publishable_NhTU4xzRMi0gtKH4CzVf_Q_lRfzjg3c";
+            const TOKEN_KEY = "kariger_portal_token";
+
+            const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+            let currentToken = localStorage.getItem(TOKEN_KEY) || "";
+            let workerInfo = null;
+            let allSheets = [];
+            let activeSheetIdx = 0;
+            let pollTimer = null;
+
+            const esc = (s) => String(s || "").replace(/[&<>"']/g, (m) => ({
+                "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+            }[m]));
+
+            const n = (v, fb = 0) => {
+                const x = parseFloat(v);
+                return (isNaN(x) || !isFinite(x)) ? fb : x;
+            };
+
+            const r2 = (v) => Math.round((n(v) + Number.EPSILON) * 100) / 100;
+            const r3 = (v) => Math.round((n(v) + Number.EPSILON) * 1000) / 1000;
+
+            const fmtDate = (d) => {
+                if (!d) return "-";
+                const p = String(d).split("-");
+                return (p.length === 3 && p[0].length === 4) ? `${p[2]}-${p[1]}-${p[0]}` : d;
+            };
+
+            const showErr = (msg) => {
+                const el = document.getElementById("k-login-err");
+                if (!el) return;
+                el.textContent = msg;
+                el.style.display = msg ? "block" : "none";
+            };
+
+            const calcTotals = (sh) => {
+                const rows = Array.isArray(sh?.rows) ? sh.rows : [];
+                let saree = 0, lott = 0, paid = 0, netB = 0, retB = 0, netZ = 0, retZ = 0;
+                rows.forEach((r) => {
+                    if (!r) return;
+                    saree += n(r.saree);
+                    lott += n(r.lott);
+                    paid += n(r.paid);
+                    netB += n(r.netBana);
+                    retB += n(r.retBana);
+                    netZ += n(r.netZari);
+                    retZ += n(r.retZari);
+                });
+
+                const netSaree = Math.max(0, saree - lott);
+                const rateBani = sh?.rateBani !== undefined ? n(sh.rateBani, 240) : 240;
+                const grossBani = netSaree * rateBani;
+                const pichlaBani = n(sh?.pichlaBani);
+                const remainingAmt = (grossBani + pichlaBani) - paid;
+
+                const rateBana = sh?.rateBana !== undefined ? n(sh.rateBana, 0.311) : 0.311;
+                const banaCons = saree * rateBana;
+                const remainingBana = (n(sh?.pichlaBana) + netB) - (retB + banaCons + n(sh?.banaWaste));
+
+                const rateZari = sh?.rateZari !== undefined ? n(sh.rateZari, 0.110) : 0.110;
+                const zariCons = saree * rateZari;
+                const remainingZari = (n(sh?.pichlaZari) + netZ) - (retZ + zariCons + n(sh?.zariWaste));
+
+                return {
+                    totSaree: saree, totLott: lott, netSaree,
+                    rateBani, grossBani: r2(grossBani), pichlaBani: r2(pichlaBani), totPaid: r2(paid), remainingAmt: r2(remainingAmt),
+                    rateBana, totBana: r3(netB), retBana: r3(retB), banaCons: r3(banaCons), banaWaste: r3(sh?.banaWaste), remainingBana: r3(remainingBana),
+                    rateZari, totZari: r3(netZ), retZari: r3(retZ), zariCons: r3(zariCons), zariWaste: r3(sh?.zariWaste), remainingZari: r3(remainingZari)
+                };
+            };
+
+            const renderHeader = () => {
+                if (!workerInfo) return;
+                document.getElementById("p-name").textContent = `🧵 ${workerInfo.name || "Kariger"}`;
+                const sTxt = workerInfo.saree ? ` • 🥻 ${workerInfo.saree}` : "";
+                document.getElementById("p-meta").textContent = `${workerInfo.firm_name || "Simplicity ERP"}${sTxt} • 📱 ${workerInfo.mobile || ""}`;
+            };
+
+            const renderPortal = () => {
+                const tabsEl = document.getElementById("sheet-tabs");
+                const contentEl = document.getElementById("sheet-content");
+                if (!tabsEl || !contentEl) return;
+
+                if (!allSheets.length) {
+                    tabsEl.innerHTML = "";
+                    contentEl.innerHTML = `<div class="empty-state">Abhi aapke khate me koi Tani Sheet nahi hai.</div>`;
+                    return;
+                }
+
+                if (activeSheetIdx >= allSheets.length) activeSheetIdx = allSheets.length - 1;
+                if (activeSheetIdx < 0) activeSheetIdx = 0;
+
+                tabsEl.innerHTML = allSheets.map((sh, idx) =>
+                    `<button type="button" class="tab-pill ${idx === activeSheetIdx ? 'active' : ''}" onclick="selectSheet(${idx})">${esc(sh.title || `Tani ${idx + 1}`)}</button>`
+                ).join("");
+
+                const sh = allSheets[activeSheetIdx];
+                const c = calcTotals(sh);
+                const rows = Array.isArray(sh.rows) ? [...sh.rows].reverse() : [];
+                const colors = Array.isArray(sh.colors) ? sh.colors.filter(Boolean) : [];
+                const targetPcs = n(sh.taniPcs, 72);
+
+                const colorsHtml = colors.length
+                    ? `<div class="colors-wrap">${colors.map((col, i) => `<span class="color-chip">${i + 1}. ${esc(col)}</span>`).join("")}</div>`
+                    : "";
+
+                const rowsHtml = rows.length
+                    ? rows.map((r) => `
+                        <div class="row-card">
+                            <div class="row-head">
+                                <span class="row-date">📅 ${esc(fmtDate(r.date))}</span>
+                                ${n(r.paid) > 0 ? `<span class="row-paid">+ ₹ ${r2(r.paid)} Mila</span>` : `<span style="font-size:11.5px; color:#64748b; font-weight:700;">Entry</span>`}
+                            </div>
+                            <div class="row-grid">
+                                <div>🧶 <strong>Bana Diya:</strong> ${n(r.netBana) > 0 ? `${r3(r.netBana)} Kg` : '-'}</div>
+                                <div>✨ <strong>Zari Diya:</strong> ${n(r.netZari) > 0 ? `${r3(r.netZari)} Kg` : '-'}</div>
+                                <div>🥻 <strong>Saree Jama:</strong> ${n(r.saree)} Pcs</div>
+                                <div>⚠️ <strong>Lott:</strong> <span style="color:#dc2626; font-weight:800;">${n(r.lott)} Pcs</span></div>
+                                ${n(r.retBana) > 0 ? `<div>↩️ <strong>Wapas Bana:</strong> ${r3(r.retBana)} Kg</div>` : ""}
+                                ${n(r.retZari) > 0 ? `<div>↩️ <strong>Wapas Zari:</strong> ${r3(r.retZari)} Kg</div>` : ""}
+                            </div>
+                        </div>`).join("")
+                    : `<div class="empty-state">Is Tani me abhi koi len-den ki entry nahi hui hai.</div>`;
+
+                contentEl.innerHTML = `
+                    <div class="cards-grid">
+                        <div class="card card-money">
+                            <small>💰 BAAKI MAZDOORI</small>
+                            <strong style="color:${c.remainingAmt >= 0 ? '#15803d' : '#dc2626'};">₹ ${c.remainingAmt}</strong>
+                            <div class="sub-line">Bani: ₹${c.grossBani} | Mila: ₹${c.totPaid}</div>
+                        </div>
+                        <div class="card card-saree">
+                            <small>🥻 SAREE JAMA (${esc(sh.title || '')})</small>
+                            <strong style="color:#1d4ed8;">${c.totSaree} / ${targetPcs} Pcs</strong>
+                            <div class="sub-line">Net: ${c.netSaree} | Lott: ${c.totLott}</div>
+                        </div>
+                        <div class="card card-bana">
+                            <small>🧶 BAAKI BANA</small>
+                            <strong style="color:#b45309;">${c.remainingBana} Kg</strong>
+                            <div class="sub-line">Diya: ${c.totBana} Kg | Khapat: ${c.banaCons} Kg</div>
+                        </div>
+                        <div class="card card-zari">
+                            <small>✨ BAAKI ZARI</small>
+                            <strong style="color:#c2410c;">${c.remainingZari} Kg</strong>
+                            <div class="sub-line">Diya: ${c.totZari} Kg | Khapat: ${c.zariCons} Kg</div>
+                        </div>
+                    </div>
+
+                    <div class="info-box">
+                        <div><strong>⚙️ Sancha / Rangi:</strong> ${esc(sh.taniSancha || '-')} &nbsp;|&nbsp; <strong>⚖️ Tani Wazan:</strong> ${n(sh.taniWazan) > 0 ? `${n(sh.taniWazan)} Kg` : '-'}</div>
+                        <div><strong>💵 Bani Rate:</strong> ₹${c.rateBani}/Pc &nbsp;|&nbsp; <strong>🧶 Bana:</strong> ${esc(sh.banaItem || '-')} &nbsp;|&nbsp; <strong>✨ Zari:</strong> ${esc(sh.zariItem || '-')}</div>
+                        ${sh.note ? `<div style="color:#475569; margin-top:4px;">📝 ${esc(sh.note)}</div>` : ""}
+                        ${colorsHtml}
+                    </div>
+
+                    <div class="section-title">📋 Date-Wise Len-Den (${rows.length} Entries)</div>
+                    ${rowsHtml}
+
+                    <div class="calc-box">
+                        <div style="font-weight:800; margin-bottom:6px; color:#0f172a;">🧮 Mazdoori ka Poora Hisab</div>
+                        <div class="calc-row"><span>Net Saree (${c.netSaree} × ₹${c.rateBani})</span><span>₹ ${c.grossBani}</span></div>
+                        <div class="calc-row"><span>Pichla Baaki</span><span>+ ₹ ${c.pichlaBani}</span></div>
+                        <div class="calc-row"><span>Kul Paisa Mila (Paid)</span><span style="color:#dc2626;">- ₹ ${c.totPaid}</span></div>
+                        <div class="calc-row"><span>Antim Baaki Mazdoori</span><span style="color:#15803d;">₹ ${c.remainingAmt}</span></div>
+                    </div>
+                `;
+            };
+
+            window.selectSheet = (idx) => {
+                activeSheetIdx = idx;
+                renderPortal();
+            };
+
+            window.doKarigerLogin = async () => {
+                const mob = String(document.getElementById("k-mobile")?.value || "").replace(/[^0-9]/g, "");
+                const pin = String(document.getElementById("k-pin")?.value || "").replace(/[^0-9]/g, "").slice(0, 4);
+                const btn = document.getElementById("k-login-btn");
+
+                if (mob.length !== 10 || pin.length !== 4) {
+                    return showErr("Kripya 10-digit Mobile Number aur 4-digit PIN daalein!");
+                }
+
+                showErr("");
+                if (btn) { btn.disabled = true; btn.textContent = "Checking... ⏳"; }
+
+                try {
+                    const { data, error } = await sb.rpc("kariger_worker_login", {
+                        p_mobile: mob,
+                        p_pin: pin
+                    });
+                    if (btn) { btn.disabled = false; btn.textContent = "Login Karein"; }
+
+                    if (error || !data || !data.ok) {
+                        return showErr(error?.message || data?.error || "Login nahi ho paya!");
+                    }
+
+                    currentToken = data.token;
+                    workerInfo = data.worker;
+                    localStorage.setItem(TOKEN_KEY, currentToken);
+                    document.getElementById("k-pin").value = "";
+                    enterPortal();
+                } catch (err) {
+                    if (btn) { btn.disabled = false; btn.textContent = "Login Karein"; }
+                    showErr("Network error: Internet check karein.");
+                }
+            };
+
+            const enterPortal = async () => {
+                document.getElementById("login-screen").style.display = "none";
+                document.getElementById("portal-screen").style.display = "block";
+                renderHeader();
+                await refreshHisab(false, true);
+
+                if (pollTimer) clearInterval(pollTimer);
+                pollTimer = setInterval(() => {
+                    if (!document.hidden && navigator.onLine && currentToken) {
+                        refreshHisab(false, false);
+                    }
+                }, 20000);
+            };
+
+            window.doKarigerLogout = async () => {
+                if (pollTimer) clearInterval(pollTimer);
+                const tok = currentToken;
+                currentToken = "";
+                workerInfo = null;
+                allSheets = [];
+                localStorage.removeItem(TOKEN_KEY);
+                try { if (tok) await sb.rpc("kariger_worker_logout", { p_token: tok }); } catch (_) {}
+                document.getElementById("portal-screen").style.display = "none";
+                document.getElementById("login-screen").style.display = "flex";
+            };
+
+            window.refreshHisab = async (showAlertOnErr = false, jumpToLatest = false) => {
+                if (!currentToken) return;
+                try {
+                    const { data, error } = await sb.rpc("kariger_worker_get_hisab", {
+                        p_token: currentToken
+                    });
+
+                    if (error) {
+                        if (showAlertOnErr) alert("Network error: " + error.message);
+                        return;
+                    }
+                    if (!data || !data.ok) {
+                        if (data && data.auth_error) {
+                            alert(data.error || "Session expire ho gaya, dubara login karein.");
+                            doKarigerLogout();
+                        } else if (showAlertOnErr) {
+                            alert(data?.error || "Hisab load nahi ho paya.");
+                        }
+                        return;
+                    }
+
+                    workerInfo = data.worker || workerInfo;
+                    allSheets = Array.isArray(data.sheets) ? data.sheets : [];
+                    if (jumpToLatest && allSheets.length > 0) {
+                        activeSheetIdx = allSheets.length - 1;
+                    }
+                    renderHeader();
+                    renderPortal();
+                } catch (err) {
+                    if (showAlertOnErr) alert("Connection error!");
+                }
+            };
+
+            document.getElementById("k-pin")?.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") { e.preventDefault(); doKarigerLogin(); }
+            });
+
+            document.addEventListener("visibilitychange", () => {
+                if (!document.hidden && currentToken && navigator.onLine) {
+                    refreshHisab(false, false);
+                }
+            });
+
+            if (currentToken) enterPortal();
+
+            if ("serviceWorker" in navigator) {
+                window.addEventListener("load", () => {
+                    navigator.serviceWorker.register("sw.js", {
+                        scope: "/testing-dev/kariger-portal/"
+                    }).catch((err) => console.error("SW Error:", err));
+                });
+            }
+        })();
+    </script>
+</body>
+</html>
