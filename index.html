@@ -680,135 +680,8 @@
                 </div>
             </section>
 
-            <!-- MODULE 7: JOB WORK HUB -->
-            <section id="jobwork-section" class="module-section" style="display:none;">
-                <div class="module-header">
-                    <button type="button" class="back-btn" onclick="backToDashboard()">← Dashboard</button>
-                    <h2 style="color:#0d9488;">✂️ Job Work Hub</h2>
-                </div>
-
-                <!-- HUB 6 CARDS MENU VIEW -->
-                <div id="jw-hub-view">
-                    <div class="menu-grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:16px;">
-                        <div class="menu-btn" style="border-top:4px solid #ef4444;" onclick="openJobWorkSubSection('cutting')">
-                            <span class="icon">✂️</span>
-                            <span class="title">1. Booti Cutting</span>
-                            <span class="menu-badge" id="jw-hub-badge-cutting" style="background:#fee2e2; color:#b91c1c;">0 Kariger</span>
-                        </div>
-                        <div class="menu-btn" style="border-top:4px solid #ec4899;" onclick="openJobWorkSubSection('embroidery')">
-                            <span class="icon">🪡</span>
-                            <span class="title">2. Embroidery</span>
-                            <span class="menu-badge" id="jw-hub-badge-embroidery" style="background:#fce7f3; color:#be185d;">0 Kariger</span>
-                        </div>
-                        <div class="menu-btn" style="border-top:4px solid #0284c7;" onclick="openJobWorkSubSection('calender')">
-                            <span class="icon">🎛️</span>
-                            <span class="title">3. Calender</span>
-                            <span class="menu-badge" id="jw-hub-badge-calender" style="background:#e0f2fe; color:#0369a1;">0 Kariger</span>
-                        </div>
-                        <div class="menu-btn" style="border-top:4px solid #10b981;" onclick="openJobWorkSubSection('dukan')">
-                            <span class="icon">🏪</span>
-                            <span class="title">4. Dukan Bheja</span>
-                            <span class="menu-badge" id="jw-hub-badge-dukan" style="background:#d1fae5; color:#047857;">0 Pcs Bheje</span>
-                        </div>
-                        <div class="menu-btn" style="border-top:4px solid #8b5cf6;" onclick="openJobWorkSubSection('billing')">
-                            <span class="icon">💳</span>
-                            <span class="title">5. Bills & Hisab</span>
-                            <span class="menu-badge" id="jw-hub-badge-billing" style="background:#ede9fe; color:#6d28d9;">Baki: ₹ 0</span>
-                        </div>
-                        <div class="menu-btn" style="border-top:4px solid #f59e0b;" onclick="openJobWorkSubSection('movement')">
-                            <span class="icon">🔄</span>
-                            <span class="title">6. Tracking Day-Book</span>
-                            <span class="menu-badge" style="background:#fef3c7; color:#b45309;">Live Day-Book</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- WORKERS LIST VIEW -->
-                <div id="jw-workers-view" style="display:none;">
-                    <div style="display:flex; justify-content:space-between; margin-bottom:12px; align-items:center;">
-                        <button type="button" class="back-btn" onclick="showJobWorkHub()">← Hub Menu</button>
-                        <h3 id="jw-workers-title" style="color:#0f766e;">Workers Directory</h3>
-                        <button type="button" class="add-btn" onclick="toggleJobWorkerForm()"><span id="jw-add-worker-btn-text">+ Naya Kariger</span></button>
-                    </div>
-                    <div class="table-responsive">
-                        <table>
-                            <thead>
-                                <tr style="background:#0d9488; color:white;">
-                                    <th>Tarikh</th><th>Naam</th><th>Pata</th><th>Mobile</th><th>Status</th><th style="text-align:center;">Action</th>
-                                </tr>
-                            </thead>
-                            <tbody id="jw-workers-table-body"></tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <!-- WORKER MONTHLY KHATA SHEET VIEW -->
-                <div id="jw-sheet-view" style="display:none;">
-                    <div style="display:flex; justify-content:space-between; margin-bottom:12px; align-items:center;">
-                        <button type="button" class="back-btn" onclick="closeJobWorkerSheet()">← Workers List</button>
-                        <h3 id="jw-sheet-banner-name" style="color:#1e3a8a;">Worker Khata Sheet</h3>
-                    </div>
-                    <div id="jw-month-tabs-container" class="sheet-tabs-bar" style="margin-bottom:12px;"></div>
-                    <div class="table-responsive">
-                        <table>
-                            <thead>
-                                <tr style="background:#1e3a8a; color:white; font-size:12px;">
-                                    <th>TARIKH</th><th>GAYI SAREE</th><th>DETAIL</th><th>WAPAS AAYI</th><th>DETAIL</th><th>DAMAGE</th><th>FINE (₹)</th><th style="text-align:center;">ACTION</th>
-                                </tr>
-                            </thead>
-                            <tbody id="jw-sheet-rows-body"></tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <!-- DUKAN BHEJA VIEW -->
-                <div id="jw-dukan-view" style="display:none;">
-                    <div style="display:flex; justify-content:space-between; margin-bottom:12px; align-items:center;">
-                        <button type="button" class="back-btn" onclick="showJobWorkHub()">← Hub Menu</button>
-                        <h3 style="color:#15803d;">🏪 Dukan Bheja (Final Out Register)</h3>
-                    </div>
-                    <div class="table-responsive">
-                        <table>
-                            <thead>
-                                <tr style="background:#1e3a8a; color:white;">
-                                    <th>Tarikh</th><th>Saree Design</th><th>Kariger (Maker)</th><th>Pcs Bheje</th><th>Note / Receiver</th><th style="text-align:center;">Action</th>
-                                </tr>
-                            </thead>
-                            <tbody id="jw-dukan-table-body"></tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <!-- JOB WORK BILLING VIEW -->
-                <div id="jw-billing-view" style="display:none;">
-                    <div style="display:flex; justify-content:space-between; margin-bottom:12px; align-items:center;">
-                        <button type="button" class="back-btn" onclick="showJobWorkHub()">← Hub Menu</button>
-                        <h3 style="color:#7c3aed;">💳 Job Work Bills & Hisab</h3>
-                        <button type="button" class="add-btn" style="background:#7c3aed;" onclick="toggleAddJwBillForm()">+ Naya Bill</button>
-                    </div>
-                    <div class="table-responsive">
-                        <table>
-                            <thead id="jw-bills-table-thead"></thead>
-                            <tbody id="jw-bills-table-tbody"></tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <!-- JOB WORK DAY-BOOK VIEW -->
-                <div id="jw-movement-view" style="display:none;">
-                    <div style="display:flex; justify-content:space-between; margin-bottom:12px; align-items:center;">
-                        <button type="button" class="back-btn" onclick="showJobWorkHub()">← Hub Menu</button>
-                        <h3 style="color:#d97706;">🔄 Job Work Day-Book & Tracking</h3>
-                    </div>
-                    <div class="table-responsive">
-                        <table>
-                            <thead id="jw-mov-table-thead"></thead>
-                            <tbody id="jw-mov-table-tbody"></tbody>
-                            <tfoot id="jw-mov-table-tfoot"></tfoot>
-                        </table>
-                    </div>
-                </div>
-            </section>
+            <!-- MODULE 7: JOB WORK HUB (Loaded cleanly from jobwork-ui/jobwork-forms.js) -->
+            <section id="jobwork-section" class="module-section" style="display:none;"></section>
 
             <!-- MODULE 14: TANI ORDER & RANGAI REGISTER SECTION -->
             <section id="tani-order-section" class="module-section" style="display:none;">
@@ -1036,6 +909,7 @@
     <script src="calender/calender-ui.js?v=3.2"></script>
     <script src="dukan/dukan.js?v=3.2"></script>
     <script src="payment/payment.js?v=3.2"></script>
+    <script src="jobwork-ui/jobwork-forms.js?v=3.2"></script>
     <script src="jobwork.js?v=3.2"></script>
     <script src="daybook/daybook.js?v=3.2"></script>
 
