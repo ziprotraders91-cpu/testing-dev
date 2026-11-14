@@ -243,7 +243,6 @@
                     flex: 1;
                     -webkit-overflow-scrolling: touch;
                 }
-                /* Computer par Order Details chhota (0.9fr) aur Color Matching bada (1.35fr) */
                 .texp-main-grid {
                     display: grid;
                     grid-template-columns: 0.9fr 1.35fr;
@@ -477,15 +476,15 @@
                                 </div>
                             </div>
 
-                            <!-- Row 4: Meter, Pcs & Paai -->
+                            <!-- Row 4: Meter, Pcs & Paai (No Scroll / Spinner) -->
                             <div class="texp-row texp-row-4">
                                 <div class="texp-field">
                                     <label style="color:#374151;">मीटर (Length):</label>
-                                    <input type="number" step="0.01" id="texp-meter" data-next="texp-pcs" placeholder="" style="border:1.5px solid #cbd5e1; font-size:13px; font-weight:bold; text-align:center; background:#ffffff;">
+                                    <input type="text" inputmode="decimal" id="texp-meter" data-next="texp-pcs" placeholder="" autocomplete="off" oninput="this.value=this.value.replace(/[^0-9.]/g,'').replace(/(\..*)\./g,'$1')" style="border:1.5px solid #cbd5e1; font-size:13px; font-weight:bold; text-align:center; background:#ffffff;">
                                 </div>
                                 <div class="texp-field">
                                     <label style="color:#dc2626;">عدد (Saree Pcs):</label>
-                                    <input type="number" id="texp-pcs" data-next="texp-paai" placeholder="" style="border:2px solid #dc2626; font-size:14px; font-weight:900; color:#dc2626; text-align:center; background:#ffffff;">
+                                    <input type="text" inputmode="numeric" id="texp-pcs" data-next="texp-paai" placeholder="" autocomplete="off" oninput="this.value=this.value.replace(/[^0-9]/g,'')" style="border:2px solid #dc2626; font-size:14px; font-weight:900; color:#dc2626; text-align:center; background:#ffffff;">
                                 </div>
                                 <div class="texp-field">
                                     <label style="color:#374151;">پائی (Density):</label>
