@@ -149,7 +149,7 @@
     };
 
     /* ========================================================================
-       3. OPEN TANI EXPRESS MODAL (BADA 940px COUNTER)
+       3. OPEN TANI EXPRESS MODAL (BADA 940px COUNTER - RESPONSIVE)
        ======================================================================== */
     window.openTaniExpressModal = () => {
         const existing = document.getElementById('master-tani-express-modal');
@@ -164,126 +164,340 @@
             colorRowsHtml += `
             <tr style="border-bottom:1px solid #e2e8f0;">
                 <td style="text-align:center; font-weight:900; color:#b45309; background:#fffbeb; padding:5px 4px; font-size:12px;">${i}</td>
-                <td style="padding:4px;"><input type="text" id="texp-col-saree-${i}" list="texp-colors-dl" placeholder="" data-next="texp-col-border-${i}" style="width:100%; box-sizing:border-box; padding:6px 8px; border:1px solid #cbd5e1; border-radius:5px; font-weight:bold; font-size:12px;"></td>
-                <td style="padding:4px;"><input type="text" id="texp-col-border-${i}" list="texp-colors-dl" placeholder="" data-next="texp-col-bana-${i}" style="width:100%; box-sizing:border-box; padding:6px 8px; border:1px solid #cbd5e1; border-radius:5px; font-weight:bold; font-size:12px;"></td>
-                <td style="padding:4px;"><input type="text" id="texp-col-bana-${i}" list="texp-colors-dl" placeholder="" data-next="${i === 8 ? 'texp-submit-btn' : `texp-col-saree-${i + 1}`}" style="width:100%; box-sizing:border-box; padding:6px 8px; border:1px solid #cbd5e1; border-radius:5px; font-weight:bold; font-size:12px;"></td>
+                <td style="padding:4px;"><input type="text" id="texp-col-saree-${i}" list="texp-colors-dl" placeholder="" data-next="texp-col-border-${i}"></td>
+                <td style="padding:4px;"><input type="text" id="texp-col-border-${i}" list="texp-colors-dl" placeholder="" data-next="texp-col-bana-${i}"></td>
+                <td style="padding:4px;"><input type="text" id="texp-col-bana-${i}" list="texp-colors-dl" placeholder="" data-next="${i === 8 ? 'texp-submit-btn' : `texp-col-saree-${i + 1}`}"></td>
             </tr>`;
         }
 
         const modalHtml = `
-        <div id="master-tani-express-modal" style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.85); z-index:999999; display:flex; align-items:center; justify-content:center; padding:10px; box-sizing:border-box;">
-            <div style="background:#ffffff; width:100%; max-width:940px; border-radius:14px; box-shadow:0 25px 50px -12px rgba(0,0,0,0.65); overflow:hidden; font-family:sans-serif; max-height:97vh; display:flex; flex-direction:column;">
+        <div id="master-tani-express-modal" class="texp-overlay">
+            <style>
+                .texp-overlay {
+                    position: fixed;
+                    inset: 0;
+                    width: 100%;
+                    height: 100%;
+                    background: rgba(15, 23, 42, 0.85);
+                    z-index: 999999;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 10px;
+                    box-sizing: border-box;
+                }
+                .texp-dialog {
+                    background: #ffffff;
+                    width: 100%;
+                    max-width: 940px;
+                    border-radius: 14px;
+                    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.65);
+                    overflow: hidden;
+                    font-family: sans-serif;
+                    max-height: 96vh;
+                    max-height: 96dvh;
+                    display: flex;
+                    flex-direction: column;
+                }
+                .texp-header {
+                    background: #0f172a;
+                    color: #ffffff;
+                    padding: 12px 20px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    gap: 10px;
+                    flex-shrink: 0;
+                }
+                .texp-header-left {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    min-width: 0;
+                }
+                .texp-header-left h3 {
+                    margin: 0;
+                    font-size: 17px;
+                    font-weight: 800;
+                    letter-spacing: 0.4px;
+                    line-height: 1.3;
+                }
+                .texp-header-right {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    flex-shrink: 0;
+                }
+                .texp-shortcut-badge {
+                    font-size: 12px;
+                    background: #1e293b;
+                    color: #38bdf8;
+                    padding: 4px 10px;
+                    border-radius: 6px;
+                    font-weight: bold;
+                    white-space: nowrap;
+                }
+                .texp-body {
+                    padding: 16px 20px;
+                    overflow-y: auto;
+                    flex: 1;
+                    -webkit-overflow-scrolling: touch;
+                }
+                .texp-main-grid {
+                    display: grid;
+                    grid-template-columns: 1.2fr 1fr;
+                    gap: 16px;
+                    align-items: start;
+                }
+                .texp-card-left {
+                    background: #f8fafc;
+                    border: 1.5px solid #cbd5e1;
+                    border-radius: 12px;
+                    padding: 16px;
+                    min-width: 0;
+                    box-sizing: border-box;
+                }
+                .texp-card-right {
+                    background: #ffffff;
+                    border: 1.5px solid #cbd5e1;
+                    border-radius: 12px;
+                    padding: 16px;
+                    min-width: 0;
+                    box-sizing: border-box;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: space-between;
+                }
+                .texp-row {
+                    display: grid;
+                    gap: 10px;
+                    margin-bottom: 11px;
+                    align-items: end;
+                }
+                .texp-row-1 { grid-template-columns: 115px 1fr; }
+                .texp-row-2 { grid-template-columns: 1.3fr 1fr; }
+                .texp-row-3 { grid-template-columns: 1fr 1fr; }
+                .texp-row-4 { grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+                .texp-row-5 { grid-template-columns: 1fr 1fr; margin-bottom: 0; }
+                .texp-field {
+                    min-width: 0;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: flex-end;
+                }
+                .texp-field label {
+                    font-size: 11.5px;
+                    font-weight: bold;
+                    display: block;
+                    margin-bottom: 4px;
+                    line-height: 1.35;
+                }
+                .texp-card-left input {
+                    width: 100%;
+                    height: 40px;
+                    box-sizing: border-box;
+                    padding: 6px 10px;
+                    border-radius: 6px;
+                    margin: 0;
+                }
+                .texp-table-wrap {
+                    border: 1.5px solid #cbd5e1;
+                    border-radius: 8px;
+                    overflow-x: auto;
+                    margin-bottom: 12px;
+                }
+                .texp-table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    font-size: 11px;
+                    table-layout: fixed;
+                }
+                .texp-table input {
+                    width: 100%;
+                    min-width: 0;
+                    height: 32px;
+                    box-sizing: border-box;
+                    padding: 4px 6px;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 5px;
+                    font-weight: bold;
+                    font-size: 12px;
+                }
+                .texp-contrast-strip {
+                    background: #f8fafc;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 8px;
+                    padding: 8px 10px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    flex-wrap: wrap;
+                    gap: 8px 12px;
+                    font-size: 11.5px;
+                    font-weight: bold;
+                    color: #334155;
+                }
+                .texp-footer {
+                    background: #f1f5f9;
+                    padding: 12px 20px;
+                    border-top: 1.5px solid #cbd5e1;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    flex-wrap: wrap;
+                    gap: 10px;
+                    flex-shrink: 0;
+                }
+                .texp-footer-actions {
+                    display: flex;
+                    gap: 10px;
+                    flex-wrap: wrap;
+                    align-items: center;
+                }
+                @media (max-width: 820px) {
+                    .texp-overlay { padding: 6px; }
+                    .texp-dialog { max-height: 97vh; max-height: 97dvh; border-radius: 12px; }
+                    .texp-header { padding: 10px 14px; }
+                    .texp-header-left h3 { font-size: 14.5px; }
+                    .texp-shortcut-badge { display: none; }
+                    .texp-body { padding: 12px; }
+                    .texp-main-grid {
+                        grid-template-columns: 1fr;
+                        gap: 12px;
+                    }
+                    .texp-card-left, .texp-card-right { padding: 12px; }
+                    .texp-footer { padding: 10px 12px; }
+                    .texp-footer-actions {
+                        display: grid;
+                        grid-template-columns: 1fr 1fr;
+                        gap: 8px;
+                        width: 100%;
+                    }
+                    .texp-footer-actions button {
+                        width: 100%;
+                        justify-content: center;
+                        padding: 10px 8px !important;
+                        font-size: 12.5px !important;
+                        text-align: center;
+                    }
+                }
+                @media (max-width: 420px) {
+                    .texp-row-2 { grid-template-columns: 1fr; }
+                }
+            </style>
+
+            <div class="texp-dialog">
                 
                 <!-- Modal Top Header -->
-                <div style="background:#0f172a; color:#fff; padding:12px 20px; display:flex; justify-content:space-between; align-items:center;">
-                    <div style="display:flex; align-items:center; gap:10px;">
-                        <span style="font-size:24px;">⚡</span>
-                        <h3 style="margin:0; font-size:17px; font-weight:800; letter-spacing:0.5px;">TANI ORDER EXPRESS • तानी आर्डर व रंगाई काउन्टर</h3>
+                <div class="texp-header">
+                    <div class="texp-header-left">
+                        <span style="font-size:22px; flex-shrink:0;">⚡</span>
+                        <h3>TANI ORDER EXPRESS • तानी आर्डर व रंगाई काउन्टर</h3>
                     </div>
-                    <div style="display:flex; align-items:center; gap:8px;">
-                        <span style="font-size:12px; background:#1e293b; color:#38bdf8; padding:4px 10px; border-radius:6px; font-weight:bold;">[Enter] Next Box | [Alt+P] A6 Print | [Alt+W] WhatsApp | [Esc] Close</span>
-                        <button type="button" onclick="closeTaniExpressModal()" style="background:transparent; border:none; color:#fff; font-size:26px; cursor:pointer; line-height:1;">&times;</button>
+                    <div class="texp-header-right">
+                        <span class="texp-shortcut-badge">[Enter] Next Box | [Alt+P] A6 Print | [Alt+W] WhatsApp | [Esc] Close</span>
+                        <button type="button" onclick="closeTaniExpressModal()" style="background:transparent; border:none; color:#fff; font-size:26px; cursor:pointer; line-height:1; padding:0 4px;">&times;</button>
                     </div>
                 </div>
 
                 <!-- Form Body -->
-                <div style="padding:16px 20px; overflow-y:auto; flex:1;">
+                <div class="texp-body">
                     
                     <!-- 2-Column Balanced Counter Grid -->
-                    <div style="display:grid; grid-template-columns:1.2fr 1fr; gap:16px;">
+                    <div class="texp-main-grid">
                         
                         <!-- COLUMN 1: PARCHI SPECS, WEAVER & MEASUREMENTS -->
-                        <div style="background:#f8fafc; border:1.5px solid #cbd5e1; border-radius:12px; padding:16px;">
-                            <h4 style="margin:0 0 12px 0; color:#b45309; font-size:14px; border-bottom:1.5px solid #cbd5e1; padding-bottom:6px; display:flex; justify-content:space-between; align-items:center;">
+                        <div class="texp-card-left">
+                            <h4 style="margin:0 0 12px 0; color:#b45309; font-size:14px; border-bottom:1.5px solid #cbd5e1; padding-bottom:6px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
                                 <span>📜 तानी पर्ची विवरण (Order Details)</span>
                                 <span style="background:#fef3c7; color:#92400e; padding:3px 8px; border-radius:6px; font-size:12px; font-weight:900;">Parchi No: #${nextOrderNo}</span>
                             </h4>
 
                             <!-- Row 1: Order No & Date -->
-                            <div style="display:grid; grid-template-columns:120px 1fr; gap:10px; margin-bottom:10px;">
-                                <div>
-                                    <label style="font-size:11px; font-weight:bold; color:#475569; display:block; margin-bottom:3px;">पर्ची नं (Locked):</label>
-                                    <input type="text" id="texp-order-no" value="${nextOrderNo}" readonly style="width:100%; box-sizing:border-box; padding:9px; border:1.5px solid #fde68a; border-radius:6px; font-size:15px; font-weight:900; background:#fef3c7; color:#b45309; text-align:center; cursor:not-allowed;">
+                            <div class="texp-row texp-row-1">
+                                <div class="texp-field">
+                                    <label style="color:#475569;">पर्ची नं (Locked):</label>
+                                    <input type="text" id="texp-order-no" value="${nextOrderNo}" readonly style="border:1.5px solid #fde68a; font-size:15px; font-weight:900; background:#fef3c7; color:#b45309; text-align:center; cursor:not-allowed;">
                                 </div>
-                                <div>
-                                    <label style="font-size:11px; font-weight:bold; color:#475569; display:block; margin-bottom:3px;">तारीख (Date):</label>
-                                    <input type="date" id="texp-order-date" value="${today}" data-next="texp-kariger" style="width:100%; box-sizing:border-box; padding:9px; border:1.5px solid #cbd5e1; border-radius:6px; font-size:13px; font-weight:bold; background:#ffffff;">
+                                <div class="texp-field">
+                                    <label style="color:#475569;">तारीख (Date):</label>
+                                    <input type="date" id="texp-order-date" value="${today}" data-next="texp-kariger" style="border:1.5px solid #cbd5e1; font-size:13px; font-weight:bold; background:#ffffff;">
                                 </div>
                             </div>
 
                             <!-- Row 2: Kariger Name (Strict Master) & Mohalla (Auto-Fill) -->
-                            <div style="display:grid; grid-template-columns:1.3fr 1fr; gap:10px; margin-bottom:10px;">
-                                <div>
-                                    <label style="font-size:11px; font-weight:bold; color:#1e3a8a; display:block; margin-bottom:3px;">कारीगर का नाम (Master Sheet):</label>
-                                    <input type="text" id="texp-kariger" list="texp-karigers-dl" data-next="texp-sancha" placeholder="" autocomplete="off" style="width:100%; box-sizing:border-box; padding:10px; border:2px solid #2563eb; border-radius:6px; font-size:14px; font-weight:bold; background:#eff6ff;">
+                            <div class="texp-row texp-row-2">
+                                <div class="texp-field">
+                                    <label style="color:#1e3a8a;">कारीगर का नाम (Master Sheet):</label>
+                                    <input type="text" id="texp-kariger" list="texp-karigers-dl" data-next="texp-sancha" placeholder="" autocomplete="off" style="border:2px solid #2563eb; font-size:14px; font-weight:bold; background:#eff6ff;">
                                     <datalist id="texp-karigers-dl">${karigerOpts}</datalist>
                                 </div>
-                                <div>
-                                    <label style="font-size:11px; font-weight:bold; color:#475569; display:block; margin-bottom:3px;">محلہ / پتہ (Auto-Filled):</label>
-                                    <input type="text" id="texp-mohalla" data-next="texp-sancha" placeholder="" style="width:100%; box-sizing:border-box; padding:10px; border:1.5px solid #cbd5e1; border-radius:6px; font-size:13px; font-weight:bold; background:#ffffff;">
+                                <div class="texp-field">
+                                    <label style="color:#475569;">محلہ / پتہ (Auto-Filled):</label>
+                                    <input type="text" id="texp-mohalla" data-next="texp-sancha" placeholder="" style="border:1.5px solid #cbd5e1; font-size:13px; font-weight:bold; background:#ffffff;">
                                 </div>
                             </div>
 
                             <!-- Row 3: Sancha & Rangai Wala -->
-                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
-                                <div>
-                                    <label style="font-size:11px; font-weight:bold; color:#0284c7; display:block; margin-bottom:3px;">سانچہ (Sancha Maker/No):</label>
-                                    <input type="text" id="texp-sancha" list="texp-sancha-dl" data-next="texp-rangi" placeholder="" autocomplete="off" style="width:100%; box-sizing:border-box; padding:9px; border:1.5px solid #cbd5e1; border-radius:6px; font-size:13px; font-weight:bold;">
+                            <div class="texp-row texp-row-3">
+                                <div class="texp-field">
+                                    <label style="color:#0284c7;">سانچہ (Sancha Maker/No):</label>
+                                    <input type="text" id="texp-sancha" list="texp-sancha-dl" data-next="texp-rangi" placeholder="" autocomplete="off" style="border:1.5px solid #cbd5e1; font-size:13px; font-weight:bold; background:#ffffff;">
                                     <datalist id="texp-sancha-dl">${sanchaOpts}</datalist>
                                 </div>
-                                <div>
-                                    <label style="font-size:11px; font-weight:bold; color:#7c3aed; display:block; margin-bottom:3px;">رنگی (Dyer Wala):</label>
-                                    <input type="text" id="texp-rangi" list="texp-rangi-dl" data-next="texp-meter" placeholder="" autocomplete="off" style="width:100%; box-sizing:border-box; padding:9px; border:1.5px solid #cbd5e1; border-radius:6px; font-size:13px; font-weight:bold;">
+                                <div class="texp-field">
+                                    <label style="color:#7c3aed;">رنگی (Dyer Wala):</label>
+                                    <input type="text" id="texp-rangi" list="texp-rangi-dl" data-next="texp-meter" placeholder="" autocomplete="off" style="border:1.5px solid #cbd5e1; font-size:13px; font-weight:bold; background:#ffffff;">
                                     <datalist id="texp-rangi-dl">${rangiOpts}</datalist>
                                 </div>
                             </div>
 
                             <!-- Row 4: Meter, Pcs & Paai -->
-                            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:10px;">
-                                <div>
-                                    <label style="font-size:11px; font-weight:bold; color:#374151; display:block; margin-bottom:3px;">मीटर (Length):</label>
-                                    <input type="number" step="0.01" id="texp-meter" data-next="texp-pcs" placeholder="" style="width:100%; box-sizing:border-box; padding:9px; border:1.5px solid #cbd5e1; border-radius:6px; font-size:14px; font-weight:bold; text-align:center;">
+                            <div class="texp-row texp-row-4">
+                                <div class="texp-field">
+                                    <label style="color:#374151;">मीटर (Length):</label>
+                                    <input type="number" step="0.01" id="texp-meter" data-next="texp-pcs" placeholder="" style="border:1.5px solid #cbd5e1; font-size:14px; font-weight:bold; text-align:center; background:#ffffff;">
                                 </div>
-                                <div>
-                                    <label style="font-size:11px; font-weight:bold; color:#dc2626; display:block; margin-bottom:3px;">عدد (Saree Pcs):</label>
-                                    <input type="number" id="texp-pcs" data-next="texp-paai" placeholder="" style="width:100%; box-sizing:border-box; padding:9px; border:2px solid #dc2626; border-radius:6px; font-size:16px; font-weight:900; color:#dc2626; text-align:center;">
+                                <div class="texp-field">
+                                    <label style="color:#dc2626;">عدد (Saree Pcs):</label>
+                                    <input type="number" id="texp-pcs" data-next="texp-paai" placeholder="" style="border:2px solid #dc2626; font-size:16px; font-weight:900; color:#dc2626; text-align:center; background:#ffffff;">
                                 </div>
-                                <div>
-                                    <label style="font-size:11px; font-weight:bold; color:#374151; display:block; margin-bottom:3px;">پائی (Density):</label>
-                                    <input type="text" id="texp-paai" data-next="texp-border" placeholder="" style="width:100%; box-sizing:border-box; padding:9px; border:1.5px solid #cbd5e1; border-radius:6px; font-size:13px; font-weight:bold; text-align:center;">
+                                <div class="texp-field">
+                                    <label style="color:#374151;">پائی (Density):</label>
+                                    <input type="text" id="texp-paai" data-next="texp-border" placeholder="" style="border:1.5px solid #cbd5e1; font-size:13px; font-weight:bold; text-align:center; background:#ffffff;">
                                 </div>
                             </div>
 
                             <!-- Row 5: Border Design & Bana Spec -->
-                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-                                <div>
-                                    <label style="font-size:11px; font-weight:bold; color:#475569; display:block; margin-bottom:3px;">بارڈر (Border Design):</label>
-                                    <input type="text" id="texp-border" data-next="texp-bana" placeholder="" style="width:100%; box-sizing:border-box; padding:9px; border:1.5px solid #cbd5e1; border-radius:6px; font-size:13px; font-weight:bold;">
+                            <div class="texp-row texp-row-5">
+                                <div class="texp-field">
+                                    <label style="color:#475569;">بارڈر (Border Design):</label>
+                                    <input type="text" id="texp-border" data-next="texp-bana" placeholder="" style="border:1.5px solid #cbd5e1; font-size:13px; font-weight:bold; background:#ffffff;">
                                 </div>
-                                <div>
-                                    <label style="font-size:11px; font-weight:bold; color:#475569; display:block; margin-bottom:3px;">بانا (Bana Spec/Color):</label>
-                                    <input type="text" id="texp-bana" data-next="texp-col-saree-1" placeholder="" style="width:100%; box-sizing:border-box; padding:9px; border:1.5px solid #cbd5e1; border-radius:6px; font-size:13px; font-weight:bold;">
+                                <div class="texp-field">
+                                    <label style="color:#475569;">بانا (Bana Spec/Color):</label>
+                                    <input type="text" id="texp-bana" data-next="texp-col-saree-1" placeholder="" style="border:1.5px solid #cbd5e1; font-size:13px; font-weight:bold; background:#ffffff;">
                                 </div>
                             </div>
                         </div>
 
                         <!-- COLUMN 2: 8-COLORS MATCHING MATRIX & CONTRAST -->
-                        <div style="background:#ffffff; border:1.5px solid #cbd5e1; border-radius:12px; padding:16px; display:flex; flex-direction:column; justify-content:space-between;">
+                        <div class="texp-card-right">
                             <div>
-                                <h4 style="margin:0 0 10px 0; color:#0f766e; font-size:14px; border-bottom:1.5px solid #cbd5e1; padding-bottom:6px; display:flex; justify-content:space-between; align-items:center;">
+                                <h4 style="margin:0 0 10px 0; color:#0f766e; font-size:14px; border-bottom:1.5px solid #cbd5e1; padding-bottom:6px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
                                     <span>🎨 8-Colors Matching Table</span>
                                     <small style="color:#64748b; font-size:11px; font-weight:normal;">(Auto-Learned Memory)</small>
                                 </h4>
 
                                 <!-- 8 Rows Table -->
-                                <div style="border:1.5px solid #cbd5e1; border-radius:8px; overflow:hidden; margin-bottom:12px;">
-                                    <table style="width:100%; border-collapse:collapse; font-size:11px;">
+                                <div class="texp-table-wrap">
+                                    <table class="texp-table">
                                         <thead>
                                             <tr style="background:#0f766e; color:white; text-align:center;">
-                                                <th style="padding:6px 4px; width:30px;">#</th>
-                                                <th style="padding:6px;">ساڑی (Saree)</th>
-                                                <th style="padding:6px;">بارڈر (Border)</th>
-                                                <th style="padding:6px;">بانا (Bana)</th>
+                                                <th style="padding:6px 4px; width:28px;">#</th>
+                                                <th style="padding:6px 4px;">ساڑی (Saree)</th>
+                                                <th style="padding:6px 4px;">بارڈر (Border)</th>
+                                                <th style="padding:6px 4px;">بانا (Bana)</th>
                                             </tr>
                                         </thead>
                                         <tbody id="texp-colors-table-tbody">
@@ -296,7 +510,7 @@
                                 <datalist id="texp-colors-dl">${colorOpts}</datalist>
 
                                 <!-- Multi-Contrast Checkbox Strip -->
-                                <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px; display:flex; justify-content:space-between; align-items:center; font-size:11.5px; font-weight:bold; color:#334155;">
+                                <div class="texp-contrast-strip">
                                     <label style="display:flex; align-items:center; gap:5px; cursor:pointer;">
                                         <input type="checkbox" name="texp_contrast" value="aanchal_blouse" checked> آنچل بلاؤز
                                     </label>
@@ -314,10 +528,10 @@
                 </div>
 
                 <!-- Footer Action Bar -->
-                <div style="background:#f1f5f9; padding:12px 20px; border-top:1.5px solid #cbd5e1; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                <div class="texp-footer">
                     <div id="texp-status-msg" style="font-size:13px; font-weight:bold; color:#059669;"></div>
-                    <div style="display:flex; gap:10px;">
-                        <button type="button" id="texp-btn-close" onclick="closeTaniExpressModal()" style="background:#cbd5e1; color:#334155; border:none; padding:11px 16px; border-radius:8px; font-size:13px; font-weight:bold; cursor:pointer;">
+                    <div class="texp-footer-actions">
+                        <button type="button" id="texp-btn-close" onclick="closeTaniExpressModal()" style="background:#cbd5e1; color:#334155; border:none; padding:11px 16px; border-radius:8px; font-size:13px; font-weight:bold; cursor:pointer; display:inline-flex; align-items:center; gap:6px;">
                             ✕ [Esc] Radd
                         </button>
                         <button type="button" id="texp-btn-whatsapp" onclick="sendTaniExpressWhatsApp()" style="background:#22c55e; color:#ffffff; border:none; padding:11px 16px; border-radius:8px; font-size:13px; font-weight:bold; cursor:pointer; display:inline-flex; align-items:center; gap:6px;">
