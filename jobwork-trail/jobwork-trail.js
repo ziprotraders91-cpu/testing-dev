@@ -1,6 +1,6 @@
 /* ============================================================================
    SIMPLICITY ERP - TALLYPRIME UNIFIED JOBWORK, SAREE TRAIL, DISPATCH & BILLS
-   File: jobwork-trail/jobwork-trail.js (v3.0)
+   File: jobwork-trail/jobwork-trail.js (v3.1)
    100% Compatible with: core/storage.js, core/database.js (Supabase Row-Delta),
    core/karkhana.js, core/tally-master.js, saree_history, jobwork_workers
 ============================================================================ */
@@ -20,7 +20,7 @@
     ======================================================================== */
     let curView = 'gateway';
     let menuIdx = 0;
-    const viewCursor = Object.create(null); // Exact cursor memory per view for ESC
+    const viewCursor = Object.create(null);
 
     let activeGroupKey = 'cutting';
     let activeWorkerId = null;
@@ -34,26 +34,20 @@
     let vchAcceptOpen = false;
     let lastChallanObj = null;
 
-    // Worker Register Edit State
-    let editWorkerRowInfo = null; // { sheetId, rowId }
-
-    // Owner Report drill-down
+    let editWorkerRowInfo = null;
     let ownerWorkerId = null;
     let ownerGodamSummaryKey = null;
 
-    // Stock screen state
     let stockBucketFilter = 'all';
     let stockDetailKey = null;
     let stockInwardOpen = false;
 
-    // Create / Alter state
     let createSideIdx = 0;
     let selectedCreateGroupKey = 'cutting';
     let alterEditWorkerId = null;
     let alterEditGroupKey = null;
     let crAcceptOpen = false;
 
-    // Final Out (Dispatch) state
     let foPickStep = 'kariger';
     let foSelectedMaker = null;
     let foSelectedBatchKey = null;
@@ -63,8 +57,7 @@
     let foAcceptOpen = false;
     let editFoId = null;
 
-    // Bills & Hisab state ('bills-menu' | 'bills-new' | 'bills-pending' | 'bills-paid' | 'bill-detail')
-    let billsListMode = 'pending'; // 'pending' | 'paid'
+    let billsListMode = 'pending';
     let billSelectedWorkerId = null;
     let billWorkerItems = [];
     let billWorkerIdx = 0;
@@ -816,6 +809,7 @@
             vchPickStep = 'kariger';
             vchSelectedMaker = null;
             vchSelectedBatchKey = null;
+            vchRightIdx = 0;
 
             invalidateAllCaches(worker.id);
             toast(`✅ ${totQty + totDmg} Pcs Save ho gayi!`);
@@ -873,8 +867,8 @@
                 const avail = b ? b.pcs : 0;
                 if (diff > avail) return toast(`${it.karigar} (${it.saree}) ka Godam stock sirf ${avail} aur bacha hai!`, true);
             }
-            if (!isOut && diff > 0) {
-                if (diff > worker.pending) return toast(`Worker ke paas sirf ${worker.pending} Pcs aur pending hain!`, true);
+            if (!isOut && diff > 0 && diff > worker.pending) {
+                return toast(`Worker ke paas sirf ${worker.pending} Pcs aur pending hain!`, true);
             }
             if (isOut && diff < 0 && (-diff) > worker.pending) {
                 return toast(`Out Qty kam karne par pending minus me jayega! Pehle IN entry edit/delete karein.`, true);
@@ -1016,6 +1010,7 @@
             foPickStep = 'kariger';
             foSelectedMaker = null;
             foSelectedBatchKey = null;
+            foRightIdx = 0;
 
             invalidateAllCaches();
             if (typeof window.renderDukanTransferTable === 'function') {
@@ -1088,7 +1083,7 @@
     };
 
     /* ========================================================================
-       8. A6 THERMAL PRINT ENGINE (SLIPS, STATEMENTS, REPORTS, BILLS)
+       8. A6 THERMAL PRINT ENGINE
     ======================================================================== */
     const openA6Window = (title, bodyHtml) => {
         const pw = window.open('', '', 'width=440,height=600');
@@ -1260,7 +1255,7 @@
     };
 
     /* ========================================================================
-       9. STYLES & SHELL DOM INJECTION (COMPACT LEFT + BIG RIGHT LIST)
+       9. STYLES & SHELL DOM INJECTION
     ======================================================================== */
     const injectStyles = () => {
         const old = document.getElementById('jwt-styles');
@@ -1363,7 +1358,6 @@
             #jw-trail-section .trail-muted { font-size: 11px; color: #6b7280; font-weight: 600; }
             #jw-trail-section .trail-done { font-size: 11px; font-weight: 800; color: #065f46; }
 
-            /* COMPACT LEFT FORM + BIGGER RIGHT SIDE LIST */
             #jw-trail-section .jwt-split { display: grid; grid-template-columns: minmax(0, 0.95fr) minmax(380px, 1.05fr); }
             #jw-trail-section .jwt-pane-l { padding: 12px 14px; border-right: 1.5px solid #e5d5a7; }
             #jw-trail-section .jwt-pane-r { padding: 10px 12px; background: #fdfcf7; }
@@ -1459,7 +1453,7 @@
        10. NAVIGATION HELPERS WITH EXACT CURSOR RESTORE
     ======================================================================== */
     window.jwtGo = (view, preserveCursor = false) => {
-        if (curView) viewCursor[curView] = menuIdx; // Save current row before leaving
+        if (curView) viewCursor[curView] = menuIdx;
         curView = view;
         menuIdx = preserveCursor ? (viewCursor[view] || 0) : 0;
         armNavGuard();
@@ -1500,7 +1494,6 @@
             if (!body) return;
             const snap = getSnapshot();
 
-            // 1. GATEWAY
             if (curView === 'gateway') {
                 setTopHeader('JobWork Hub', '← [Esc] Dashboard', '[↑ ↓] + [Enter] · [Esc] Dashboard', false);
                 const items = [
@@ -1527,7 +1520,6 @@
                 return;
             }
 
-            // 2. CREATE MENU & FORMS
             if (curView === 'create-menu') {
                 setTopHeader('Create (Worker / Group)', '← [Esc] Gateway');
                 const opts = [
@@ -1613,7 +1605,6 @@
                 return;
             }
 
-            // 3. ALTER MENU & SCREENS
             if (curView === 'alter-menu') {
                 setTopHeader('Alter (Worker / Group)', '← [Esc] Gateway');
                 const opts = [
@@ -1748,7 +1739,6 @@
                 return;
             }
 
-            // 4. JOBWORK REGISTER: GROUPS -> WORKERS -> OUT/IN -> VOUCHER / REGISTER
             if (curView === 'jw-groups') {
                 setTopHeader('Job Work Register — Select Work Group', '← [Esc] Gateway');
                 const groups = snap.groups;
@@ -1978,7 +1968,6 @@
                 return;
             }
 
-            // 5. OWNER REPORT
             if (curView === 'owner-menu') {
                 setTopHeader('Owner Report', '← [Esc] Gateway');
                 const t = snap.totals;
@@ -2116,7 +2105,6 @@
                 return;
             }
 
-            // 6. SAREE STOCK
             if (curView === 'stock-list') {
                 setTopHeader('Saree Stock', '← [Esc] Gateway', '[↑ ↓] Chunein · [Enter] Trail & Passbook · [Alt+P] Print', true);
                 const tabs = [
@@ -2231,7 +2219,6 @@
                 return;
             }
 
-            // 7. FINAL OUT (DISPATCH) + REGISTER EDIT/PRINT/DELETE
             if (curView === 'final-out') {
                 setTopHeader('Final Out (Dispatch)', '← [Esc] Gateway', 'Kariger ➔ Stage ➔ Pcs · Khali Kariger Enter = Save', true);
                 const allBatches = snap.godamBatches.filter((b) => b.bucket !== 'lott' && b.pcs > 0);
@@ -2338,7 +2325,6 @@
                 return;
             }
 
-            // 8. BILLS & HISAB — LEVEL 1: TALLY MENU (3 BOXES + 3 VERTICAL MENU BUTTONS)
             if (curView === 'bills-menu') {
                 setTopHeader('Bills & Hisab', '← [Esc] Gateway', '[↑ ↓] + [Enter] · [Esc] Gateway');
                 const bills = safeArr(getStoreSafe('jw_bills_list'));
@@ -2375,7 +2361,6 @@
                 return;
             }
 
-            // 8A. NEW BILL (WITH DIRECT PAID BOX!)
             if (curView === 'bills-new') {
                 setTopHeader('New Bill Entry', '← [Esc] Bills Menu', '[Enter] Agla Box · [↑↓] Worker Chunein · Paid=Total par direct Paid Bill');
                 billAcceptOpen = false;
@@ -2417,7 +2402,6 @@
                 return;
             }
 
-            // 8B. PENDING / PAID BILLS LIST (PURE TALLY TABLE NAVIGATION)
             if (curView === 'bills-list') {
                 const isPend = (billsListMode === 'pending');
                 setTopHeader(isPend ? 'Pending Bills' : 'Paid Bills', '← [Esc] Bills Menu', '[↑ ↓] Bill Chunein · [Enter] Pay / Receipt · [/] Search');
@@ -2457,7 +2441,6 @@
                 return;
             }
 
-            // 8C. BILL DETAIL & KEYBOARD PAYMENT ENTRY
             if (curView === 'bill-detail') {
                 const bills = safeArr(getStoreSafe('jw_bills_list'));
                 const b = bills.find((x) => String(x.id) === String(activeBillId));
@@ -2537,8 +2520,8 @@
         const kQuery = document.getElementById('jwt-vch-kariger')?.value || '';
         if (vchPickStep === 'kariger') {
             vchRightItems = buildKarigerPickerList(sourceBatches, vchBatch, kQuery);
-            if (vchRightIdx >= vchRightItems.length) vchRightIdx = 0;
-            if (titleEl) titleEl.textContent = '1. List of Karigers';
+            if (vchRightIdx >= vchRightItems.length) vchRightIdx = vchRightItems.length ? 0 : -1;
+            if (titleEl) titleEl.textContent = vchBatch.length && vchRightIdx < 0 ? '1. [↓] Kariger Chunein · [↵] Save' : '1. List of Karigers';
             if (cntEl) cntEl.textContent = `${vchRightItems.length} Karigers`;
 
             listEl.innerHTML = vchRightItems.length
@@ -2550,7 +2533,7 @@
                 : `<div style="padding:16px; text-align:center; color:#6b7280; font-size:12px;">Koi available stock nahi hai.</div>`;
         } else {
             vchRightItems = buildStagePickerList(sourceBatches, vchSelectedMaker, vchBatch);
-            if (vchRightIdx >= vchRightItems.length) vchRightIdx = 0;
+            if (vchRightIdx >= vchRightItems.length || vchRightIdx < 0) vchRightIdx = 0;
             if (titleEl) titleEl.textContent = `2. ${vchSelectedMaker} ke Stages`;
             if (cntEl) cntEl.textContent = `${vchRightItems.length} Batches`;
 
@@ -2622,11 +2605,11 @@
         vchPickStep = 'kariger';
         vchSelectedMaker = null;
         vchSelectedBatchKey = null;
-        vchRightIdx = 0;
+        vchRightIdx = -1;
         renderScreen();
     };
 
-    window.jwtRemoveVchItem = (idx) => { vchBatch.splice(idx, 1); renderScreen(); };
+    window.jwtRemoveVchItem = (idx) => { vchBatch.splice(idx, 1); vchRightIdx = vchBatch.length ? -1 : 0; renderScreen(); };
     window.jwtCommitVch = (doPrint) => commitVchBatch(doPrint);
     window.jwtCancelVchAccept = () => {
         vchAcceptOpen = false;
@@ -2645,27 +2628,36 @@
 
         if (dtInp) dtInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); kInp?.focus(); } });
         if (kInp) {
-            kInp.addEventListener('focus', () => { vchPickStep = 'kariger'; vchRightIdx = 0; renderVchRightPanel(sourceBatches); });
-            kInp.addEventListener('input', () => { vchPickStep = 'kariger'; vchRightIdx = 0; renderVchRightPanel(sourceBatches); });
+            kInp.addEventListener('focus', () => {
+                vchPickStep = 'kariger';
+                vchRightIdx = (vchBatch.length > 0 && !kInp.value.trim()) ? -1 : 0;
+                renderVchRightPanel(sourceBatches);
+            });
+            kInp.addEventListener('input', () => {
+                vchPickStep = 'kariger';
+                vchRightIdx = 0;
+                renderVchRightPanel(sourceBatches);
+            });
             kInp.addEventListener('keydown', (e) => {
                 if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                     if (vchRightItems.length) {
                         e.preventDefault();
-                        vchRightIdx = e.key === 'ArrowDown' ? (vchRightIdx + 1) % vchRightItems.length : (vchRightIdx - 1 + vchRightItems.length) % vchRightItems.length;
+                        if (vchRightIdx < 0) vchRightIdx = (e.key === 'ArrowDown') ? 0 : (vchRightItems.length - 1);
+                        else vchRightIdx = e.key === 'ArrowDown' ? (vchRightIdx + 1) % vchRightItems.length : (vchRightIdx - 1 + vchRightItems.length) % vchRightItems.length;
                         renderVchRightPanel(sourceBatches);
                     }
                     return;
                 }
                 if (e.key === 'Enter' && !e.ctrlKey) {
                     e.preventDefault();
-                    if (!kInp.value.trim() && vchBatch.length > 0 && vchPickStep === 'kariger') {
+                    if (!kInp.value.trim() && vchBatch.length > 0 && vchRightIdx < 0) {
                         vchAcceptOpen = true;
                         const bar = document.getElementById('jwt-vch-accept');
                         if (bar) bar.style.display = 'flex';
                         setTimeout(() => document.getElementById('jwt-vch-yes')?.focus(), 20);
                         return;
                     }
-                    if (vchRightItems[vchRightIdx]) window.jwtPickVchRight(vchRightIdx);
+                    if (vchRightIdx >= 0 && vchRightItems[vchRightIdx]) window.jwtPickVchRight(vchRightIdx);
                 }
             });
         }
@@ -2706,8 +2698,8 @@
         const kQuery = document.getElementById('jwt-fo-kariger')?.value || '';
         if (foPickStep === 'kariger') {
             foRightItems = buildKarigerPickerList(allBatches, foBatch, kQuery);
-            if (foRightIdx >= foRightItems.length) foRightIdx = 0;
-            if (titleEl) titleEl.textContent = '1. List of Karigers';
+            if (foRightIdx >= foRightItems.length) foRightIdx = foRightItems.length ? 0 : -1;
+            if (titleEl) titleEl.textContent = foBatch.length && foRightIdx < 0 ? '1. [↓] Kariger Chunein · [↵] Save' : '1. List of Karigers';
             if (cntEl) cntEl.textContent = `${foRightItems.length} Karigers`;
 
             listEl.innerHTML = foRightItems.length
@@ -2719,7 +2711,7 @@
                 : `<div style="padding:16px; text-align:center; color:#6b7280; font-size:12px;">Godam me stock nahi hai.</div>`;
         } else {
             foRightItems = buildStagePickerList(allBatches, foSelectedMaker, foBatch);
-            if (foRightIdx >= foRightItems.length) foRightIdx = 0;
+            if (foRightIdx >= foRightItems.length || foRightIdx < 0) foRightIdx = 0;
             if (titleEl) titleEl.textContent = `2. ${foSelectedMaker} ke Stages`;
             if (cntEl) cntEl.textContent = `${foRightItems.length} Stages`;
 
@@ -2783,11 +2775,11 @@
         foPickStep = 'kariger';
         foSelectedMaker = null;
         foSelectedBatchKey = null;
-        foRightIdx = 0;
+        foRightIdx = -1;
         renderScreen();
     };
 
-    window.jwtRemoveFoItem = (idx) => { foBatch.splice(idx, 1); renderScreen(); };
+    window.jwtRemoveFoItem = (idx) => { foBatch.splice(idx, 1); foRightIdx = foBatch.length ? -1 : 0; renderScreen(); };
     window.jwtCommitFo = (doPrint) => commitFinalOutBatch(doPrint);
     window.jwtCancelFoAccept = () => {
         foAcceptOpen = false;
@@ -2803,27 +2795,36 @@
         const yesBtn = document.getElementById('jwt-fo-yes');
 
         if (kInp) {
-            kInp.addEventListener('focus', () => { foPickStep = 'kariger'; foRightIdx = 0; renderFoRightPanel(allBatches); });
-            kInp.addEventListener('input', () => { foPickStep = 'kariger'; foRightIdx = 0; renderFoRightPanel(allBatches); });
+            kInp.addEventListener('focus', () => {
+                foPickStep = 'kariger';
+                foRightIdx = (foBatch.length > 0 && !kInp.value.trim()) ? -1 : 0;
+                renderFoRightPanel(allBatches);
+            });
+            kInp.addEventListener('input', () => {
+                foPickStep = 'kariger';
+                foRightIdx = 0;
+                renderFoRightPanel(allBatches);
+            });
             kInp.addEventListener('keydown', (e) => {
                 if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                     if (foRightItems.length) {
                         e.preventDefault();
-                        foRightIdx = e.key === 'ArrowDown' ? (foRightIdx + 1) % foRightItems.length : (foRightIdx - 1 + foRightItems.length) % foRightItems.length;
+                        if (foRightIdx < 0) foRightIdx = (e.key === 'ArrowDown') ? 0 : (foRightItems.length - 1);
+                        else foRightIdx = e.key === 'ArrowDown' ? (foRightIdx + 1) % foRightItems.length : (foRightIdx - 1 + foRightItems.length) % foRightItems.length;
                         renderFoRightPanel(allBatches);
                     }
                     return;
                 }
                 if (e.key === 'Enter' && !e.ctrlKey) {
                     e.preventDefault();
-                    if (!kInp.value.trim() && foBatch.length > 0 && foPickStep === 'kariger') {
+                    if (!kInp.value.trim() && foBatch.length > 0 && foRightIdx < 0) {
                         foAcceptOpen = true;
                         const bar = document.getElementById('jwt-fo-accept');
                         if (bar) bar.style.display = 'flex';
                         setTimeout(() => document.getElementById('jwt-fo-yes')?.focus(), 20);
                         return;
                     }
-                    if (foRightItems[foRightIdx]) window.jwtPickFoRight(foRightIdx);
+                    if (foRightIdx >= 0 && foRightItems[foRightIdx]) window.jwtPickFoRight(foRightIdx);
                 }
             });
         }
@@ -3072,7 +3073,6 @@
         window.jwtGo('final-out');
     };
 
-    // BILLS CONTROLLERS
     window.jwtOpenBillNew = () => {
         billSelectedWorkerId = null;
         billWorkerIdx = 0;
@@ -3432,7 +3432,6 @@
         const anyModal = Array.from(document.querySelectorAll('.modal-overlay')).some((m) => m.style.display && m.style.display !== 'none');
         if (anyModal) return;
 
-        // CAPTURE-PHASE ESCAPE: NEVER FALLS BACK TO OLD JOBWORK.JS
         if (e.key === 'Escape') {
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -3440,7 +3439,6 @@
             return;
         }
 
-        // Alt+P Print anywhere
         if (e.altKey && (e.key === 'p' || e.key === 'P')) {
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -3448,7 +3446,6 @@
             return;
         }
 
-        // Accept prompts Y / N
         if (crAcceptOpen && ['create-worker', 'create-group', 'alter-worker-edit', 'alter-group-edit'].includes(curView)) {
             if (e.key.toLowerCase() === 'y' || e.key === 'Enter') {
                 e.preventDefault(); e.stopImmediatePropagation();
@@ -3486,7 +3483,6 @@
             if (sBox) { e.preventDefault(); sBox.focus(); sBox.select(); return; }
         }
 
-        // Worker Register row shortcuts [E] Edit, [P] Print Slip
         if (curView === 'jw-worker-hist' && !editWorkerRowInfo && !typing) {
             const rows = Array.from(sec.querySelectorAll('tbody tr.jwt-row'));
             const activeRow = rows[menuIdx];
