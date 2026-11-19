@@ -517,6 +517,9 @@
             if (typeof window.populateSessionDropdown === 'function') {
                 window.populateSessionDropdown();
             }
+            if (typeof window.initCloudSessionSync === 'function') {
+                window.initCloudSessionSync();
+            }
             if (typeof window.backToDashboard === 'function') {
                 window.backToDashboard();
             }
