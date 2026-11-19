@@ -1,45 +1,46 @@
 /* ============================================================================
-   SIMPLICITY ERP - JOBWORK EXPRESS VOUCHER (TALLYPRIME WHITE & GOLD EDITION)
-   Folder: jobwork-express / File: jobwork-express.js
-   Developed for: Farhan Jawed
-   Features:
-   - True TallyPrime Voucher Anatomy:
-     Top Split (Form Left + Full-Height Picker Right) + Full-Width Batch Grid Bottom
-   - Clean Profile-Creation Style Single-Field-Per-Row Alignment (Zero Clipping)
-   - Right-Pane Pickers: Process -> Len-Den -> Stock Source -> Worker -> Maker
-   - Tally "End of List" (Empty Maker + Enter) & "Accept? (Yes / No)" Strip
-   - Process Switch Zero-Mix Guard, Focus Tab Trap & Instant A6 Challan Print
+   SIMPLICITY ERP - JOBWORK EXPRESS VOUCHER (UNIFIED TRAIL & DYNAMIC GROUPS)
+   File: jobwork-express/jobwork-express.js
+   100% Synced with: jobwork-trail/jobwork-trail.js, saree_history,
+   jobwork_workers, jobwork_groups, jobwork_sheets_*, dukan_transfer_history
 ============================================================================ */
 
 (() => {
     'use strict';
 
-    let activeCategory = 'cutting';   // 'cutting' | 'embroidery' | 'calender' | 'dukan'
-    let movementType = 'gayi';        // 'gayi' | 'aayi'
-    let stockSource = 'fresh';        // 'fresh' | 'cutting' | 'embroidery'
+    const GROUPS_STORE_KEY = 'jobwork_groups';
+    const DEFAULT_GROUPS = [
+        { key: 'cutting', label: 'Cutting' },
+        { key: 'embroidery', label: 'Embroidery' },
+        { key: 'calender', label: 'Calender' }
+    ];
+
+    let activeCategory = 'cutting';     // dynamic work group key OR 'dukan'
+    let movementType = 'gayi';          // 'gayi' | 'aayi'
     let expressBatchItems = [];
     let lastSavedExpressBatch = null;
-    let lastEnteredNaap = '3.60';
 
     // Right-Pane Tally Picker State
-    let jwPickerMode = 'process';     // 'process' | 'movement' | 'source' | 'worker' | 'maker' | 'summary'
+    let jwPickerMode = 'process';       // 'process' | 'movement' | 'worker' | 'kariger' | 'stage' | 'summary'
     let jwPickerItems = [];
     let jwPickerActiveIdx = 0;
+    let selectedMaker = null;
+    let selectedBatchKey = null;
     let jwMakerArrowUsed = false;
+    let isSubmitting = false;
 
     /* ========================================================================
-       1. SAFE HELPERS & STORES (100% PRESERVED)
-       ------------------------------------------------------------------------
+       1. SAFE HELPERS & STORES
     ======================================================================== */
-    const toArray = (v) => {
-        if (Array.isArray(v)) return v;
-        if (typeof window.safeArray === 'function') return window.safeArray(v);
+    const safeArr = (v) => {
+        if (Array.isArray(v)) return v.filter(Boolean);
+        if (typeof window.safeArray === 'function') return window.safeArray(v).filter(Boolean);
         return [];
     };
 
     const getFromStore = (key) => {
-        if (typeof window.getStore === 'function') return window.getStore(key);
         try {
+            if (typeof window.getStore === 'function') return window.getStore(key);
             return JSON.parse(localStorage.getItem(key) || '[]');
         } catch {
             return [];
@@ -47,37 +48,36 @@
     };
 
     const setToStore = (key, val) => {
-        if (typeof window.setStore === 'function') {
-            window.setStore(key, val);
-        } else {
-            localStorage.setItem(key, JSON.stringify(val));
-        }
+        if (typeof window.setStore === 'function') window.setStore(key, val);
+        else localStorage.setItem(key, JSON.stringify(val));
     };
 
-    const safeNum = (val, fallback = 0) => {
-        const n = parseFloat(val);
-        return isNaN(n) || !isFinite(n) ? fallback : n;
+    const safeNum = (v, fb = 0) => {
+        const n = parseFloat(String(v == null ? '' : v).replace(/,/g, '').trim());
+        return Number.isFinite(n) ? n : fb;
     };
 
-    const safeInt = (val, fallback = 0) => {
-        const n = parseInt(val, 10);
-        return isNaN(n) || !isFinite(n) ? fallback : n;
+    const safeInt = (v, fb = 0) => {
+        const n = parseInt(String(v == null ? '' : v).replace(/,/g, '').trim(), 10);
+        return Number.isFinite(n) ? n : fb;
     };
 
     const esc = (s) => {
         if (typeof window.sanitizeHTML === 'function') return window.sanitizeHTML(s);
-        return String(s || '').replace(/[&<>"']/g, (m) => ({
+        return String(s == null ? '' : s).replace(/[&<>"']/g, (m) => ({
             '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
         }[m]));
     };
+
+    const normText = (txt, fb = '') => String(txt == null ? fb : txt).trim().toUpperCase() || fb;
 
     const toIsoDate = (val) => {
         if (!val) return '';
         const s = String(val).trim();
         if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-        const parts = s.split(/[-/]/);
-        if (parts.length === 3 && parts[0].length === 2 && parts[2].length === 4) {
-            return `${parts[2]}-${parts[1]}-${parts[0]}`;
+        const p = s.split(/[-/]/);
+        if (p.length === 3 && p[0].length === 2 && p[2].length === 4) {
+            return `${p[2]}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`;
         }
         return s;
     };
@@ -90,211 +90,313 @@
         return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : new Date().toISOString().split('T')[0];
     };
 
-    const formatDisplay = (d) => {
-        return (typeof window.formatDateDisplay === 'function')
-            ? window.formatDateDisplay(d)
-            : (d || '-');
-    };
+    const formatDisplay = (d) => (typeof window.formatDateDisplay === 'function') ? window.formatDateDisplay(d) : (d || '-');
 
-    const normText = (txt, fallback = '') => {
-        return String(txt || fallback).trim().toUpperCase();
-    };
-
-    const normGodownId = (kid) => {
-        if (!kid || kid === 'all') return 'all';
-        const clean = String(kid).trim();
-        return (!clean || clean === 'k_main') ? 'k_main' : clean;
+    const normGodamId = (kid) => {
+        const clean = String(kid || '').trim();
+        if (!clean || clean === 'k_main') return 'k_main';
+        if (clean === 'all') return 'all';
+        return clean;
     };
 
     const getEffectiveGodown = () => {
-        const kid = (typeof window.getActiveKarkhanaId === 'function')
-            ? window.getActiveKarkhanaId()
-            : (window.currentDashboardKarkhanaFilter || 'k_main');
-        return (!kid || kid === 'all') ? 'k_main' : kid;
+        try {
+            if (typeof window.getActiveKarkhanaId === 'function') {
+                return String(window.getActiveKarkhanaId() || 'all').trim() || 'all';
+            }
+        } catch (_) {}
+        return 'all';
     };
 
-    const getMonthTitleFromDate = (dateStr) => {
-        if (!dateStr) return 'Current Month';
-        const iso = toIsoDate(dateStr);
-        const parts = String(iso).trim().split('-');
-        if (parts.length < 2) return dateStr;
-        const year = parts[0];
-        const monthNum = parseInt(parts[1], 10);
-        const monthNames = [
-            'January', 'February', 'March', 'April', 'May', 'June',
-            'July', 'August', 'September', 'October', 'November', 'December'
-        ];
-        const mName = monthNames[monthNum - 1] || `Month ${monthNum}`;
-        return `${mName} ${year}`;
+    const getGodamLabel = (kid) => {
+        const k = normGodamId(kid);
+        if (k === 'all') return 'Sabhi Karkhane';
+        if (typeof window.getKarkhanaNameById === 'function') return window.getKarkhanaNameById(k);
+        return k === 'k_main' ? 'Main Godown' : k;
     };
 
-    const getDefaultSourceForCategory = (cat) => {
-        if (cat === 'cutting') return 'fresh';
-        if (cat === 'embroidery') return 'fresh';
-        if (cat === 'calender') return 'cutting';
-        return 'finished';
-    };
+    const genId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-    const getTargetStageForLookup = () => {
-        if (activeCategory === 'dukan') return 'finished';
-        if (activeCategory === 'cutting') return 'fresh';
-        if (activeCategory === 'embroidery') {
-            return (movementType === 'gayi') ? stockSource : 'embroidery';
+    /* ========================================================================
+       2. DYNAMIC WORK GROUPS & TRAIL HELPERS
+    ======================================================================== */
+    const getWorkGroups = () => {
+        const stored = safeArr(getFromStore(GROUPS_STORE_KEY));
+        const workers = safeArr(getFromStore('jobwork_workers'));
+        const map = new Map();
+
+        if (stored.length) {
+            stored.forEach((g) => {
+                if (!g || !g.key) return;
+                const k = String(g.key).trim().toLowerCase();
+                if (k) map.set(k, { key: k, label: String(g.label || k).trim() });
+            });
+        } else {
+            DEFAULT_GROUPS.forEach((g) => map.set(g.key, { key: g.key, label: g.label }));
         }
-        if (activeCategory === 'calender') {
-            return (movementType === 'gayi') ? stockSource : 'finished';
+
+        workers.forEach((w) => {
+            if (!w || !w.type) return;
+            const k = String(w.type).trim().toLowerCase();
+            if (k && !map.has(k)) {
+                map.set(k, { key: k, label: k.charAt(0).toUpperCase() + k.slice(1) });
+            }
+        });
+
+        return Array.from(map.values());
+    };
+
+    const grpLabel = (key) => {
+        if (key === 'dukan') return 'Final Out (Dukan)';
+        const k = String(key || '').trim().toLowerCase();
+        const f = getWorkGroups().find((g) => g.key === k);
+        return f ? f.label : (k ? k.charAt(0).toUpperCase() + k.slice(1) : 'JobWork');
+    };
+
+    const inferBucket = (t) => {
+        const c = String(t || 'fresh').trim().toLowerCase();
+        if (c === 'finished' || c === 'finish') return 'finished';
+        if (c === 'lott' || c === 'lot' || c === 'damage') return 'lott';
+        return 'unfinished';
+    };
+
+    const inferStages = (row) => {
+        if (Array.isArray(row?.doneStages)) {
+            return row.doneStages.map((x) => String(x || '').trim().toLowerCase()).filter(Boolean);
         }
+        const t = String(row?.type || 'fresh').trim().toLowerCase();
+        if (t === 'cutting' || t === 'cut') return ['cutting'];
+        if (t === 'embroidery' || t === 'emb') return ['embroidery'];
+        if (t === 'finished' || t === 'finish' || t === 'calender') return ['calender'];
+        return [];
+    };
+
+    const legacyTypeFromTrail = (doneStages, bucket) => {
+        if (bucket === 'finished') return 'finished';
+        if (bucket === 'lott') return 'lott';
+        const arr = Array.isArray(doneStages) ? doneStages : [];
+        if (arr.includes('embroidery')) return 'embroidery';
+        if (arr.includes('cutting')) return 'cutting';
         return 'fresh';
     };
 
-    const getCategoryDisplayName = (cat) => {
-        if (cat === 'cutting') return '1. Cutting';
-        if (cat === 'embroidery') return '2. Embroidery';
-        if (cat === 'calender') return '3. Calender';
-        return '4. Dukan';
-    };
-
-    const getSourceDisplayName = (src) => {
-        if (src === 'cutting') return 'Cutting Stock';
-        if (src === 'embroidery') return 'Embroidery Stock';
-        if (src === 'finished') return 'Finished Stock';
-        return 'Fresh Godown Stock';
+    const formatTrail = (doneStages, bucket = 'unfinished') => {
+        const arr = Array.isArray(doneStages) ? doneStages : [];
+        if (bucket === 'finished') return arr.length ? `Finished (${arr.map(grpLabel).join(' → ')})` : 'Finished (Calender)';
+        if (bucket === 'lott') return arr.length ? `Lott (${arr.map(grpLabel).join(' → ')})` : 'Lott (Fresh)';
+        if (!arr.length) return 'Fresh (Kora)';
+        return arr.map(grpLabel).join(' → ');
     };
 
     /* ========================================================================
-       2. LIVE STOCK RESOLVER & MAKER LIST BUILDER
-       ------------------------------------------------------------------------
+       3. LIVE GODAM & WORKER PENDING RESOLVER (EXACT TRAIL BATCHES)
     ======================================================================== */
-    const resolveMakerLiveStockInfo = (makerName, targetStage) => {
-        const cleanM = normText(makerName);
-        if (!cleanM) return null;
+    const getGodamAvailableBatches = (includeFinished = false) => {
+        const activeFilter = getEffectiveGodown();
+        const sareeHist = safeArr(getFromStore('saree_history'));
+        const godamMap = new Map();
+        const untrailedOuts = [];
 
-        const sH = toArray(getFromStore('saree_history'));
-        const targetKid = getEffectiveGodown();
-
-        let bestMatch = null;
-        let maxBachi = -1;
-
-        const map = new Map();
-        sH.forEach((h) => {
-            if (!h || String(h.type || '').toLowerCase() !== targetStage) return;
-            const hKid = normGodownId(h.karkhanaId);
-            if (targetKid !== 'all' && hKid !== targetKid) return;
-
-            const kName = normText(h.karigerName || h.kariger);
-            if (kName !== cleanM) return;
-
-            const sName = normText(h.sareeName || h.name, 'GENERAL SAREE');
-            const isGai = (h.isOut === true) || (safeNum(h.gai) > 0);
-            const inQ = isGai ? 0 : safeNum(h.aai !== undefined ? h.aai : h.pcs);
-            const outQ = isGai ? safeNum(h.gai !== undefined ? h.gai : h.pcs) : 0;
-
-            const cur = map.get(sName) || 0;
-            map.set(sName, cur + (inQ - outQ));
+        const chrono = sareeHist.slice().sort((a, b) => {
+            const ta = safeNum(a.timestamp, 0);
+            const tb = safeNum(b.timestamp, 0);
+            if (ta !== tb) return ta - tb;
+            return String(a.date || '').localeCompare(String(b.date || ''));
         });
 
-        map.forEach((bachi, sName) => {
-            if (bachi > maxBachi) {
-                maxBachi = bachi;
-                bestMatch = { maker: cleanM, saree: sName, bachi: Math.max(0, bachi) };
+        chrono.forEach((h) => {
+            if (!h) return;
+            const kid = normGodamId(h.karkhanaId);
+            if (activeFilter !== 'all' && kid !== activeFilter) return;
+
+            const sName = normText(h.sareeName || h.name || h.saree, 'GENERAL SAREE');
+            const kName = normText(h.karigerName || h.kariger, 'KARKHANA');
+            const bucket = h.stageBucket || inferBucket(h.type);
+            const hasExplicit = Array.isArray(h.doneStages);
+            const doneStages = inferStages(h);
+            const trailKey = doneStages.join('|');
+            const isOut = (h.isOut === true) || (safeNum(h.gai) > 0);
+            const qty = isOut ? safeInt(h.gai != null ? h.gai : h.pcs) : safeInt(h.aai != null ? h.aai : h.pcs);
+            if (qty <= 0) return;
+
+            const bKey = `${sName}|||${kName}|||${kid}|||${bucket}|||${trailKey}`;
+            if (!isOut) {
+                let b = godamMap.get(bKey);
+                if (!b) {
+                    b = {
+                        key: bKey, saree: sName, maker: kName, karkhanaId: kid,
+                        godamName: getGodamLabel(kid), bucket, doneStages: [...doneStages], trailKey, pcs: 0
+                    };
+                    godamMap.set(bKey, b);
+                }
+                b.pcs += qty;
+            } else {
+                const exact = godamMap.get(bKey);
+                if (exact && exact.pcs >= qty) exact.pcs -= qty;
+                else if (hasExplicit && exact) exact.pcs = Math.max(0, exact.pcs - qty);
+                else untrailedOuts.push({ sName, kName, kid, bucket, qty });
             }
         });
 
-        if (bestMatch && bestMatch.bachi > 0) return bestMatch;
+        untrailedOuts.forEach((out) => {
+            let rem = out.qty;
+            for (const b of godamMap.values()) {
+                if (rem <= 0) break;
+                if (b.saree === out.sName && b.maker === out.kName && b.karkhanaId === out.kid && b.bucket === out.bucket && b.pcs > 0) {
+                    const take = Math.min(b.pcs, rem);
+                    b.pcs -= take;
+                    rem -= take;
+                }
+            }
+            if (rem > 0) {
+                for (const b of godamMap.values()) {
+                    if (rem <= 0) break;
+                    if (b.saree === out.sName && b.karkhanaId === out.kid && b.bucket === out.bucket && b.pcs > 0) {
+                        const take = Math.min(b.pcs, rem);
+                        b.pcs -= take;
+                        rem -= take;
+                    }
+                }
+            }
+        });
 
-        const allKars = toArray(getFromStore('kariger_list'));
-        const found = allKars.find((k) => k?.name && normText(k.name) === cleanM);
-        return {
-            maker: cleanM,
-            saree: found?.saree || 'General Saree',
-            bachi: Math.max(0, maxBachi)
-        };
+        return Array.from(godamMap.values()).filter((b) => {
+            if (b.pcs <= 0) return false;
+            if (includeFinished) return b.bucket !== 'lott';
+            return b.bucket === 'unfinished';
+        });
     };
 
-    const getAvailableMakersList = (queryText = '') => {
-        const q = String(queryText || '').trim().toLowerCase();
-        const sH = toArray(getFromStore('saree_history'));
-        const allKars = toArray(getFromStore('kariger_list'));
-        const targetKid = getEffectiveGodown();
+    const getWorkerPendingBatches = (workerId) => {
+        if (!workerId) return [];
+        const activeFilter = getEffectiveGodown();
+        const karigerMeta = new Map();
+        safeArr(getFromStore('kariger_list')).forEach((k) => {
+            if (k && k.name) {
+                karigerMeta.set(normText(k.name), {
+                    saree: normText(k.saree, 'GENERAL SAREE'),
+                    karkhanaId: normGodamId(k.karkhanaId || 'k_main')
+                });
+            }
+        });
 
-        let targetStage = getTargetStageForLookup();
-        if (movementType === 'aayi' && activeCategory === 'embroidery') {
-            targetStage = stockSource || 'fresh';
-        } else if (movementType === 'aayi' && activeCategory === 'calender') {
-            targetStage = stockSource || 'cutting';
+        const sheets = safeArr(getFromStore(`jobwork_sheets_${workerId}`));
+        const pMap = new Map();
+        let diya = 0, aai = 0;
+        const openingPend = sheets.length ? safeInt(sheets[0].closingPendingSaree, 0) : 0;
+
+        const addP = (saree, maker, kid, stages, qty) => {
+            if (qty <= 0) return;
+            const sN = normText(saree, 'GENERAL SAREE');
+            const mN = normText(maker, 'KARKHANA');
+            const kId = normGodamId(kid);
+            const st = Array.isArray(stages) ? stages : [];
+            const pKey = `${workerId}|||${sN}|||${mN}|||${kId}|||${st.join('|')}`;
+            let ex = pMap.get(pKey);
+            if (!ex) {
+                ex = {
+                    key: pKey, saree: sN, maker: mN, karkhanaId: kId,
+                    godamName: getGodamLabel(kId), bucket: 'unfinished', doneStages: [...st], pcs: 0
+                };
+                pMap.set(pKey, ex);
+            }
+            ex.pcs += qty;
+        };
+
+        const dedP = (saree, maker, kid, prevStages, qty) => {
+            let rem = qty;
+            if (rem <= 0) return;
+            const sN = saree ? normText(saree) : null;
+            const mN = maker ? normText(maker) : null;
+            const kId = kid ? normGodamId(kid) : null;
+
+            if (Array.isArray(prevStages) && sN && mN && kId) {
+                const ex = pMap.get(`${workerId}|||${sN}|||${mN}|||${kId}|||${prevStages.join('|')}`);
+                if (ex && ex.pcs > 0) { const t = Math.min(ex.pcs, rem); ex.pcs -= t; rem -= t; }
+            }
+            if (rem > 0 && mN) {
+                for (const ex of pMap.values()) {
+                    if (rem <= 0) break;
+                    if (ex.pcs > 0 && ex.maker === mN && (!sN || ex.saree === sN)) {
+                        const t = Math.min(ex.pcs, rem); ex.pcs -= t; rem -= t;
+                    }
+                }
+            }
+            if (rem > 0) {
+                for (const ex of pMap.values()) {
+                    if (rem <= 0) break;
+                    if (ex.pcs > 0) { const t = Math.min(ex.pcs, rem); ex.pcs -= t; rem -= t; }
+                }
+            }
+        };
+
+        sheets.forEach((sh) => {
+            safeArr(sh?.rows).forEach((r) => {
+                if (!r) return;
+                const gItems = safeArr(r.gayiItems);
+                if (gItems.length) {
+                    gItems.forEach((it) => {
+                        const q = safeInt(it.qty);
+                        if (q <= 0) return;
+                        const mN = normText(it.karigar || it.maker, 'KARKHANA');
+                        const meta = karigerMeta.get(mN) || { saree: 'GENERAL SAREE', karkhanaId: 'k_main' };
+                        const sN = normText(it.saree || meta.saree, 'GENERAL SAREE');
+                        const kid = normGodamId(it.karkhanaId || meta.karkhanaId || 'k_main');
+                        const st = Array.isArray(it.doneStages) ? it.doneStages : inferStages({ type: it.source || r.stockSource || 'fresh' });
+                        diya += q;
+                        if (activeFilter === 'all' || kid === activeFilter) addP(sN, mN, kid, st, q);
+                    });
+                } else if (safeInt(r.gayiQty) > 0) {
+                    const q = safeInt(r.gayiQty);
+                    diya += q;
+                    if (activeFilter === 'all' || activeFilter === 'k_main') addP('GENERAL SAREE', 'KARKHANA', 'k_main', [], q);
+                }
+
+                const aItems = safeArr(r.aayiItems);
+                if (aItems.length) {
+                    aItems.forEach((it) => {
+                        const q = safeInt(it.qty);
+                        if (q <= 0) return;
+                        aai += q;
+                        const mN = it.karigar || it.maker ? normText(it.karigar || it.maker) : null;
+                        const sN = it.saree ? normText(it.saree) : null;
+                        const kid = it.karkhanaId ? normGodamId(it.karkhanaId) : null;
+                        if (activeFilter === 'all' || !kid || kid === activeFilter) dedP(sN, mN, kid, it.prevStages, q);
+                    });
+                    if (safeInt(r.damagePcs) > 0 && !aItems.some((it) => it.isDamage)) {
+                        const dq = safeInt(r.damagePcs); aai += dq; dedP(null, null, null, null, dq);
+                    }
+                } else {
+                    const aq = safeInt(r.aayiQty), dq = safeInt(r.damagePcs);
+                    if (aq > 0) { aai += aq; dedP(null, null, null, null, aq); }
+                    if (dq > 0) { aai += dq; dedP(null, null, null, null, dq); }
+                }
+            });
+        });
+
+        if (openingPend > 0) {
+            diya += openingPend;
+            const curSum = Array.from(pMap.values()).reduce((s, x) => s + x.pcs, 0);
+            const net = Math.max(0, diya - aai);
+            if (net > curSum && (activeFilter === 'all' || activeFilter === 'k_main')) {
+                addP('OPENING SAREE', 'PICHLA BAKI', 'k_main', [], net - curSum);
+            }
         }
 
-        const stockMap = new Map();
-        sH.forEach((h) => {
-            if (!h || String(h.type || '').toLowerCase() !== targetStage) return;
-            const kid = normGodownId(h.karkhanaId);
-            if (targetKid !== 'all' && kid !== targetKid) return;
-
-            const sName = normText(h.sareeName || h.name, 'GENERAL SAREE');
-            const kName = normText(h.karigerName || h.kariger, 'KARKHANA');
-            const key = `${kName}___${sName}`;
-
-            const isGai = (h.isOut === true) || (safeNum(h.gai) > 0);
-            const inQ = isGai ? 0 : safeNum(h.aai !== undefined ? h.aai : h.pcs);
-            const outQ = isGai ? safeNum(h.gai !== undefined ? h.gai : h.pcs) : 0;
-
-            if (!stockMap.has(key)) {
-                stockMap.set(key, { kName, sName, bachi: 0 });
-            }
-            stockMap.get(key).bachi += (inQ - outQ);
-        });
-
-        const results = [];
-        const addedNames = new Set();
-
-        stockMap.forEach((val) => {
-            if (val.bachi > 0) {
-                addedNames.add(val.kName);
-                const full = `${val.kName} ${val.sName}`.toLowerCase();
-                if (!q || full.includes(q)) {
-                    results.push({
-                        label: val.kName,
-                        sub: `${val.sName} (${val.bachi} Pcs)`,
-                        data: val.kName
-                    });
-                }
-            }
-        });
-
-        allKars.forEach((k) => {
-            if (!k || !k.name) return;
-            const kn = normText(k.name);
-            if (!addedNames.has(kn)) {
-                addedNames.add(kn);
-                const sNm = k.saree || 'Saree';
-                const full = `${kn} ${sNm}`.toLowerCase();
-                if (!q || full.includes(q)) {
-                    results.push({
-                        label: kn,
-                        sub: `${sNm}`,
-                        data: kn
-                    });
-                }
-            }
-        });
-
-        return results;
+        return Array.from(pMap.values()).filter((p) => p.pcs > 0);
     };
 
-    const updateExpressMakerDatalist = () => {
-        const dl = document.getElementById('jw-exp-maker-dl');
-        if (!dl) return;
-        const list = getAvailableMakersList('');
-        let opts = '';
-        list.forEach((it) => {
-            opts += `<option value="${esc(it.data)}">${esc(it.label)} — ${esc(it.sub)}</option>`;
-        });
-        dl.innerHTML = opts;
+    const getUsedBatchQty = (batchKey) => expressBatchItems.filter((x) => x.batchKey === batchKey).reduce((s, x) => s + safeInt(x.qty), 0);
+
+    const getActiveSourceBatches = () => {
+        if (activeCategory === 'dukan') return getGodamAvailableBatches(true);
+        if (movementType === 'gayi') return getGodamAvailableBatches(false);
+        const wId = document.getElementById('jw-exp-worker')?.value;
+        return getWorkerPendingBatches(wId);
     };
 
     /* ========================================================================
-       3. SCOPED TALLYPRIME WHITE & GOLD STYLES (FULL-WIDTH BATCH GRID)
-       ------------------------------------------------------------------------
+       4. SCOPED STYLES (COMPACT LEFT + BIG RIGHT LIST)
     ======================================================================== */
     const ensureTallyJobWorkStyles = () => {
         const old = document.getElementById('jw-tally-styles');
@@ -305,19 +407,19 @@
         style.textContent = `
             .jw-overlay {
                 position: fixed; inset: 0;
-                background: rgba(31, 41, 55, 0.36);
+                background: rgba(31, 41, 55, 0.42);
                 backdrop-filter: blur(2px);
                 z-index: 999999;
                 display: flex; align-items: center; justify-content: center;
-                padding: 14px; box-sizing: border-box;
-                font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+                padding: 12px; box-sizing: border-box;
+                font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
             }
             .jw-card {
                 background: #ffffff;
-                width: 100%; max-width: 980px;
+                width: 100%; max-width: 1020px;
                 border: 1.5px solid #d9b86c;
                 border-radius: 8px;
-                box-shadow: 0 18px 42px rgba(0, 0, 0, 0.14);
+                box-shadow: 0 18px 42px rgba(0, 0, 0, 0.16);
                 overflow: hidden;
                 max-height: 95vh;
                 display: flex; flex-direction: column;
@@ -327,239 +429,154 @@
             .jw-header {
                 background: #fdf6e2;
                 border-bottom: 1.5px solid #e5d5a7;
-                padding: 9px 20px;
+                padding: 9px 18px;
                 display: flex; justify-content: space-between; align-items: center;
-                gap: 10px; flex-wrap: wrap;
-                box-sizing: border-box;
+                gap: 8px; flex-wrap: wrap;
             }
-            .jw-title {
-                margin: 0; font-size: 15px; font-weight: 800; color: #1f2937;
-            }
+            .jw-title { margin: 0; font-size: 15px; font-weight: 800; color: #1f2937; }
             .jw-pill-btn {
                 background: #ffffff; color: #374151;
                 border: 1px solid #d1d5db; border-radius: 5px;
-                padding: 4px 10px; font-size: 11.5px; font-weight: 700;
-                cursor: pointer; transition: all 0.12s ease;
-                white-space: nowrap;
+                padding: 4px 10px; font-size: 11.5px; font-weight: 700; cursor: pointer;
             }
-            .jw-pill-btn:hover { border-color: #d9a425; background: #fef9ea; color: #1f2937; }
-            .jw-pill-btn.active {
-                background: #f2b71d; color: #1f2937;
-                border-color: #d9a425; font-weight: 800;
-            }
+            .jw-pill-btn:hover { border-color: #d9a425; background: #fef9ea; }
+            .jw-pill-btn.active { background: #f2b71d; color: #1f2937; border-color: #d9a425; font-weight: 800; }
             .jw-body {
-                display: flex;
-                flex-direction: column;
-                gap: 12px;
-                padding: 14px 20px;
-                overflow-y: auto;
-                overflow-x: hidden;
-                flex: 1;
-                background: #ffffff;
-                box-sizing: border-box;
+                display: flex; flex-direction: column; gap: 10px;
+                padding: 12px 18px; overflow-y: auto; flex: 1; background: #ffffff;
             }
             .jw-top-grid {
                 display: grid;
-                grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-                gap: 18px;
-                align-items: stretch;
-                min-width: 0;
+                grid-template-columns: minmax(0, 0.95fr) minmax(380px, 1.05fr);
+                gap: 16px; align-items: stretch; min-width: 0;
             }
-            @media (max-width: 840px) {
-                .jw-top-grid { grid-template-columns: minmax(0, 1fr); }
-            }
-            .jw-left-col, .jw-right-col {
-                min-width: 0;
-                box-sizing: border-box;
-            }
-            .jw-right-col {
-                display: flex; flex-direction: column;
-            }
+            @media (max-width: 840px) { .jw-top-grid { grid-template-columns: 1fr; } }
+            .jw-left-col, .jw-right-col { min-width: 0; }
+            .jw-right-col { display: flex; flex-direction: column; }
             .jw-sec-title {
-                font-size: 11px; font-weight: 800; color: #92400e;
-                text-transform: uppercase; letter-spacing: 0.6px;
-                border-bottom: 1px solid #eadab0;
-                padding-bottom: 3px; margin: 10px 0 7px 0;
+                font-size: 10.5px; font-weight: 800; color: #92400e;
+                text-transform: uppercase; letter-spacing: 0.5px;
+                border-bottom: 1px solid #eadab0; padding-bottom: 3px; margin: 8px 0 6px 0;
             }
             .jw-row {
-                display: grid;
-                grid-template-columns: 145px minmax(0, 1fr);
-                align-items: center;
-                gap: 10px;
-                margin-bottom: 6px;
-                min-width: 0;
+                display: grid; grid-template-columns: 128px minmax(0, 1fr);
+                align-items: center; gap: 8px; margin-bottom: 5px;
             }
-            .jw-row > * { min-width: 0; }
-            .jw-lbl {
-                font-size: 12.5px; font-weight: 600; color: #374151;
-                white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-            }
+            .jw-lbl { font-size: 11.5px; font-weight: 700; color: #374151; }
             .jw-inp {
-                width: 100%; min-width: 0; max-width: 100%;
-                box-sizing: border-box;
-                padding: 6px 10px;
-                border: 1px solid #d1d5db; border-radius: 4px;
-                font-size: 13px; font-weight: 700; color: #111827;
-                background: #ffffff; outline: none;
-                transition: border-color 0.12s, background 0.12s;
+                width: 100%; padding: 5px 9px; border: 1px solid #d1d5db; border-radius: 4px;
+                font-size: 12.5px; font-weight: 700; color: #111827; background: #ffffff; outline: none;
             }
-            .jw-inp:focus {
-                border-color: #d9a425 !important;
-                background: #fffdf5 !important;
-                box-shadow: 0 0 0 2px rgba(242, 183, 29, 0.22);
-            }
-            .jw-inp-num { text-align: right; font-variant-numeric: tabular-nums; }
+            .jw-inp:focus { border-color: #d9a425 !important; background: #fffdf5 !important; box-shadow: 0 0 0 2px rgba(242,183,29,0.22); }
             .jw-right-panel {
-                border: 1px solid #e5d5a7; border-radius: 6px;
-                background: #ffffff; display: flex; flex-direction: column;
-                overflow: hidden; min-width: 0; flex: 1;
+                border: 1.5px solid #d9b86c; border-radius: 6px;
+                background: #ffffff; display: flex; flex-direction: column; overflow: hidden; flex: 1;
             }
             .jw-right-head {
-                background: #fdf6e2; border-bottom: 1px solid #e5d5a7;
-                padding: 7px 12px; font-size: 12px; font-weight: 800; color: #1f2937;
+                background: #fdf6e2; border-bottom: 1.5px solid #e5d5a7;
+                padding: 7px 11px; font-size: 12px; font-weight: 800; color: #1f2937;
                 display: flex; justify-content: space-between; align-items: center;
             }
-            .jw-picker-list {
-                overflow-y: auto; flex: 1; min-height: 210px; max-height: 295px;
-            }
+            .jw-picker-list { overflow-y: auto; flex: 1; min-height: 250px; max-height: 370px; }
             .jw-picker-item {
-                padding: 7px 12px; font-size: 12.5px; font-weight: 600; color: #1f2937;
+                padding: 8px 11px; font-size: 12.5px; font-weight: 600; color: #1f2937;
                 border-bottom: 1px solid #f3f4f6; cursor: pointer;
-                display: flex; justify-content: space-between; align-items: center; gap: 8px;
+                display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;
             }
             .jw-picker-item:hover { background: #fef9ea; }
-            .jw-picker-item.active {
-                background: #f2b71d; color: #1f2937; font-weight: 800;
-            }
-            .jw-picker-sub {
-                font-size: 11px; color: #6b7280; font-weight: 600;
-            }
-            .jw-picker-item.active .jw-picker-sub { color: #374151; }
-            .jw-batch-panel {
-                border: 1px solid #e5d5a7; border-radius: 6px;
-                background: #ffffff; overflow: hidden; width: 100%;
-                box-sizing: border-box;
-            }
-            .jw-batch-table {
-                width: 100%; border-collapse: collapse; font-size: 12.5px;
-            }
-            .jw-batch-table th {
-                background: #fdf6e2; color: #1f2937; font-weight: 800;
-                padding: 6px 10px; text-align: left;
-                border-bottom: 1px solid #e5d5a7; font-size: 11.5px;
-                position: sticky; top: 0;
-            }
-            .jw-batch-table td {
-                padding: 6px 10px; border-bottom: 1px solid #f3f4f6; color: #1f2937;
-            }
-            .jw-footer {
-                background: #fdf6e2; border-top: 1px solid #e5d5a7;
-                padding: 8px 20px;
-                display: flex; justify-content: space-between; align-items: center;
-                flex-wrap: wrap; gap: 8px; font-size: 11.5px; color: #6b7280;
-            }
+            .jw-picker-item.active { background: #f2b71d; color: #1f2937; font-weight: 800; }
+            .jw-picker-sub { font-size: 11px; color: #92400e; font-weight: 700; }
+            .jw-picker-item.active .jw-picker-sub { color: #1f2937; }
+            .jw-batch-panel { border: 1px solid #e5d5a7; border-radius: 6px; background: #ffffff; overflow: hidden; }
+            .jw-batch-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            .jw-batch-table th { background: #fdf6e2; padding: 6px 9px; text-align: left; border-bottom: 1px solid #e5d5a7; font-size: 11px; }
+            .jw-batch-table td { padding: 5px 9px; border-bottom: 1px solid #f3f4f6; }
             .jw-btn-save {
-                background: #f2b71d; color: #1f2937;
-                border: 1px solid #d9a425; border-radius: 5px;
-                padding: 7px 18px; font-size: 13px; font-weight: 800;
-                cursor: pointer; white-space: nowrap;
+                background: #f2b71d; color: #1f2937; border: 1px solid #d9a425; border-radius: 5px;
+                padding: 6px 15px; font-size: 12.5px; font-weight: 800; cursor: pointer;
             }
             .jw-btn-save:hover { background: #e5aa12; }
             .jw-btn-sec {
-                background: #ffffff; color: #1f2937;
-                border: 1px solid #d1d5db; border-radius: 5px;
-                padding: 7px 13px; font-size: 12px; font-weight: 700;
-                cursor: pointer; white-space: nowrap;
+                background: #ffffff; color: #1f2937; border: 1px solid #d1d5db; border-radius: 5px;
+                padding: 6px 12px; font-size: 12px; font-weight: 700; cursor: pointer;
             }
             .jw-btn-sec:hover { border-color: #d9a425; background: #fef9ea; }
             .jw-accept-bar {
                 background: #fdf6e2; border: 1.5px solid #d9a425; border-radius: 5px;
-                padding: 8px 14px;
-                display: flex; justify-content: space-between; align-items: center; gap: 10px;
+                padding: 7px 12px; display: flex; justify-content: space-between; align-items: center; gap: 10px;
+            }
+            .jw-footer {
+                background: #fdf6e2; border-top: 1px solid #e5d5a7; padding: 7px 18px;
+                display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
+                font-size: 11px; color: #92400e; font-weight: 700;
             }
         `;
         document.head.appendChild(style);
     };
 
     /* ========================================================================
-       4. OPEN JOBWORK EXPRESS MODAL (TOP SPLIT + FULL-WIDTH BATCH BOTTOM)
-       ------------------------------------------------------------------------
+       5. OPEN MODAL
     ======================================================================== */
     window.openJobWorkExpressModal = () => {
         ensureTallyJobWorkStyles();
         const existing = document.getElementById('master-jobwork-express-modal');
         if (existing) existing.remove();
 
-        activeCategory = 'cutting';
+        const groups = getWorkGroups();
+        activeCategory = groups[0]?.key || 'cutting';
         movementType = 'gayi';
-        stockSource = 'fresh';
         expressBatchItems = [];
         lastSavedExpressBatch = null;
         jwPickerMode = 'process';
         jwPickerItems = [];
         jwPickerActiveIdx = 0;
+        selectedMaker = null;
+        selectedBatchKey = null;
         jwMakerArrowUsed = false;
 
         const today = getToday();
-        const activeKid = getEffectiveGodown();
-        const godamName = (typeof window.getKarkhanaNameById === 'function')
-            ? window.getKarkhanaNameById(activeKid)
-            : 'Main Godown';
+        const godamName = getGodamLabel(getEffectiveGodown());
+
+        const catBtnsHtml = groups.map((g, i) => `
+            <button type="button" tabindex="-1" id="jw-exp-cat-${esc(g.key)}" class="jw-pill-btn ${i === 0 ? 'active' : ''}" onclick="switchJobWorkCategory('${esc(g.key)}')">
+                ${esc(g.label)}${i < 4 ? ` [F${i + 1}]` : ''}
+            </button>
+        `).join('') + `<button type="button" tabindex="-1" id="jw-exp-cat-dukan" class="jw-pill-btn" onclick="switchJobWorkCategory('dukan')">Final Out (Dukan)</button>`;
 
         const modalHtml = `
         <div id="master-jobwork-express-modal" class="jw-overlay">
             <div class="jw-card">
-
-                <!-- Clean Minimal Cream Header -->
                 <div class="jw-header">
-                    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                        <h3 class="jw-title">JobWork Voucher</h3>
-                        <button type="button" tabindex="-1" id="jw-exp-cat-cutting" class="jw-pill-btn active" onclick="switchJobWorkCategory('cutting')">Cutting [F1]</button>
-                        <button type="button" tabindex="-1" id="jw-exp-cat-embroidery" class="jw-pill-btn" onclick="switchJobWorkCategory('embroidery')">Embroidery [F2]</button>
-                        <button type="button" tabindex="-1" id="jw-exp-cat-calender" class="jw-pill-btn" onclick="switchJobWorkCategory('calender')">Calender [F3]</button>
-                        <button type="button" tabindex="-1" id="jw-exp-cat-dukan" class="jw-pill-btn" onclick="switchJobWorkCategory('dukan')">Dukan [F4]</button>
+                    <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                        <h3 class="jw-title">JobWork Express</h3>
+                        ${catBtnsHtml}
                     </div>
                     <div style="display:flex; align-items:center; gap:8px;">
                         <span style="font-size:11.5px; color:#6b7280; font-weight:700;">Godown: ${esc(godamName)}</span>
-                        <button type="button" tabindex="-1" id="jw-exp-btn-movement" style="display:none;" onclick="toggleMovementType()">Saree Gayi</button>
-                        <button type="button" tabindex="-1" id="jw-exp-close-btn" class="jw-pill-btn" onclick="closeJobWorkExpressModal()">&larr; [Esc] Back</button>
+                        <button type="button" tabindex="-1" class="jw-pill-btn" onclick="closeJobWorkExpressModal()">&larr; [Esc] Back</button>
                     </div>
                 </div>
 
-                <!-- BODY: TOP SPLIT + BOTTOM FULL-WIDTH BATCH TABLE -->
                 <div class="jw-body">
-
-                    <!-- TOP 2-COLUMN SPLIT -->
                     <div class="jw-top-grid">
-
-                        <!-- LEFT PANE: 1 FIELD PER ROW -->
                         <div class="jw-left-col">
                             <div class="jw-sec-title" style="margin-top:0;">1. Process, Len-Den &amp; Worker</div>
 
                             <div class="jw-row">
-                                <label class="jw-lbl">Process [F1-F4] :</label>
-                                <input type="text" id="jw-exp-cat-input" value="1. Cutting" readonly class="jw-inp" style="border-color:#d9a425; cursor:pointer;">
+                                <label class="jw-lbl">Process :</label>
+                                <input type="text" id="jw-exp-cat-input" value="${esc(grpLabel(activeCategory))}" readonly class="jw-inp" style="border-color:#d9a425; cursor:pointer;">
                             </div>
 
                             <div class="jw-row" id="jw-exp-movement-row">
                                 <label class="jw-lbl">Len-Den [F5] :</label>
-                                <input type="text" id="jw-exp-movement-input" value="Saree Gayi (Bheja)" readonly class="jw-inp" style="cursor:pointer;">
-                            </div>
-
-                            <div id="jw-exp-source-container" class="jw-row">
-                                <label class="jw-lbl">Stock Source [F6] :</label>
-                                <div>
-                                    <input type="text" id="jw-exp-source-input" value="Fresh Godown Stock" readonly class="jw-inp" style="display:none; cursor:pointer;">
-                                    <select id="jw-exp-source-select" tabindex="-1" onchange="onExpressSourceDropdownChange(this.value)" style="display:none;"></select>
-                                    <span id="jw-exp-source-locked" style="display:block; width:100%; box-sizing:border-box; padding:6px 10px; background:#fdfcf7; border:1px solid #eadab0; border-radius:4px; font-size:12.5px; font-weight:700; color:#6b7280;">Fresh Godown Stock [Locked]</span>
-                                </div>
+                                <input type="text" id="jw-exp-movement-input" value="Out (Bhejein)" readonly class="jw-inp" style="cursor:pointer;">
                             </div>
 
                             <div class="jw-row">
-                                <label id="jw-exp-lbl-worker" class="jw-lbl">Cutting Kariger :</label>
+                                <label id="jw-exp-lbl-worker" class="jw-lbl">Worker :</label>
                                 <div>
                                     <input type="text" id="jw-exp-worker-input" placeholder="Select Worker..." autocomplete="off" class="jw-inp" style="border-color:#d9a425;">
-                                    <select id="jw-exp-worker" tabindex="-1" style="display:none;"></select>
+                                    <input type="hidden" id="jw-exp-worker" value="">
                                 </div>
                             </div>
 
@@ -568,76 +585,61 @@
                                 <input type="date" id="jw-exp-date" value="${today}" class="jw-inp">
                             </div>
 
-                            <!-- SECTION 2: BATCH ENTRY -->
-                            <div class="jw-sec-title" style="display:flex; justify-content:space-between; align-items:center;">
-                                <span>2. Batch Entry (Bunne Wale Ka Naam)</span>
-                                <span id="jw-exp-live-stock-hint" style="color:#b47d00; font-size:11px; text-transform:none;"></span>
+                            <div class="jw-sec-title">2. Batch Entry (Kariger ➔ Stage ➔ Pcs)</div>
+
+                            <div class="jw-row">
+                                <label class="jw-lbl">Kariger (Maker) :</label>
+                                <input type="text" id="jw-exp-maker-input" placeholder="Name likhein ya ↑↓ (Khali Enter=Save)" autocomplete="off" class="jw-inp" style="border-color:#d9a425;">
                             </div>
 
                             <div class="jw-row">
-                                <label class="jw-lbl">Maker (Bunne Wala) :</label>
-                                <div>
-                                    <input type="text" id="jw-exp-maker-input" placeholder="Maker naam likhein ya &uarr;&darr; chunein..." autocomplete="off" class="jw-inp" style="border-color:#d9a425;">
-                                    <datalist id="jw-exp-maker-dl"></datalist>
-                                </div>
+                                <label class="jw-lbl">Stage Batch :</label>
+                                <input type="text" id="jw-exp-stage-input" placeholder="Kariger select hone par stage chunein..." readonly class="jw-inp">
+                            </div>
+
+                            <div class="jw-row" id="jw-exp-dest-row" style="display:none;">
+                                <label class="jw-lbl">Wapas Kahan :</label>
+                                <select id="jw-exp-dest-select" class="jw-inp"></select>
                             </div>
 
                             <div class="jw-row">
-                                <label class="jw-lbl">Saree Qty (Pcs) :</label>
-                                <div style="display:flex; gap:8px; align-items:center; min-width:0;">
-                                    <div id="jw-exp-naap-container" style="display:none; width:88px; flex-shrink:0;">
-                                        <input type="text" id="jw-exp-naap-input" value="${lastEnteredNaap}" placeholder="Naap" title="Embroidery Naap" class="jw-inp jw-inp-num">
-                                    </div>
-                                    <input type="text" inputmode="numeric" pattern="[0-9]*" id="jw-exp-qty-input" placeholder="0 Pcs" class="jw-inp jw-inp-num" style="flex:1; min-width:60px; border-color:#d9a425;">
-                                    <button type="button" tabindex="-1" id="jw-exp-add-row-btn" class="jw-btn-save" style="padding:6px 12px; font-size:12px;" onclick="addExpressBatchRow()">+ Jodein</button>
-                                </div>
-                            </div>
-
-                            <!-- SECTION 3: DAMAGE (HIDDEN IN DUKAN) -->
-                            <div id="jw-exp-damage-row">
-                                <div class="jw-sec-title">3. Damage / Kaat (Optional)</div>
-                                <div class="jw-row">
-                                    <label class="jw-lbl">Damage &amp; Fine :</label>
-                                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; min-width:0;">
-                                        <input type="text" inputmode="numeric" id="jw-exp-damage-pcs" placeholder="Damage Pcs (0)" class="jw-inp jw-inp-num">
-                                        <input type="text" inputmode="decimal" id="jw-exp-damage-amt" placeholder="Fine ₹ (0.00)" class="jw-inp jw-inp-num">
-                                    </div>
+                                <label class="jw-lbl">Pcs :</label>
+                                <div style="display:flex; gap:6px; align-items:center;">
+                                    <input type="text" inputmode="numeric" id="jw-exp-qty-input" placeholder="0" class="jw-inp" style="flex:1; border-color:#d9a425;">
+                                    <button type="button" tabindex="-1" class="jw-btn-save" style="padding:5px 11px;" onclick="addExpressBatchRow()">+ Add</button>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- RIGHT PANE: FULL-HEIGHT TALLY PICKER -->
                         <div class="jw-right-col">
                             <div class="jw-right-panel">
                                 <div class="jw-right-head">
                                     <span id="jw-right-title">List of Processes</span>
-                                    <span id="jw-right-hint" style="font-size:11px; color:#6b7280; font-weight:600;">&uarr;&darr; + Enter</span>
+                                    <span id="jw-right-hint" style="font-size:11px; color:#6b7280;">&uarr;&darr; + Enter</span>
                                 </div>
                                 <div id="jw-right-picker" class="jw-picker-list"></div>
                             </div>
                         </div>
-
                     </div>
 
-                    <!-- FULL-WIDTH GATTHI / BATCH LIST TABLE (BOTTOM) -->
                     <div class="jw-batch-panel">
                         <div class="jw-right-head">
                             <span>Gatthi / Batch List</span>
-                            <div style="display:flex; align-items:center; gap:14px;">
-                                <span id="jw-exp-batch-count-badge" style="color:#6b7280; font-weight:700;">0 Items</span>
-                                <span style="font-size:12.5px; font-weight:800; color:#1f2937;">Total: <strong id="jw-exp-live-batch-total" style="color:#b47d00; font-size:14px;">0 Pcs</strong></span>
+                            <div style="display:flex; gap:12px;">
+                                <span id="jw-exp-batch-count-badge" style="color:#6b7280;">0 Items</span>
+                                <strong>Total: <span id="jw-exp-live-batch-total" style="color:#b47d00;">0 Pcs</span></strong>
                             </div>
                         </div>
                         <div style="overflow-y:auto; max-height:145px;">
                             <table class="jw-batch-table">
                                 <thead>
                                     <tr>
-                                        <th style="width:45px;">#</th>
-                                        <th>Maker (Bunne Wala)</th>
-                                        <th>Saree Design</th>
-                                        <th style="width:90px; text-align:center;">Naap</th>
-                                        <th style="width:100px; text-align:right;">Qty (Pcs)</th>
-                                        <th style="width:65px; text-align:center;">Del</th>
+                                        <th style="width:40px;">#</th>
+                                        <th>Kariger (Maker)</th>
+                                        <th>Saree &amp; Stage Trail</th>
+                                        <th id="jw-exp-th-dest" style="display:none;">Kahan</th>
+                                        <th style="width:90px; text-align:right;">Pcs</th>
+                                        <th style="width:50px; text-align:center;">Del</th>
                                     </tr>
                                 </thead>
                                 <tbody id="jw-exp-table-body"></tbody>
@@ -645,72 +647,59 @@
                         </div>
                     </div>
 
-                    <!-- Tally Accept? (Yes / No) Confirmation Bar -->
                     <div id="jw-exp-accept-strip" class="jw-accept-bar" style="display:none;">
-                        <span style="font-size:13px; font-weight:800; color:#1f2937;">Accept? Batch Save &amp; Challan Print Karein?</span>
+                        <strong style="font-size:12.5px;">Accept? Batch Save &amp; Print Karein?</strong>
                         <div style="display:flex; gap:8px;">
-                            <button type="button" id="jw-exp-accept-yes" class="jw-btn-save" style="padding:5px 14px;" onclick="submitMasterJobWorkExpress(true)">Yes [Y / Enter]</button>
-                            <button type="button" id="jw-exp-accept-no" class="jw-btn-sec" style="padding:5px 14px;" onclick="window.__jwCancelAccept()">No [N / Esc]</button>
+                            <button type="button" class="jw-btn-save" onclick="submitMasterJobWorkExpress(true)">Save &amp; Print [P]</button>
+                            <button type="button" id="jw-exp-accept-yes" class="jw-btn-save" onclick="submitMasterJobWorkExpress(false)">Yes [Y / Enter]</button>
+                            <button type="button" class="jw-btn-sec" onclick="window.__jwCancelAccept()">No [N / Esc]</button>
                         </div>
                     </div>
 
-                    <!-- Full-Width Action Bar -->
-                    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
-                        <span id="jw-exp-live-batch-summary" style="font-size:12px; color:#6b7280; font-weight:600;">Batch khali hai</span>
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                        <span id="jw-exp-status-msg" style="font-size:11.5px; color:#92400e; font-weight:700;">Kariger ➔ Stage ➔ Pcs · Khali Kariger Enter = Save</span>
                         <div style="display:flex; gap:8px;">
-                            <button type="button" tabindex="-1" id="jw-exp-print-btn" class="jw-btn-sec" onclick="printLastSavedJobWorkChallan()">A6 Challan [Alt+P]</button>
-                            <button type="button" id="jw-exp-submit-btn" class="jw-btn-save" onclick="submitMasterJobWorkExpress(true)">Save &amp; Challan [Ctrl+Enter]</button>
+                            <button type="button" tabindex="-1" class="jw-btn-sec" onclick="printLastSavedJobWorkChallan()">A6 Challan [Alt+P]</button>
+                            <button type="button" id="jw-exp-submit-btn" class="jw-btn-save" onclick="submitMasterJobWorkExpress(false)">Save Batch [Ctrl+Enter]</button>
                         </div>
                     </div>
-
                 </div>
 
-                <!-- Bottom Tally Status Bar -->
                 <div class="jw-footer">
-                    <div id="jw-exp-status-msg" style="font-weight:700; color:#b47d00;">
-                        [&uarr;&darr; + Enter] Right List Select &bull; [F1-F4] Process &bull; [F5] Gayi/Aayi &bull; [F6] Source &bull; [Ctrl+&crarr;] Save &bull; [Esc] Back
-                    </div>
-                    <div style="font-weight:600;">TallyPrime White &amp; Gold Mode</div>
+                    <span>[&uarr;&darr; + Enter] Right List Select &middot; [F5] Out/In &middot; [Ctrl+&crarr;] Save &middot; [Esc] Close</span>
+                    <span>Unified Trail Mode</span>
                 </div>
-
             </div>
         </div>`;
 
         document.body.insertAdjacentHTML('beforeend', modalHtml);
-        updateCategoryStyles();
+        updateCategoryUI();
         populateExpressWorkers();
-        updateSubBarState();
-        updateExpressMakerDatalist();
+        updateMovementUI();
         renderExpressBatchGrid();
         bindJobWorkExpressEvents();
         showJwRightPicker('process', '');
     };
 
     /* ========================================================================
-       5. RIGHT-PANE DYNAMIC TALLY PICKER CONTROLLER
-       ------------------------------------------------------------------------
+       6. RIGHT-PANE DYNAMIC PICKER (PROCESS / MOVEMENT / WORKER / KARIGER / STAGE)
     ======================================================================== */
     const getWorkerPickerList = (queryText = '') => {
         const q = String(queryText || '').trim().toLowerCase();
         if (activeCategory === 'dukan') {
             return [
-                { label: 'Apni Main Dukan', sub: 'Main', id: 'dukan_main' },
-                { label: 'Party / Retailer', sub: 'Party', id: 'dukan_party' }
-            ].filter(x => !q || x.label.toLowerCase().includes(q));
+                { label: 'Apni Main Dukan', sub: 'Main', id: 'Apni Main Dukan' },
+                { label: 'Party / Retailer', sub: 'Party', id: 'Party / Retailer' }
+            ].filter((x) => !q || x.label.toLowerCase().includes(q));
         }
 
-        const allWorkers = toArray(getFromStore('jobwork_workers'));
-        return allWorkers
-            .filter(w => w && String(w.type || '').toLowerCase().trim() === activeCategory)
-            .filter(w => !q || `${w.name} ${w.mobile || ''}`.toLowerCase().includes(q))
-            .map(w => ({
-                label: w.name,
-                sub: w.mobile || activeCategory.toUpperCase(),
-                id: w.id
-            }));
+        return safeArr(getFromStore('jobwork_workers'))
+            .filter((w) => w && String(w.type || '').toLowerCase().trim() === activeCategory)
+            .filter((w) => !q || `${w.name} ${w.mobile || ''}`.toLowerCase().includes(q))
+            .map((w) => ({ label: w.name, sub: w.mobile || grpLabel(activeCategory), id: w.id }));
     };
 
-    const showJwRightPicker = (mode, queryText) => {
+    const showJwRightPicker = (mode, queryText = '') => {
         jwPickerMode = mode;
         const pickerEl = document.getElementById('jw-right-picker');
         const titleEl = document.getElementById('jw-right-title');
@@ -720,77 +709,72 @@
         jwPickerItems = [];
 
         if (mode === 'process') {
-            if (titleEl) titleEl.textContent = 'List of Processes';
+            if (titleEl) titleEl.textContent = 'List of Processes (Work Groups)';
             if (hintEl) hintEl.textContent = '↑↓ + Enter';
+            const groups = getWorkGroups();
             jwPickerItems = [
-                { label: '1. Cutting', sub: 'F1', data: 'cutting' },
-                { label: '2. Embroidery', sub: 'F2', data: 'embroidery' },
-                { label: '3. Calender', sub: 'F3', data: 'calender' },
-                { label: '4. Dukan', sub: 'F4', data: 'dukan' }
+                ...groups.map((g, i) => ({ label: `${i + 1}. ${g.label}`, sub: i < 4 ? `F${i + 1}` : 'Group', data: g.key })),
+                { label: `${groups.length + 1}. Final Out (Dukan)`, sub: 'Dispatch', data: 'dukan' }
             ];
-            const idx = jwPickerItems.findIndex(x => x.data === activeCategory);
+            const idx = jwPickerItems.findIndex((x) => x.data === activeCategory);
             jwPickerActiveIdx = idx >= 0 ? idx : 0;
         } else if (mode === 'movement') {
-            if (titleEl) titleEl.textContent = 'Select Len-Den (Movement)';
+            if (titleEl) titleEl.textContent = 'Select Len-Den';
             if (hintEl) hintEl.textContent = '↑↓ + Enter';
             jwPickerItems = [
-                { label: 'Saree Gayi (Bheja)', sub: 'Outward', data: 'gayi' },
-                { label: 'Wapas Aayi (Tayyar)', sub: 'Inward', data: 'aayi' }
+                { label: `${grpLabel(activeCategory)} Out (Bhejein)`, sub: 'Godam ➔ Worker', data: 'gayi' },
+                { label: `${grpLabel(activeCategory)} In (Wapas Lein)`, sub: 'Worker ➔ Godam', data: 'aayi' }
             ];
-            const idx = jwPickerItems.findIndex(x => x.data === movementType);
-            jwPickerActiveIdx = idx >= 0 ? idx : 0;
-        } else if (mode === 'source') {
-            if (titleEl) titleEl.textContent = 'Select Stock Source';
-            if (hintEl) hintEl.textContent = '↑↓ + Enter';
-            if (activeCategory === 'embroidery') {
-                jwPickerItems = [
-                    { label: 'Fresh Godown Stock', sub: 'Fresh', data: 'fresh' },
-                    { label: 'Cutting Stock', sub: 'Cutting', data: 'cutting' }
-                ];
-            } else if (activeCategory === 'calender') {
-                jwPickerItems = [
-                    { label: 'Cutting Stock', sub: 'Cutting', data: 'cutting' },
-                    { label: 'Embroidery Stock', sub: 'Embroidery', data: 'embroidery' },
-                    { label: 'Fresh Godown Stock', sub: 'Fresh', data: 'fresh' }
-                ];
-            }
-            const idx = jwPickerItems.findIndex(x => x.data === stockSource);
-            jwPickerActiveIdx = idx >= 0 ? idx : 0;
+            jwPickerActiveIdx = movementType === 'aayi' ? 1 : 0;
         } else if (mode === 'worker') {
-            if (titleEl) titleEl.textContent = activeCategory === 'dukan' ? 'Select Dukan / Receiver' : `List of ${activeCategory.toUpperCase()} Workers`;
+            if (titleEl) titleEl.textContent = activeCategory === 'dukan' ? 'Dukan / Party' : `List of ${grpLabel(activeCategory)} Workers`;
             if (hintEl) hintEl.textContent = '↑↓ + Enter';
-            const list = getWorkerPickerList(queryText);
-            jwPickerItems = list.map(w => ({ label: w.label, sub: w.sub, data: w }));
+            jwPickerItems = getWorkerPickerList(queryText).map((w) => ({ label: w.label, sub: w.sub, data: w }));
             const curVal = document.getElementById('jw-exp-worker')?.value;
-            const curIdx = jwPickerItems.findIndex(x => String(x.data.id) === String(curVal));
+            const curIdx = jwPickerItems.findIndex((x) => String(x.data.id) === String(curVal));
             jwPickerActiveIdx = curIdx >= 0 ? curIdx : 0;
-        } else if (mode === 'maker') {
-            const effStage = getTargetStageForLookup();
-            if (titleEl) titleEl.textContent = `List of Makers (${effStage.toUpperCase()} Stock)`;
-            if (hintEl) hintEl.textContent = expressBatchItems.length > 0 ? 'Khali Enter = Batch Poora' : '↑↓ + Enter';
-            jwPickerItems = getAvailableMakersList(queryText);
+        } else if (mode === 'kariger') {
+            const batches = getActiveSourceBatches();
+            const q = String(queryText || '').trim().toLowerCase();
+            const kMap = new Map();
+            batches.forEach((b) => {
+                const avail = b.pcs - getUsedBatchQty(b.key);
+                if (avail <= 0) return;
+                let ex = kMap.get(b.maker);
+                if (!ex) { ex = { maker: b.maker, pcs: 0, stages: 0, sarees: new Set() }; kMap.set(b.maker, ex); }
+                ex.pcs += avail;
+                ex.stages += 1;
+                ex.sarees.add(b.saree);
+            });
+            jwPickerItems = Array.from(kMap.values())
+                .filter((k) => !q || `${k.maker} ${Array.from(k.sarees).join(' ')}`.toLowerCase().includes(q))
+                .sort((a, b) => a.maker.localeCompare(b.maker))
+                .map((k) => ({ label: k.maker, sub: `${k.pcs} Pc (${k.stages} Stage)`, data: k.maker }));
+            if (titleEl) titleEl.textContent = '1. List of Karigers (Makers)';
+            if (hintEl) hintEl.textContent = expressBatchItems.length > 0 ? 'Khali Enter = Save' : '↑↓ + Enter';
             if (jwPickerActiveIdx >= jwPickerItems.length) jwPickerActiveIdx = 0;
-            if (jwPickerActiveIdx < 0) jwPickerActiveIdx = 0;
+        } else if (mode === 'stage') {
+            const batches = getActiveSourceBatches().filter((b) => b.maker === selectedMaker);
+            jwPickerItems = batches
+                .map((b) => ({ ...b, avail: b.pcs - getUsedBatchQty(b.key) }))
+                .filter((b) => b.avail > 0)
+                .map((b) => ({
+                    label: `${b.saree}`,
+                    sub: `${formatTrail(b.doneStages, b.bucket)} · ${b.avail} Pc`,
+                    data: b
+                }));
+            if (titleEl) titleEl.textContent = `2. ${selectedMaker || ''} ke Stages`;
+            if (hintEl) hintEl.textContent = '↑↓ + Enter';
+            if (jwPickerActiveIdx >= jwPickerItems.length) jwPickerActiveIdx = 0;
         } else if (mode === 'summary') {
-            if (titleEl) titleEl.textContent = 'Active Entry Context';
-            if (hintEl) hintEl.textContent = 'Live Info';
-            const wText = document.getElementById('jw-exp-worker-input')?.value || '-';
-            const srcTxt = getSourceDisplayName(stockSource);
-            pickerEl.innerHTML = `
-                <div style="padding:12px 14px; font-size:12.5px; line-height:1.7;">
-                    <div style="display:flex; justify-content:space-between; border-bottom:1px solid #f3f4f6; padding-bottom:5px; margin-bottom:5px;">
-                        <span style="color:#6b7280;">Process:</span> <strong>${esc(getCategoryDisplayName(activeCategory))}</strong>
-                    </div>
-                    <div style="display:flex; justify-content:space-between; border-bottom:1px solid #f3f4f6; padding-bottom:5px; margin-bottom:5px;">
-                        <span style="color:#6b7280;">Len-Den:</span> <strong>${movementType === 'gayi' ? 'Saree Gayi (Bheja)' : 'Wapas Aayi (Tayyar)'}</strong>
-                    </div>
-                    <div style="display:flex; justify-content:space-between; border-bottom:1px solid #f3f4f6; padding-bottom:5px; margin-bottom:5px;">
-                        <span style="color:#6b7280;">Source:</span> <strong>${esc(srcTxt)}</strong>
-                    </div>
-                    <div style="display:flex; justify-content:space-between;">
-                        <span style="color:#6b7280;">Worker:</span> <strong style="color:#b47d00;">${esc(wText)}</strong>
-                    </div>
-                </div>`;
+            if (titleEl) titleEl.textContent = 'Active Context';
+            if (hintEl) hintEl.textContent = 'Live';
+            const wTxt = document.getElementById('jw-exp-worker-input')?.value || '-';
+            pickerEl.innerHTML = `<div style="padding:12px; font-size:12.5px; line-height:1.7;">
+                <div><strong>Process:</strong> ${esc(grpLabel(activeCategory))}</div>
+                <div><strong>Len-Den:</strong> ${activeCategory === 'dukan' ? 'Final Out' : (movementType === 'gayi' ? 'Out (Bhejein)' : 'In (Wapas Lein)')}</div>
+                <div><strong>Worker / Party:</strong> ${esc(wTxt)}</div>
+            </div>`;
             return;
         }
 
@@ -802,38 +786,18 @@
         if (!pickerEl) return;
 
         if (!jwPickerItems.length) {
-            pickerEl.innerHTML = `<div style="padding:18px 12px; text-align:center; color:#6b7280; font-size:12px;">Koi matching record nahi mila.</div>`;
+            pickerEl.innerHTML = `<div style="padding:18px 12px; text-align:center; color:#6b7280; font-size:12px;">Koi matching stock/record nahi mila.</div>`;
             return;
         }
 
-        let html = '';
-        jwPickerItems.forEach((item, idx) => {
-            const cls = idx === jwPickerActiveIdx ? 'jw-picker-item active' : 'jw-picker-item';
-            html += `<div class="${cls}" onmousedown="event.preventDefault(); window.__jwPickItem(${idx})">
+        pickerEl.innerHTML = jwPickerItems.map((item, idx) => `
+            <div class="jw-picker-item ${idx === jwPickerActiveIdx ? 'active' : ''}" onmousedown="event.preventDefault(); window.__jwPickItem(${idx})">
                 <span>${esc(item.label)}</span>
                 <span class="jw-picker-sub">${esc(item.sub)}</span>
-            </div>`;
-        });
-        pickerEl.innerHTML = html;
+            </div>
+        `).join('');
 
-        const activeEl = pickerEl.querySelector('.jw-picker-item.active');
-        if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
-    };
-
-    const focusNextAfterProcess = () => {
-        if (activeCategory === 'dukan') {
-            focusFirstField('jw-exp-worker-input');
-        } else {
-            focusFirstField('jw-exp-movement-input');
-        }
-    };
-
-    const focusNextAfterMovement = () => {
-        if (movementType === 'gayi' && (activeCategory === 'embroidery' || activeCategory === 'calender')) {
-            focusFirstField('jw-exp-source-input');
-        } else {
-            focusFirstField('jw-exp-worker-input');
-        }
+        pickerEl.querySelector('.jw-picker-item.active')?.scrollIntoView({ block: 'nearest' });
     };
 
     window.__jwPickItem = (idx) => {
@@ -844,24 +808,13 @@
             if (item.data !== activeCategory) {
                 if (!switchJobWorkCategory(item.data, true)) return;
             } else {
-                focusNextAfterProcess();
+                focusFirstField(activeCategory === 'dukan' ? 'jw-exp-worker-input' : 'jw-exp-movement-input');
             }
         } else if (jwPickerMode === 'movement') {
             if (item.data !== movementType) {
-                if (!confirmClearBatchIfNeeded('Len-Den (Gayi/Aayi)')) return;
+                if (!confirmClearBatchIfNeeded('Len-Den')) return;
                 movementType = item.data;
-                updateSubBarState();
-                updateExpressMakerDatalist();
-                updateMakerLiveStockDisplay();
-            }
-            focusNextAfterMovement();
-        } else if (jwPickerMode === 'source') {
-            if (item.data !== stockSource) {
-                if (!confirmClearBatchIfNeeded('Stock Source')) return;
-                stockSource = item.data;
-                updateSubBarState();
-                updateExpressMakerDatalist();
-                updateMakerLiveStockDisplay();
+                updateMovementUI();
             }
             focusFirstField('jw-exp-worker-input');
         } else if (jwPickerMode === 'worker') {
@@ -870,12 +823,21 @@
             if (wSel) wSel.value = item.data.id;
             if (wInp) wInp.value = item.data.label;
             focusFirstField('jw-exp-date');
-        } else if (jwPickerMode === 'maker') {
+        } else if (jwPickerMode === 'kariger') {
+            selectedMaker = item.data;
             const mInp = document.getElementById('jw-exp-maker-input');
             if (mInp) mInp.value = item.data;
-            updateMakerLiveStockDisplay();
-            if (activeCategory === 'embroidery') {
-                focusFirstField('jw-exp-naap-input');
+            jwPickerActiveIdx = 0;
+            focusFirstField('jw-exp-stage-input');
+        } else if (jwPickerMode === 'stage') {
+            const b = item.data;
+            selectedBatchKey = b.key;
+            const sInp = document.getElementById('jw-exp-stage-input');
+            const qInp = document.getElementById('jw-exp-qty-input');
+            if (sInp) sInp.value = `${b.saree} [${formatTrail(b.doneStages, b.bucket)}] — ${b.avail} Pc`;
+            if (qInp) qInp.value = b.avail;
+            if (activeCategory !== 'dukan' && movementType === 'aayi') {
+                focusFirstField('jw-exp-dest-select');
             } else {
                 focusFirstField('jw-exp-qty-input');
             }
@@ -883,70 +845,40 @@
     };
 
     /* ========================================================================
-       6. TALLY-STYLE KEYBOARD ENGINE (FOCUS TRAP + ENTER CHAINING + ACCEPT)
-       ------------------------------------------------------------------------
+       7. KEYBOARD ENGINE (TALLY FOCUS TRAP + ENTER CHAINING + ACCEPT)
     ======================================================================== */
-    const getOrderedFocusableInputs = () => {
+    const getOrderedInputs = () => {
         const ids = [
             'jw-exp-cat-input',
             'jw-exp-movement-input',
-            'jw-exp-source-input',
             'jw-exp-worker-input',
             'jw-exp-date',
             'jw-exp-maker-input',
-            'jw-exp-naap-input',
-            'jw-exp-qty-input',
-            'jw-exp-damage-pcs',
-            'jw-exp-damage-amt',
-            'jw-exp-submit-btn'
+            'jw-exp-stage-input',
+            'jw-exp-dest-select',
+            'jw-exp-qty-input'
         ];
-        return ids
-            .map((id) => document.getElementById(id))
-            .filter((el) => el && !el.disabled && el.offsetParent !== null && getComputedStyle(el).display !== 'none');
+        return ids.map((id) => document.getElementById(id)).filter((el) => el && !el.disabled && el.offsetParent !== null);
     };
 
-    const moveJwField = (currentId, dir) => {
-        const list = getOrderedFocusableInputs();
-        const curEl = document.getElementById(currentId);
-        const idx = list.indexOf(curEl);
-        if (idx === -1) return;
-        const nextIdx = idx + dir;
-        if (nextIdx >= 0 && nextIdx < list.length) {
-            const el = list[nextIdx];
-            if (el) {
-                el.focus();
-                if (typeof el.select === 'function' && !el.readOnly) el.select();
-            }
-        }
-    };
-
-    const focusFirstField = (targetId = 'jw-exp-cat-input') => {
+    const focusFirstField = (targetId) => {
         setTimeout(() => {
             const el = document.getElementById(targetId);
-            if (el && el.offsetParent !== null && getComputedStyle(el).display !== 'none') {
+            if (el && el.offsetParent !== null) {
                 el.focus();
                 if (typeof el.select === 'function' && !el.readOnly) el.select();
-            } else {
-                const list = getOrderedFocusableInputs();
-                if (list.length) list[0].focus();
             }
-        }, 50);
+        }, 30);
     };
 
     const showJwAcceptPrompt = (show) => {
         const bar = document.getElementById('jw-exp-accept-strip');
         if (!bar) return;
         bar.style.display = show ? 'flex' : 'none';
-        if (show) {
-            const yesBtn = document.getElementById('jw-exp-accept-yes');
-            if (yesBtn) yesBtn.focus();
-        }
+        if (show) setTimeout(() => document.getElementById('jw-exp-accept-yes')?.focus(), 20);
     };
 
     const bindJobWorkExpressEvents = () => {
-        const modal = document.getElementById('master-jobwork-express-modal');
-        if (!modal) return;
-
         window.__jwCancelAccept = () => {
             showJwAcceptPrompt(false);
             focusFirstField('jw-exp-maker-input');
@@ -955,83 +887,51 @@
         const yesBtn = document.getElementById('jw-exp-accept-yes');
         if (yesBtn) {
             yesBtn.addEventListener('keydown', (e) => {
-                if (e.key === 'y' || e.key === 'Y' || e.key === 'Enter') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    submitMasterJobWorkExpress(true);
-                } else if (e.key === 'n' || e.key === 'N' || e.key === 'Escape') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    window.__jwCancelAccept();
-                }
+                if (e.key === 'y' || e.key === 'Y' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); submitMasterJobWorkExpress(false); }
+                else if (e.key === 'p' || e.key === 'P') { e.preventDefault(); e.stopPropagation(); submitMasterJobWorkExpress(true); }
+                else if (e.key === 'n' || e.key === 'N' || e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); window.__jwCancelAccept(); }
             });
         }
 
         const catInp = document.getElementById('jw-exp-cat-input');
         const movInp = document.getElementById('jw-exp-movement-input');
-        const srcInp = document.getElementById('jw-exp-source-input');
         const workerInp = document.getElementById('jw-exp-worker-input');
         const dateEl = document.getElementById('jw-exp-date');
         const makerInp = document.getElementById('jw-exp-maker-input');
-        const naapInp = document.getElementById('jw-exp-naap-input');
+        const stageInp = document.getElementById('jw-exp-stage-input');
+        const destSel = document.getElementById('jw-exp-dest-select');
         const qtyInp = document.getElementById('jw-exp-qty-input');
-        const dmgPcsInp = document.getElementById('jw-exp-damage-pcs');
-        const dmgAmtInp = document.getElementById('jw-exp-damage-amt');
 
-        focusFirstField('jw-exp-cat-input');
-
-        const attachStepPicker = (el, modeName, isFilterable) => {
+        const attachPicker = (el, modeName, filterable) => {
             if (!el) return;
-            el.addEventListener('focus', () => {
-                showJwRightPicker(modeName, '');
-            });
-            if (isFilterable) {
-                el.addEventListener('input', () => {
-                    jwPickerActiveIdx = 0;
-                    showJwRightPicker(modeName, el.value);
-                });
+            el.addEventListener('focus', () => showJwRightPicker(modeName, filterable ? el.value : ''));
+            if (filterable) {
+                el.addEventListener('input', () => { jwPickerActiveIdx = 0; showJwRightPicker(modeName, el.value); });
             }
             el.addEventListener('keydown', (e) => {
                 if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                     if (jwPickerItems.length) {
                         e.preventDefault();
-                        if (e.key === 'ArrowDown') {
-                            jwPickerActiveIdx = (jwPickerActiveIdx + 1) % jwPickerItems.length;
-                        } else {
-                            jwPickerActiveIdx = (jwPickerActiveIdx - 1 + jwPickerItems.length) % jwPickerItems.length;
-                        }
+                        jwPickerActiveIdx = e.key === 'ArrowDown' ? (jwPickerActiveIdx + 1) % jwPickerItems.length : (jwPickerActiveIdx - 1 + jwPickerItems.length) % jwPickerItems.length;
                         renderJwRightPickerList();
                     }
                     return;
                 }
-                if (e.key === 'Enter' && !e.ctrlKey) {
+                if (e.key === 'Enter' && !e.ctrlKey && jwPickerItems[jwPickerActiveIdx]) {
                     e.preventDefault();
-                    if (e.shiftKey) {
-                        moveJwField(el.id, -1);
-                        return;
-                    }
-                    if (jwPickerItems.length && jwPickerItems[jwPickerActiveIdx]) {
-                        window.__jwPickItem(jwPickerActiveIdx);
-                    } else {
-                        moveJwField(el.id, 1);
-                    }
+                    window.__jwPickItem(jwPickerActiveIdx);
                 }
             });
         };
 
-        attachStepPicker(catInp, 'process', false);
-        attachStepPicker(movInp, 'movement', false);
-        attachStepPicker(srcInp, 'source', false);
-        attachStepPicker(workerInp, 'worker', true);
+        attachPicker(catInp, 'process', false);
+        attachPicker(movInp, 'movement', false);
+        attachPicker(workerInp, 'worker', true);
 
         if (dateEl) {
             dateEl.addEventListener('focus', () => showJwRightPicker('summary', ''));
             dateEl.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && !e.ctrlKey) {
-                    e.preventDefault();
-                    if (e.shiftKey) moveJwField('jw-exp-date', -1);
-                    else focusFirstField('jw-exp-maker-input');
-                }
+                if (e.key === 'Enter' && !e.ctrlKey) { e.preventDefault(); focusFirstField('jw-exp-maker-input'); }
             });
         }
 
@@ -1039,97 +939,65 @@
             makerInp.addEventListener('focus', () => {
                 jwMakerArrowUsed = false;
                 jwPickerActiveIdx = 0;
-                showJwRightPicker('maker', makerInp.value);
+                showJwRightPicker('kariger', makerInp.value);
             });
             makerInp.addEventListener('input', () => {
                 jwMakerArrowUsed = true;
                 jwPickerActiveIdx = 0;
-                showJwRightPicker('maker', makerInp.value);
-                updateMakerLiveStockDisplay();
+                showJwRightPicker('kariger', makerInp.value);
             });
             makerInp.addEventListener('keydown', (e) => {
                 if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                     if (jwPickerItems.length) {
                         e.preventDefault();
                         jwMakerArrowUsed = true;
-                        if (e.key === 'ArrowDown') {
-                            jwPickerActiveIdx = (jwPickerActiveIdx + 1) % jwPickerItems.length;
-                        } else {
-                            jwPickerActiveIdx = (jwPickerActiveIdx - 1 + jwPickerItems.length) % jwPickerItems.length;
-                        }
+                        jwPickerActiveIdx = e.key === 'ArrowDown' ? (jwPickerActiveIdx + 1) % jwPickerItems.length : (jwPickerActiveIdx - 1 + jwPickerItems.length) % jwPickerItems.length;
                         renderJwRightPickerList();
                     }
                     return;
                 }
                 if (e.key === 'Enter' && !e.ctrlKey) {
                     e.preventDefault();
-                    if (e.shiftKey) {
-                        moveJwField('jw-exp-maker-input', -1);
+                    if (!makerInp.value.trim() && expressBatchItems.length > 0 && !jwMakerArrowUsed) {
+                        showJwAcceptPrompt(true);
                         return;
                     }
-                    const typed = makerInp.value.trim();
-                    if (!typed && expressBatchItems.length > 0 && !jwMakerArrowUsed) {
-                        if (activeCategory !== 'dukan' && dmgPcsInp && dmgPcsInp.offsetParent !== null) {
-                            dmgPcsInp.focus();
-                            dmgPcsInp.select();
-                        } else {
-                            showJwAcceptPrompt(true);
-                        }
-                        return;
-                    }
-                    if (jwPickerItems.length && (jwMakerArrowUsed || typed !== '' || expressBatchItems.length === 0)) {
-                        window.__jwPickItem(jwPickerActiveIdx);
-                        return;
-                    }
+                    if (jwPickerItems[jwPickerActiveIdx]) window.__jwPickItem(jwPickerActiveIdx);
                 }
             });
         }
 
-        if (naapInp) {
-            naapInp.addEventListener('focus', () => showJwRightPicker('summary', ''));
-            naapInp.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && !e.ctrlKey) {
-                    e.preventDefault();
-                    if (e.shiftKey) { moveJwField('jw-exp-naap-input', -1); return; }
-                    if (naapInp.value.trim()) lastEnteredNaap = naapInp.value.trim();
-                    if (qtyInp) { qtyInp.focus(); qtyInp.select(); }
+        if (stageInp) {
+            stageInp.addEventListener('focus', () => { jwPickerActiveIdx = 0; showJwRightPicker('stage', ''); });
+            stageInp.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    if (jwPickerItems.length) {
+                        e.preventDefault();
+                        jwPickerActiveIdx = e.key === 'ArrowDown' ? (jwPickerActiveIdx + 1) % jwPickerItems.length : (jwPickerActiveIdx - 1 + jwPickerItems.length) % jwPickerItems.length;
+                        renderJwRightPickerList();
+                    }
+                    return;
                 }
+                if (e.key === 'Enter' && !e.ctrlKey && jwPickerItems[jwPickerActiveIdx]) {
+                    e.preventDefault();
+                    window.__jwPickItem(jwPickerActiveIdx);
+                }
+            });
+        }
+
+        if (destSel) {
+            destSel.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.ctrlKey) { e.preventDefault(); focusFirstField('jw-exp-qty-input'); }
             });
         }
 
         if (qtyInp) {
-            qtyInp.addEventListener('focus', () => showJwRightPicker('summary', ''));
             qtyInp.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && !e.ctrlKey) {
-                    e.preventDefault();
-                    if (e.shiftKey) { moveJwField('jw-exp-qty-input', -1); return; }
-                    addExpressBatchRow();
-                }
+                if (e.key === 'Enter' && !e.ctrlKey) { e.preventDefault(); addExpressBatchRow(); }
             });
         }
 
-        if (dmgPcsInp) {
-            dmgPcsInp.addEventListener('focus', () => showJwRightPicker('summary', ''));
-            dmgPcsInp.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && !e.ctrlKey) {
-                    e.preventDefault();
-                    if (e.shiftKey) { moveJwField('jw-exp-damage-pcs', -1); return; }
-                    if (dmgAmtInp) { dmgAmtInp.focus(); dmgAmtInp.select(); }
-                }
-            });
-        }
-
-        if (dmgAmtInp) {
-            dmgAmtInp.addEventListener('focus', () => showJwRightPicker('summary', ''));
-            dmgAmtInp.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && !e.ctrlKey) {
-                    e.preventDefault();
-                    if (e.shiftKey) { moveJwField('jw-exp-damage-amt', -1); return; }
-                    showJwAcceptPrompt(true);
-                }
-            });
-        }
-
+        focusFirstField('jw-exp-cat-input');
         window.removeEventListener('keydown', handleJobWorkExpressGlobalKeydown, true);
         window.addEventListener('keydown', handleJobWorkExpressGlobalKeydown, true);
     };
@@ -1139,380 +1007,187 @@
         if (!modal || modal.style.display === 'none') return;
 
         if (e.key === 'Tab') {
-            const list = getOrderedFocusableInputs();
+            const list = getOrderedInputs();
             if (!list.length) return;
-            e.preventDefault();
-            e.stopPropagation();
-            e.stopImmediatePropagation();
-
-            const curIdx = list.indexOf(document.activeElement);
-            let nextIdx = 0;
-            if (curIdx === -1) nextIdx = 0;
-            else if (e.shiftKey) nextIdx = (curIdx - 1 + list.length) % list.length;
-            else nextIdx = (curIdx + 1) % list.length;
-
-            const nextEl = list[nextIdx];
-            if (nextEl) {
-                nextEl.focus();
-                if (typeof nextEl.select === 'function' && !nextEl.readOnly) nextEl.select();
-            }
+            e.preventDefault(); e.stopImmediatePropagation();
+            const cur = list.indexOf(document.activeElement);
+            const nxt = e.shiftKey ? (cur - 1 + list.length) % list.length : (cur + 1) % list.length;
+            list[nxt]?.focus();
             return;
         }
 
         if (e.key === 'Escape') {
-            e.preventDefault();
-            e.stopPropagation();
-            e.stopImmediatePropagation();
+            e.preventDefault(); e.stopImmediatePropagation();
             const acceptBar = document.getElementById('jw-exp-accept-strip');
             if (acceptBar && acceptBar.style.display !== 'none') {
                 window.__jwCancelAccept();
+            } else if (document.activeElement?.id === 'jw-exp-stage-input') {
+                selectedMaker = null;
+                selectedBatchKey = null;
+                document.getElementById('jw-exp-stage-input').value = '';
+                focusFirstField('jw-exp-maker-input');
             } else {
                 closeJobWorkExpressModal();
             }
             return;
         }
 
-        if (e.key === 'F1' || (e.altKey && (e.key === '1' || e.code === 'Digit1'))) {
-            e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-            switchJobWorkCategory('cutting', true);
+        const groups = getWorkGroups();
+        if (['F1', 'F2', 'F3', 'F4'].includes(e.key)) {
+            e.preventDefault(); e.stopImmediatePropagation();
+            const idx = parseInt(e.key.slice(1), 10) - 1;
+            if (groups[idx]) switchJobWorkCategory(groups[idx].key, true);
+            else if (e.key === 'F4') switchJobWorkCategory('dukan', true);
             return;
         }
-        if (e.key === 'F2' || (e.altKey && (e.key === '2' || e.code === 'Digit2'))) {
-            e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-            switchJobWorkCategory('embroidery', true);
-            return;
-        }
-        if (e.key === 'F3' || (e.altKey && (e.key === '3' || e.code === 'Digit3'))) {
-            e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-            switchJobWorkCategory('calender', true);
-            return;
-        }
-        if (e.key === 'F4' || (e.altKey && (e.key === '4' || e.code === 'Digit4'))) {
-            e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-            switchJobWorkCategory('dukan', true);
-            return;
-        }
-        if (e.key === 'F5' || (e.altKey && (e.key === '5' || e.code === 'Digit5'))) {
-            e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-            toggleMovementType(true);
-            return;
-        }
-        if (e.key === 'F6' || (e.altKey && (e.key === '6' || e.code === 'Digit6'))) {
-            e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-            toggleStockSource(true);
-            return;
-        }
-
-        if (e.ctrlKey && e.key === 'Enter') {
-            e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-            submitMasterJobWorkExpress(true);
-            return;
-        }
-
-        if (e.altKey && (e.key === 'p' || e.key === 'P')) {
-            e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-            printLastSavedJobWorkChallan();
-            return;
-        }
+        if (e.key === 'F5') { e.preventDefault(); e.stopImmediatePropagation(); toggleMovementType(true); return; }
+        if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress(false); return; }
+        if (e.altKey && (e.key === 'p' || e.key === 'P')) { e.preventDefault(); e.stopImmediatePropagation(); printLastSavedJobWorkChallan(); }
     };
 
     window.closeJobWorkExpressModal = () => {
         window.removeEventListener('keydown', handleJobWorkExpressGlobalKeydown, true);
-        const modal = document.getElementById('master-jobwork-express-modal');
-        if (modal) modal.remove();
+        document.getElementById('master-jobwork-express-modal')?.remove();
         expressBatchItems = [];
     };
 
     /* ========================================================================
-       7. LEVEL 1 & 2 SWITCHES (WITH ZERO-MIX GUARD)
-       ------------------------------------------------------------------------
+       8. CATEGORY & MOVEMENT SWITCHES
     ======================================================================== */
-    const confirmClearBatchIfNeeded = (actionLabel) => {
-        if (expressBatchItems.length === 0) return true;
-        const ok = confirm(`Batch list me ${expressBatchItems.length} item pehle se jode hue hain.\n${actionLabel} badalne par purani list clear ho jayegi taaki maal mix na ho.\n\nAage badhein?`);
-        if (ok) {
-            expressBatchItems = [];
-            renderExpressBatchGrid();
-        }
+    const confirmClearBatchIfNeeded = (lbl) => {
+        if (!expressBatchItems.length) return true;
+        const ok = confirm(`Batch list me ${expressBatchItems.length} item hain. ${lbl} badalne par list clear hogi. Aage badhein?`);
+        if (ok) { expressBatchItems = []; renderExpressBatchGrid(); }
         return ok;
     };
 
     window.switchJobWorkCategory = (cat, advanceFocus = false) => {
-        if (cat === activeCategory) {
-            if (advanceFocus) focusNextAfterProcess();
-            return true;
+        if (cat !== activeCategory) {
+            if (!confirmClearBatchIfNeeded('Process')) return false;
+            activeCategory = cat;
+            movementType = 'gayi';
+            selectedMaker = null;
+            selectedBatchKey = null;
+            updateCategoryUI();
+            populateExpressWorkers();
+            updateMovementUI();
         }
-        if (!confirmClearBatchIfNeeded('Process')) return false;
-
-        activeCategory = cat;
-        movementType = 'gayi';
-        stockSource = getDefaultSourceForCategory(cat);
-
-        updateCategoryStyles();
-        populateExpressWorkers();
-        updateSubBarState();
-        updateExpressMakerDatalist();
-        updateMakerLiveStockDisplay();
-
         if (advanceFocus) {
-            focusNextAfterProcess();
-        } else {
-            focusFirstField('jw-exp-worker-input');
+            focusFirstField(activeCategory === 'dukan' ? 'jw-exp-worker-input' : 'jw-exp-movement-input');
         }
         return true;
     };
 
-    window.onExpressSourceDropdownChange = (nextVal) => {
-        if (!nextVal || nextVal === stockSource) return;
-        if (!confirmClearBatchIfNeeded('Stock Source')) {
-            const sel = document.getElementById('jw-exp-source-select');
-            if (sel) sel.value = stockSource;
-            return;
-        }
-        stockSource = nextVal;
-        updateSubBarState();
-        updateExpressMakerDatalist();
-        updateMakerLiveStockDisplay();
-    };
-
-    window.toggleStockSource = (advanceFocus = false) => {
-        if (activeCategory === 'cutting' || activeCategory === 'dukan' || movementType !== 'gayi') return;
-
-        let nextSource = stockSource;
-        if (activeCategory === 'embroidery') {
-            nextSource = (stockSource === 'fresh') ? 'cutting' : 'fresh';
-        } else if (activeCategory === 'calender') {
-            if (stockSource === 'cutting') nextSource = 'embroidery';
-            else if (stockSource === 'embroidery') nextSource = 'fresh';
-            else nextSource = 'cutting';
-        }
-
-        if (nextSource === stockSource) return;
-        if (!confirmClearBatchIfNeeded('Stock Source')) return;
-
-        stockSource = nextSource;
-        updateSubBarState();
-        updateExpressMakerDatalist();
-        updateMakerLiveStockDisplay();
+    window.toggleMovementType = (advanceFocus = false) => {
+        if (activeCategory === 'dukan') return;
+        if (!confirmClearBatchIfNeeded('Len-Den')) return;
+        movementType = (movementType === 'gayi') ? 'aayi' : 'gayi';
+        selectedMaker = null;
+        selectedBatchKey = null;
+        updateMovementUI();
         if (advanceFocus) focusFirstField('jw-exp-worker-input');
     };
 
-    window.toggleMovementType = (advanceFocus = false) => {
-        if (activeCategory === 'dukan') return;
-        if (!confirmClearBatchIfNeeded('Len-Den (Gayi/Aayi)')) return;
-
-        movementType = (movementType === 'gayi') ? 'aayi' : 'gayi';
-        updateSubBarState();
-        updateExpressMakerDatalist();
-        updateMakerLiveStockDisplay();
-        if (advanceFocus) focusNextAfterMovement();
-    };
-
-    const updateCategoryStyles = () => {
-        const btnCut = document.getElementById('jw-exp-cat-cutting');
-        const btnEmb = document.getElementById('jw-exp-cat-embroidery');
-        const btnCal = document.getElementById('jw-exp-cat-calender');
-        const btnDuk = document.getElementById('jw-exp-cat-dukan');
-        const catInp = document.getElementById('jw-exp-cat-input');
-
-        [btnCut, btnEmb, btnCal, btnDuk].forEach((b) => {
-            if (b) b.classList.remove('active');
+    const updateCategoryUI = () => {
+        document.querySelectorAll('#master-jobwork-express-modal [id^="jw-exp-cat-"]').forEach((b) => {
+            if (b.tagName === 'BUTTON') b.classList.toggle('active', b.id === `jw-exp-cat-${activeCategory}`);
         });
+        const catInp = document.getElementById('jw-exp-cat-input');
+        if (catInp) catInp.value = grpLabel(activeCategory);
 
-        if (activeCategory === 'cutting' && btnCut) btnCut.classList.add('active');
-        else if (activeCategory === 'embroidery' && btnEmb) btnEmb.classList.add('active');
-        else if (activeCategory === 'calender' && btnCal) btnCal.classList.add('active');
-        else if (activeCategory === 'dukan' && btnDuk) btnDuk.classList.add('active');
-
-        if (catInp) catInp.value = getCategoryDisplayName(activeCategory);
-
-        const naapBox = document.getElementById('jw-exp-naap-container');
-        if (naapBox) {
-            naapBox.style.display = (activeCategory === 'embroidery') ? 'block' : 'none';
-        }
-
-        const dmgRow = document.getElementById('jw-exp-damage-row');
-        if (dmgRow) {
-            dmgRow.style.display = (activeCategory === 'dukan') ? 'none' : 'block';
-        }
+        const lblW = document.getElementById('jw-exp-lbl-worker');
+        if (lblW) lblW.textContent = activeCategory === 'dukan' ? 'Dukan / Party :' : `${grpLabel(activeCategory)} Worker :`;
     };
 
-    const updateSubBarState = () => {
-        const btnMov = document.getElementById('jw-exp-btn-movement');
+    const updateMovementUI = () => {
         const movRow = document.getElementById('jw-exp-movement-row');
         const movInp = document.getElementById('jw-exp-movement-input');
-        const srcContainer = document.getElementById('jw-exp-source-container');
-        const srcSelect = document.getElementById('jw-exp-source-select');
-        const srcInp = document.getElementById('jw-exp-source-input');
-        const srcLocked = document.getElementById('jw-exp-source-locked');
-        const lblWorker = document.getElementById('jw-exp-lbl-worker');
+        const destRow = document.getElementById('jw-exp-dest-row');
+        const destSel = document.getElementById('jw-exp-dest-select');
+        const thDest = document.getElementById('jw-exp-th-dest');
 
-        if (btnMov) {
-            if (activeCategory === 'dukan') {
-                movementType = 'gayi';
-                btnMov.textContent = 'Dukan Bheja';
-            } else if (movementType === 'gayi') {
-                btnMov.textContent = 'Saree Gayi [F5]';
-            } else {
-                btnMov.textContent = 'Wapas Aayi [F5]';
-            }
-        }
+        if (movRow) movRow.style.display = activeCategory === 'dukan' ? 'none' : 'grid';
+        if (movInp) movInp.value = movementType === 'gayi' ? `${grpLabel(activeCategory)} Out (Bhejein)` : `${grpLabel(activeCategory)} In (Wapas Lein)`;
 
-        if (movRow) {
-            movRow.style.display = (activeCategory === 'dukan') ? 'none' : 'grid';
-        }
-        if (movInp) {
-            movInp.value = (movementType === 'gayi') ? 'Saree Gayi (Bheja)' : 'Wapas Aayi (Tayyar)';
-        }
+        const isIn = (activeCategory !== 'dukan' && movementType === 'aayi');
+        if (destRow) destRow.style.display = isIn ? 'grid' : 'none';
+        if (thDest) thDest.style.display = isIn ? 'table-cell' : 'none';
 
-        if (srcContainer && srcSelect && srcLocked && srcInp) {
-            if (activeCategory === 'dukan' || movementType !== 'gayi') {
-                srcContainer.style.display = 'none';
-                srcInp.style.display = 'none';
-                srcLocked.style.display = 'none';
-            } else if (activeCategory === 'cutting') {
-                srcContainer.style.display = 'grid';
-                srcInp.style.display = 'none';
-                srcLocked.style.display = 'block';
-                srcLocked.textContent = 'Fresh Godown Stock [Locked]';
-            } else if (activeCategory === 'embroidery') {
-                srcContainer.style.display = 'grid';
-                srcLocked.style.display = 'none';
-                srcInp.style.display = 'block';
-                srcSelect.innerHTML = `
-                    <option value="fresh">Fresh Godown Stock</option>
-                    <option value="cutting">Cutting Stock</option>
-                `;
-                if (stockSource !== 'fresh' && stockSource !== 'cutting') stockSource = 'fresh';
-                srcSelect.value = stockSource;
-                srcInp.value = getSourceDisplayName(stockSource);
-            } else if (activeCategory === 'calender') {
-                srcContainer.style.display = 'grid';
-                srcLocked.style.display = 'none';
-                srcInp.style.display = 'block';
-                srcSelect.innerHTML = `
-                    <option value="cutting">Cutting Stock</option>
-                    <option value="embroidery">Embroidery Stock</option>
-                    <option value="fresh">Fresh Godown Stock</option>
-                `;
-                if (!['cutting', 'embroidery', 'fresh'].includes(stockSource)) stockSource = 'cutting';
-                srcSelect.value = stockSource;
-                srcInp.value = getSourceDisplayName(stockSource);
-            }
-        }
-
-        if (lblWorker) {
-            if (activeCategory === 'dukan') lblWorker.textContent = 'Dukan / Receiver :';
-            else if (activeCategory === 'cutting') lblWorker.textContent = 'Cutting Kariger :';
-            else if (activeCategory === 'embroidery') lblWorker.textContent = 'Embroidery Kariger :';
-            else lblWorker.textContent = 'Calender Kariger :';
+        if (destSel && isIn) {
+            const def = activeCategory === 'calender' ? 'finished' : 'godam';
+            destSel.innerHTML = `
+                <option value="godam" ${def === 'godam' ? 'selected' : ''}>Godam (${esc(grpLabel(activeCategory))} Complete)</option>
+                <option value="finished" ${def === 'finished' ? 'selected' : ''}>Final Tayyar (Finished)</option>
+                <option value="lott">Lott / Damage</option>
+            `;
         }
     };
 
     const populateExpressWorkers = () => {
-        const wSel = document.getElementById('jw-exp-worker');
+        const wHid = document.getElementById('jw-exp-worker');
         const wInp = document.getElementById('jw-exp-worker-input');
-        if (!wSel) return;
+        if (!wHid) return;
 
-        wSel.innerHTML = '';
         if (activeCategory === 'dukan') {
-            wSel.innerHTML = '<option value="dukan_main">Apni Main Dukan</option><option value="dukan_party">Party / Retailer</option>';
-            wSel.value = 'dukan_main';
+            wHid.value = 'Apni Main Dukan';
             if (wInp) wInp.value = 'Apni Main Dukan';
             return;
         }
 
-        const allWorkers = toArray(getFromStore('jobwork_workers'));
-        const filtered = allWorkers.filter((w) => String(w?.type || '').toLowerCase().trim() === activeCategory);
-
-        if (!filtered.length) {
-            wSel.innerHTML = `<option value="">-- Koi ${activeCategory.toUpperCase()} Kariger nahi hai --</option>`;
+        const list = getWorkerPickerList('');
+        if (!list.length) {
+            wHid.value = '';
             if (wInp) wInp.value = '';
-            return;
-        }
-
-        filtered.forEach((w) => {
-            const opt = document.createElement('option');
-            opt.value = w.id;
-            opt.textContent = `${w.name}${w.mobile ? ` (${w.mobile})` : ''}`;
-            wSel.appendChild(opt);
-        });
-
-        wSel.value = filtered[0].id;
-        if (wInp) wInp.value = filtered[0].name;
-    };
-
-    const updateMakerLiveStockDisplay = () => {
-        const mInp = document.getElementById('jw-exp-maker-input');
-        const hint = document.getElementById('jw-exp-live-stock-hint');
-        if (!hint) return;
-
-        let rawVal = String(mInp?.value || '').trim();
-        if (rawVal.includes('—')) rawVal = rawVal.split('—')[0].trim();
-        const val = normText(rawVal);
-
-        if (!val) {
-            hint.textContent = '';
-            return;
-        }
-
-        const effStage = getTargetStageForLookup();
-        const info = resolveMakerLiveStockInfo(val, effStage);
-        if (info && info.bachi !== undefined) {
-            hint.textContent = `${effStage.toUpperCase()} Stock: ${info.bachi} Pcs [${info.saree}]`;
         } else {
-            hint.textContent = '';
+            wHid.value = list[0].id;
+            if (wInp) wInp.value = list[0].label;
         }
     };
 
     /* ========================================================================
-       8. LEVEL 3: BATCH ROW BUILDER
-       ------------------------------------------------------------------------
+       9. BATCH ROW BUILDER & ATOMIC COMMIT
     ======================================================================== */
     window.addExpressBatchRow = () => {
-        const mInp = document.getElementById('jw-exp-maker-input');
-        const nInp = document.getElementById('jw-exp-naap-input');
-        const qInp = document.getElementById('jw-exp-qty-input');
-
-        let rawMaker = String(mInp?.value || '').trim();
-        if (rawMaker.includes('—')) rawMaker = rawMaker.split('—')[0].trim();
-        const makerName = normText(rawMaker);
-
-        const naap = (activeCategory === 'embroidery' && nInp) ? (nInp.value.trim() || '3.60') : '';
-        const qty = safeInt(qInp?.value);
-
-        if (!makerName) {
-            alert('Kripya bunne wale Kariger ka naam chunein!');
-            mInp?.focus();
+        const batch = getActiveSourceBatches().find((b) => b.key === selectedBatchKey);
+        if (!batch) {
+            alert('Pehle Kariger aur Stage Batch chunein!');
+            focusFirstField('jw-exp-maker-input');
             return;
         }
 
-        if (qty <= 0) {
-            alert('Kripya sahi Saree Qty (Pcs) bharein!');
-            qInp?.focus();
+        const avail = batch.pcs - getUsedBatchQty(batch.key);
+        const qty = safeInt(document.getElementById('jw-exp-qty-input')?.value);
+        if (qty <= 0 || qty > avail) {
+            alert(`Sahi Pcs daalein (Max ${avail} Pcs available)!`);
+            focusFirstField('jw-exp-qty-input');
             return;
         }
 
-        if (naap) lastEnteredNaap = naap;
-
-        const effStage = getTargetStageForLookup();
-        const info = resolveMakerLiveStockInfo(makerName, effStage);
-        const resolvedSaree = info?.saree || 'General Saree';
+        const isIn = (activeCategory !== 'dukan' && movementType === 'aayi');
+        const dest = isIn ? (document.getElementById('jw-exp-dest-select')?.value || 'godam') : 'out';
 
         expressBatchItems.push({
-            maker: makerName,
-            saree: resolvedSaree,
-            naap: naap,
-            qty: qty,
-            source: effStage
+            batchKey: batch.key,
+            maker: batch.maker,
+            saree: batch.saree,
+            karkhanaId: batch.karkhanaId,
+            doneStages: [...batch.doneStages],
+            bucket: batch.bucket,
+            dest,
+            qty
         });
 
-        renderExpressBatchGrid();
-
+        selectedMaker = null;
+        selectedBatchKey = null;
+        const mInp = document.getElementById('jw-exp-maker-input');
+        const sInp = document.getElementById('jw-exp-stage-input');
+        const qInp = document.getElementById('jw-exp-qty-input');
         if (mInp) mInp.value = '';
+        if (sInp) sInp.value = '';
         if (qInp) qInp.value = '';
-        updateMakerLiveStockDisplay();
-        if (mInp) mInp.focus();
+
+        renderExpressBatchGrid();
+        focusFirstField('jw-exp-maker-input');
     };
 
     window.removeExpressBatchItem = (idx) => {
@@ -1522,412 +1197,306 @@
 
     const renderExpressBatchGrid = () => {
         const tbody = document.getElementById('jw-exp-table-body');
-        const totalDisp = document.getElementById('jw-exp-live-batch-total');
-        const summaryDisp = document.getElementById('jw-exp-live-batch-summary');
-        const badge = document.getElementById('jw-exp-batch-count-badge');
+        const totEl = document.getElementById('jw-exp-live-batch-total');
+        const cntEl = document.getElementById('jw-exp-batch-count-badge');
         if (!tbody) return;
 
-        let total = 0;
-        let html = '';
-
+        const isIn = (activeCategory !== 'dukan' && movementType === 'aayi');
         if (!expressBatchItems.length) {
-            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:16px; color:#6b7280;">Gatthi khali hai. Upar Maker chunein aur Qty daalein.</td></tr>';
-            if (totalDisp) totalDisp.textContent = '0 Pcs';
-            if (summaryDisp) summaryDisp.textContent = 'Batch khali hai';
-            if (badge) badge.textContent = '0 Items';
+            tbody.innerHTML = `<tr><td colspan="${isIn ? 6 : 5}" style="text-align:center; padding:14px; color:#6b7280;">Gatthi khali hai.</td></tr>`;
+            if (totEl) totEl.textContent = '0 Pcs';
+            if (cntEl) cntEl.textContent = '0 Items';
             return;
         }
 
-        expressBatchItems.forEach((it, idx) => {
-            total += it.qty;
-            html += `<tr>
-                <td>${idx + 1}</td>
-                <td style="font-weight:700;">${esc(it.maker)}</td>
-                <td>${esc(it.saree)}</td>
-                <td style="text-align:center; color:#b47d00; font-weight:700;">${it.naap ? esc(it.naap) : '-'}</td>
+        let tot = 0;
+        tbody.innerHTML = expressBatchItems.map((it, i) => {
+            tot += it.qty;
+            return `<tr>
+                <td>${i + 1}</td>
+                <td><strong>${esc(it.maker)}</strong></td>
+                <td>${esc(it.saree)} <small style="color:#92400e;">[${esc(formatTrail(it.doneStages, it.bucket))}]</small></td>
+                ${isIn ? `<td>${it.dest === 'finished' ? 'Fin' : (it.dest === 'lott' ? 'Lott' : 'Gdm')}</td>` : ''}
                 <td style="text-align:right; font-weight:800;">${it.qty} Pcs</td>
-                <td style="text-align:center;">
-                    <button type="button" tabindex="-1" onclick="removeExpressBatchItem(${idx})" style="background:#ffffff; color:#374151; border:1px solid #d1d5db; border-radius:3px; padding:1px 7px; cursor:pointer; font-weight:700;">&times;</button>
-                </td>
+                <td style="text-align:center;"><button type="button" tabindex="-1" onclick="removeExpressBatchItem(${i})" class="jw-pill-btn" style="padding:1px 6px;">&times;</button></td>
             </tr>`;
-        });
+        }).join('');
 
-        tbody.innerHTML = html;
-        if (totalDisp) totalDisp.textContent = `${total} Pcs`;
-        if (summaryDisp) summaryDisp.textContent = `Kul ${expressBatchItems.length} Karigaron ki gatthi`;
-        if (badge) badge.textContent = `${expressBatchItems.length} Items`;
+        if (totEl) totEl.textContent = `${tot} Pcs`;
+        if (cntEl) cntEl.textContent = `${expressBatchItems.length} Items`;
     };
 
-    /* ========================================================================
-       9. ATOMIC COMMIT (100% PRESERVED SUPABASE & SHEET LOGIC)
-       ------------------------------------------------------------------------
-    ======================================================================== */
     window.submitMasterJobWorkExpress = (doPrint = false) => {
+        if (isSubmitting) return;
         showJwAcceptPrompt(false);
 
-        const wSel = document.getElementById('jw-exp-worker');
-        const dInp = document.getElementById('jw-exp-date');
-
-        const workerId = wSel?.value;
-        if (!workerId) {
-            alert('Kripya Job Worker ka chunav karein!');
-            document.getElementById('jw-exp-worker-input')?.focus();
+        if (!expressBatchItems.length) {
+            alert('Batch me kam se kam 1 Saree jodein!');
+            focusFirstField('jw-exp-maker-input');
             return;
         }
 
         const isDukan = (activeCategory === 'dukan');
-        const allWorkers = toArray(getFromStore('jobwork_workers'));
-        const worker = isDukan
-            ? { name: wSel.options[wSel.selectedIndex]?.text || 'Apni Dukan' }
-            : allWorkers.find((x) => String(x.id) === String(workerId));
-        const workerName = worker ? worker.name : 'Worker';
+        const workerId = document.getElementById('jw-exp-worker')?.value;
+        const workerNameInput = document.getElementById('jw-exp-worker-input')?.value || '';
+        const dDate = toIsoDate(document.getElementById('jw-exp-date')?.value) || getToday();
 
-        const isGayi = (movementType === 'gayi');
-        const d = toIsoDate(dInp?.value) || getToday();
-        const targetKid = getEffectiveGodown();
-
-        const damagePcs = isDukan ? 0 : safeInt(document.getElementById('jw-exp-damage-pcs')?.value);
-        const damageAmt = isDukan ? 0 : safeNum(document.getElementById('jw-exp-damage-amt')?.value);
-
-        if (!expressBatchItems.length && damagePcs <= 0) {
-            alert('Batch me kam se kam 1 Kariger ki saree jodein!');
-            document.getElementById('jw-exp-maker-input')?.focus();
+        if (!isDukan && !workerId) {
+            alert('Kripya Worker chunein!');
+            focusFirstField('jw-exp-worker-input');
             return;
         }
 
-        const batchRowId = `jwb_${Date.now()}`;
-        let totQty = 0;
-        expressBatchItems.forEach((x) => { totQty += x.qty; });
+        isSubmitting = true;
+        try {
+            const txnId = genId(isDukan ? 'dukan' : 'jwt');
+            const now = Date.now();
+            const sH = safeArr(getFromStore('saree_history')).slice();
 
-        let sH = [...toArray(getFromStore('saree_history'))];
-
-        let processTag = 'Cutting';
-        if (activeCategory === 'calender') processTag = 'Calender';
-        else if (activeCategory === 'embroidery') processTag = 'Embroidery';
-        const targetLabel = isDukan ? '🏪 Apni Dukan' : `${workerName} (${processTag})`;
-
-        const effectiveGayiSource = (activeCategory === 'calender' || activeCategory === 'embroidery') ? stockSource : 'fresh';
-
-        expressBatchItems.forEach((it, idx) => {
             if (isDukan) {
-                sH.push({
-                    id: `sh_dukan_${Date.now()}_${idx}_${Math.floor(Math.random() * 1000)}`,
-                    refId: batchRowId,
-                    date: d,
-                    sareeName: it.saree,
-                    karigerName: it.maker,
-                    kariger: it.maker,
-                    partyName: '🏪 Apni Dukan',
-                    targetWorker: '🏪 Apni Dukan',
-                    karkhanaId: targetKid,
-                    type: 'finished',
-                    typeLabel: '🏪 Dukan Bheja (Challan)',
-                    aai: 0,
-                    gai: it.qty,
-                    isOut: true,
-                    note: `${it.saree} (${workerName})`,
-                    timestamp: Date.now() + idx
-                });
-            } else if (isGayi) {
-                const effSource = it.source || effectiveGayiSource;
-                sH.push({
-                    id: `sh_diya_${Date.now()}_${idx}_${Math.floor(Math.random() * 1000)}`,
-                    refId: batchRowId,
-                    date: d,
-                    sareeName: it.saree,
-                    karigerName: it.maker,
-                    kariger: it.maker,
-                    partyName: targetLabel,
-                    targetWorker: targetLabel,
-                    karkhanaId: targetKid,
-                    type: effSource,
-                    typeLabel: `📤 ${targetLabel} ko bheja [${effSource.toUpperCase()} Stock]`,
-                    aai: 0,
-                    gai: it.qty,
-                    isOut: true,
-                    note: `${targetLabel} ko bheja (${effSource})`,
-                    timestamp: Date.now() + idx
-                });
-            } else {
-                let targetTab = 'cutting';
-                let icon = '✂️';
+                const partyNote = workerNameInput.trim() || 'Apni Main Dukan';
+                const dukanHist = safeArr(getFromStore('dukan_transfer_history')).slice();
 
-                if (activeCategory === 'calender') {
-                    targetTab = 'finished';
-                    icon = '✨';
-                } else if (activeCategory === 'embroidery') {
-                    targetTab = 'embroidery';
-                    icon = '🪡';
-                }
-
-                sH.push({
-                    id: `sh_aayi_${Date.now()}_${idx}_${Math.floor(Math.random() * 1000)}`,
-                    refId: batchRowId,
-                    date: d,
-                    sareeName: it.saree,
-                    karigerName: it.maker,
-                    kariger: it.maker,
-                    partyName: targetLabel,
-                    targetWorker: targetLabel,
-                    karkhanaId: targetKid,
-                    type: targetTab,
-                    typeLabel: `${icon} ${targetLabel} se Tayyar Aayi${it.naap ? ` [Naap: ${it.naap}]` : ''}`,
-                    aai: it.qty,
-                    gai: 0,
-                    isOut: false,
-                    note: `${targetLabel} se tayyar aayi${it.naap ? ` (Naap: ${it.naap})` : ''}`,
-                    naap: it.naap || '',
-                    timestamp: Date.now() + idx
-                });
-            }
-        });
-
-        if (damagePcs > 0) {
-            sH.push({
-                id: `sh_dmg_${Date.now()}`,
-                refId: batchRowId,
-                date: d,
-                sareeName: 'Damage Saree',
-                karigerName: workerName,
-                kariger: workerName,
-                partyName: targetLabel,
-                targetWorker: targetLabel,
-                karkhanaId: targetKid,
-                type: 'lott',
-                typeLabel: `⚠️ ${targetLabel} se Damage Aayi (Fine: ₹${damageAmt})`,
-                aai: damagePcs,
-                gai: 0,
-                isOut: false,
-                note: `Damage Fine: ₹${damageAmt}`,
-                timestamp: Date.now() + 200
-            });
-        }
-
-        setToStore('saree_history', sH);
-
-        if (isDukan) {
-            const dukList = [...toArray(getFromStore('dukan_transfer_history'))];
-            expressBatchItems.forEach((it, idx) => {
-                dukList.push({
-                    id: `duk_${Date.now()}_${idx}_${Math.floor(Math.random() * 1000)}`,
-                    date: d,
-                    sareeName: it.saree,
-                    karigerName: it.maker,
-                    pcs: it.qty,
-                    note: `${workerName} (Express)`,
-                    timestamp: Date.now() + idx
-                });
-            });
-            setToStore('dukan_transfer_history', dukList);
-        } else {
-            let sheets = toArray(getFromStore(`jobwork_sheets_${workerId}`));
-            const targetMonthTitle = getMonthTitleFromDate(d);
-            const targetMonthKey = String(d).substring(0, 7);
-
-            let activeSheet = sheets.find((s) => s && (s.monthKey === targetMonthKey || String(s.title || '').includes(targetMonthTitle)));
-
-            if (!activeSheet) {
-                let carryForwardSaree = 0;
-                if (sheets.length > 0) {
-                    const prevSheet = sheets[sheets.length - 1];
-                    const pSaree = safeNum(prevSheet.closingPendingSaree);
-                    let gQty = 0, aQty = 0, dPcs = 0;
-                    toArray(prevSheet.rows).forEach((r) => {
-                        gQty += safeNum(r.gayiQty);
-                        aQty += safeNum(r.aayiQty);
-                        dPcs += safeNum(r.damagePcs);
+                expressBatchItems.forEach((it, idx) => {
+                    const trTxt = formatTrail(it.doneStages, it.bucket);
+                    sH.push({
+                        id: `sh_fo_${txnId}_${idx}`,
+                        refId: `${txnId}_${idx}`,
+                        date: dDate,
+                        sareeName: it.saree,
+                        karigerName: it.maker,
+                        kariger: it.maker,
+                        partyName: partyNote,
+                        targetWorker: partyNote,
+                        karkhanaId: it.karkhanaId,
+                        type: legacyTypeFromTrail(it.doneStages, it.bucket),
+                        typeLabel: `🚚 Final Out ➔ ${partyNote} [${trTxt}]`,
+                        aai: 0,
+                        gai: it.qty,
+                        isOut: true,
+                        doneStages: [...it.doneStages],
+                        stageBucket: it.bucket,
+                        note: partyNote,
+                        timestamp: now + idx
                     });
-                    carryForwardSaree = Math.max(0, (pSaree + gQty) - (aQty + dPcs));
-                }
+                    dukanHist.unshift({
+                        id: `${txnId}_${idx}`,
+                        date: dDate,
+                        sareeName: it.saree,
+                        karigerName: it.maker,
+                        pcs: it.qty,
+                        note: `${partyNote} [${trTxt}]`,
+                        karkhanaId: it.karkhanaId,
+                        doneStages: [...it.doneStages],
+                        stageBucket: it.bucket,
+                        timestamp: now + idx
+                    });
+                });
 
-                activeSheet = {
-                    id: `jw_sh_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-                    title: targetMonthTitle,
-                    monthKey: targetMonthKey,
-                    closingPendingSaree: carryForwardSaree,
-                    closingBakiAmt: 0,
-                    rows: []
+                setToStore('saree_history', sH);
+                setToStore('dukan_transfer_history', dukanHist);
+
+                lastSavedExpressBatch = {
+                    title: 'FINAL OUT (DISPATCH)',
+                    party: partyNote,
+                    date: dDate,
+                    items: expressBatchItems.map((x) => ({ maker: x.maker, saree: x.saree, trail: formatTrail(x.doneStages, x.bucket), qty: x.qty }))
                 };
-                sheets.push(activeSheet);
+            } else {
+                const worker = safeArr(getFromStore('jobwork_workers')).find((w) => String(w.id) === String(workerId));
+                const wName = worker ? worker.name : workerNameInput;
+                const gLabel = grpLabel(activeCategory);
+                const targetLabel = `${wName} (${gLabel})`;
+                const isGayi = (movementType === 'gayi');
+
+                let sheets = safeArr(getFromStore(`jobwork_sheets_${workerId}`)).slice();
+                if (!sheets.length) {
+                    sheets.push({ id: `jw_sh_${Date.now()}`, title: `Month 1 (${dDate.slice(0, 7)})`, closingPendingSaree: 0, closingBakiAmt: 0, rows: [] });
+                }
+                const lastSh = { ...sheets[sheets.length - 1], rows: safeArr(sheets[sheets.length - 1].rows).slice() };
+                sheets[sheets.length - 1] = lastSh;
+
+                let totQty = 0, totDmg = 0;
+                const shItems = [];
+
+                expressBatchItems.forEach((it, idx) => {
+                    if (isGayi) {
+                        totQty += it.qty;
+                        sH.push({
+                            id: `sh_jw_out_${txnId}_${idx}`,
+                            refId: txnId,
+                            date: dDate,
+                            sareeName: it.saree,
+                            karigerName: it.maker,
+                            kariger: it.maker,
+                            partyName: targetLabel,
+                            targetWorker: targetLabel,
+                            karkhanaId: it.karkhanaId,
+                            type: legacyTypeFromTrail(it.doneStages, 'unfinished'),
+                            typeLabel: `📤 ${targetLabel} Out [${formatTrail(it.doneStages, 'unfinished')}]`,
+                            aai: 0,
+                            gai: it.qty,
+                            isOut: true,
+                            doneStages: [...it.doneStages],
+                            stageBucket: 'unfinished',
+                            workerId,
+                            note: `${gLabel} Out`,
+                            timestamp: now + idx
+                        });
+                        shItems.push({
+                            id: `it_${txnId}_${idx}`,
+                            karigar: it.maker,
+                            saree: it.saree,
+                            karkhanaId: it.karkhanaId,
+                            doneStages: [...it.doneStages],
+                            bucket: 'unfinished',
+                            qty: it.qty
+                        });
+                    } else {
+                        const nextTrail = [...it.doneStages];
+                        if (activeCategory && !nextTrail.includes(activeCategory)) nextTrail.push(activeCategory);
+                        const bucket = it.dest === 'finished' ? 'finished' : (it.dest === 'lott' ? 'lott' : 'unfinished');
+                        const isDmg = (bucket === 'lott');
+                        if (isDmg) totDmg += it.qty; else totQty += it.qty;
+
+                        const icon = bucket === 'finished' ? '✨' : (isDmg ? '⚠️' : '✅');
+                        sH.push({
+                            id: `sh_jw_in_${txnId}_${idx}`,
+                            refId: txnId,
+                            date: dDate,
+                            sareeName: it.saree,
+                            karigerName: it.maker,
+                            kariger: it.maker,
+                            partyName: targetLabel,
+                            targetWorker: targetLabel,
+                            karkhanaId: it.karkhanaId,
+                            type: legacyTypeFromTrail(nextTrail, bucket),
+                            typeLabel: `${icon} ${targetLabel} In [${formatTrail(nextTrail, bucket)}]`,
+                            aai: it.qty,
+                            gai: 0,
+                            isOut: false,
+                            doneStages: nextTrail,
+                            stageBucket: bucket,
+                            workerId,
+                            note: `${gLabel} In`,
+                            timestamp: now + idx
+                        });
+                        shItems.push({
+                            id: `it_${txnId}_${idx}`,
+                            karigar: it.maker,
+                            saree: it.saree,
+                            karkhanaId: it.karkhanaId,
+                            prevStages: [...it.doneStages],
+                            doneStages: nextTrail,
+                            destBucket: bucket,
+                            isDamage: isDmg,
+                            qty: it.qty
+                        });
+                    }
+                });
+
+                lastSh.rows.push({
+                    id: txnId,
+                    date: dDate,
+                    gayiQty: isGayi ? totQty : 0,
+                    gayiItems: isGayi ? shItems : [],
+                    stockSource: 'fresh',
+                    aayiQty: isGayi ? 0 : totQty,
+                    aayiItems: isGayi ? [] : shItems,
+                    damagePcs: isGayi ? 0 : totDmg,
+                    damageAmt: 0,
+                    isTrailV2: true
+                });
+
+                setToStore('saree_history', sH);
+                setToStore(`jobwork_sheets_${workerId}`, sheets);
+
+                lastSavedExpressBatch = {
+                    title: `${gLabel.toUpperCase()} ${isGayi ? 'OUT (GAYI)' : 'IN (AAYI)'}`,
+                    party: targetLabel,
+                    date: dDate,
+                    items: expressBatchItems.map((x) => ({
+                        maker: x.maker,
+                        saree: x.saree,
+                        trail: isGayi
+                            ? formatTrail(x.doneStages, 'unfinished')
+                            : formatTrail([...x.doneStages, ...(x.doneStages.includes(activeCategory) ? [] : [activeCategory])], x.dest === 'finished' ? 'finished' : (x.dest === 'lott' ? 'lott' : 'unfinished')),
+                        qty: x.qty
+                    }))
+                };
             }
 
-            activeSheet.rows = toArray(activeSheet.rows);
-            const batchItemsFormatted = expressBatchItems.map((x) => ({
-                karigar: x.maker,
-                qty: x.qty,
-                naap: x.naap || '',
-                source: isGayi ? (x.source || effectiveGayiSource) : undefined
-            }));
+            if (typeof window.invalidateJobWorkCache === 'function') window.invalidateJobWorkCache(workerId);
+            if (typeof window.invalidateSareeCalcCache === 'function') window.invalidateSareeCalcCache();
+            if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+            if (typeof window.slSyncDashboardCharts === 'function') window.slSyncDashboardCharts();
+            if (typeof window.triggerActiveSectionRefresh === 'function') window.triggerActiveSectionRefresh();
 
-            activeSheet.rows.push({
-                id: batchRowId,
-                date: d,
-                gayiQty: isGayi ? totQty : 0,
-                gayiItems: isGayi ? batchItemsFormatted : [],
-                stockSource: isGayi ? effectiveGayiSource : 'fresh',
-                aayiQty: isGayi ? 0 : totQty,
-                aayiItems: isGayi ? [] : batchItemsFormatted,
-                damagePcs,
-                damageAmt
-            });
+            if (doPrint) printLastSavedJobWorkChallan();
 
-            setToStore(`jobwork_sheets_${workerId}`, sheets);
+            expressBatchItems = [];
+            selectedMaker = null;
+            selectedBatchKey = null;
+            renderExpressBatchGrid();
+
+            const statusEl = document.getElementById('jw-exp-status-msg');
+            if (statusEl) statusEl.textContent = '✅ Batch safalta-poorvak save ho gaya!';
+            focusFirstField('jw-exp-maker-input');
+        } finally {
+            isSubmitting = false;
         }
-
-        lastSavedExpressBatch = {
-            category: activeCategory.toUpperCase(),
-            worker: workerName,
-            date: d,
-            isGayi: isGayi,
-            source: effectiveGayiSource,
-            items: [...expressBatchItems],
-            damagePcs: damagePcs
-        };
-
-        if (typeof window.invalidateJobWorkCache === 'function') window.invalidateJobWorkCache(workerId);
-        if (typeof window.invalidateSareeCalcCache === 'function') window.invalidateSareeCalcCache();
-        if (typeof window.invalidateCalenderCalcCache === 'function') window.invalidateCalenderCalcCache();
-        if (typeof window.invalidateCuttingCalcCache === 'function') window.invalidateCuttingCalcCache();
-        if (typeof window.invalidateEmbroideryCalcCache === 'function') window.invalidateEmbroideryCalcCache();
-
-        if (typeof window.updateJobWorkHubBadges === 'function') window.updateJobWorkHubBadges();
-        if (typeof window.renderSareeTable === 'function') window.renderSareeTable();
-        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-        if (typeof window.renderDukanTransferTable === 'function') window.renderDukanTransferTable();
-
-        if (doPrint) {
-            printLastSavedJobWorkChallan();
-        }
-
-        expressBatchItems = [];
-        const dmgPcsEl = document.getElementById('jw-exp-damage-pcs');
-        const dmgAmtEl = document.getElementById('jw-exp-damage-amt');
-        if (dmgPcsEl) dmgPcsEl.value = '';
-        if (dmgAmtEl) dmgAmtEl.value = '';
-
-        renderExpressBatchGrid();
-        updateExpressMakerDatalist();
-        updateMakerLiveStockDisplay();
-
-        const statusMsg = document.getElementById('jw-exp-status-msg');
-        if (statusMsg) {
-            statusMsg.innerHTML = `✅ ${totQty} Pcs Saree batch [${esc(workerName)}] ke khate me darj ho gaya!`;
-        }
-
-        focusFirstField('jw-exp-maker-input');
     };
 
-    /* ========================================================================
-       10. A6 THERMAL CHALLAN PRINT ENGINE (UNCHANGED)
-       ------------------------------------------------------------------------
-    ======================================================================== */
     window.printLastSavedJobWorkChallan = () => {
         if (!lastSavedExpressBatch || !lastSavedExpressBatch.items.length) {
             return alert('Print karne ke liye koi recent batch entry nahi mili!');
         }
-
         const b = lastSavedExpressBatch;
         let tot = 0;
-        let rowsHtml = '';
-        const hasNaap = b.items.some((x) => Boolean(x.naap));
+        const rowsHtml = b.items.map((it, i) => {
+            tot += safeInt(it.qty);
+            return `<tr style="border-bottom:1px dashed #ccc;">
+                <td style="padding:3px 2px;">${i + 1}</td>
+                <td style="padding:3px 2px; font-weight:bold;">${esc(it.maker)}</td>
+                <td style="padding:3px 2px;">${esc(it.saree)}<br><small>${esc(it.trail)}</small></td>
+                <td style="padding:3px 2px; text-align:right; font-weight:bold;">${it.qty}</td>
+            </tr>`;
+        }).join('');
 
-        b.items.forEach((it, idx) => {
-            tot += it.qty;
-            rowsHtml += `
-                <tr style="border-bottom:1px dashed #ccc;">
-                    <td style="padding:4px 2px;">${idx + 1}</td>
-                    <td style="padding:4px 2px; font-weight:bold;">${esc(it.maker)}</td>
-                    <td style="padding:4px 2px;">${esc(it.saree)}</td>
-                    ${hasNaap ? `<td style="padding:4px 2px; text-align:center;">${it.naap || '-'}</td>` : ''}
-                    <td style="padding:4px 2px; text-align:right; font-weight:bold;">${it.qty}</td>
-                </tr>`;
-        });
-
-        const titleText = (b.category === 'DUKAN')
-            ? 'DUKAN DISPATCH CHALLAN'
-            : (b.isGayi ? 'JOB WORK DISPATCH (GAYI)' : 'JOB WORK RECEIPT (AAYI)');
-
-        let processLabel = 'DUKAN TRANSFER';
-        if (b.category === 'CALENDER') processLabel = 'CALENDER FINISHING';
-        else if (b.category === 'EMBROIDERY') processLabel = 'SAREE EMBROIDERY';
-        else if (b.category === 'CUTTING') processLabel = 'BOOTI CUTTING';
-
-        const printWindow = window.open('', '', 'width=420,height=580');
-        if (!printWindow) return alert('Popup block hai! Kripya allow karein.');
-
-        printWindow.document.write(`
-            <html>
-            <head>
-                <title>JobWork Challan - A6</title>
-                <style>
-                    @page { size: A6 portrait; margin: 4mm; }
-                    body { font-family: monospace, sans-serif; font-size: 11px; margin: 0; padding: 4mm; color: #000; }
-                    .ticket { width: 100%; max-width: 90mm; margin: 0 auto; border: 1.5px dashed #000; padding: 8px; box-sizing: border-box; }
-                    .header { text-align: center; border-bottom: 1.5px dashed #000; padding-bottom: 6px; margin-bottom: 8px; }
-                    .header h2 { margin: 0; font-size: 14px; text-transform: uppercase; }
-                    .header p { margin: 2px 0 0; font-size: 10px; font-weight: bold; }
-                    .meta { font-size: 10px; margin-bottom: 6px; }
-                    table { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 4px; }
-                    th { border-top: 1px solid #000; border-bottom: 1px solid #000; text-align: left; padding: 3px 2px; }
-                    .total-box { background: #eee; padding: 6px 4px; border: 1px solid #000; font-size: 13px; font-weight: 900; text-align: center; margin: 8px 0; }
-                    .signs { display: flex; justify-content: space-between; margin-top: 25px; font-size: 10px; }
-                </style>
-            </head>
-            <body>
-                <div class="ticket">
-                    <div class="header">
-                        <h2>SIMPLICITY ERP</h2>
-                        <p>⚡ ${titleText}</p>
-                    </div>
-                    <div class="meta">
-                        <div><strong>Party / Worker:</strong> ${esc(b.worker)} (${processLabel})</div>
-                        <div><strong>Tarikh:</strong> ${formatDisplay(b.date)}</div>
-                        ${b.isGayi && (b.category === 'CALENDER' || b.category === 'EMBROIDERY') ? `<div><strong>Stock Source:</strong> ${b.source.toUpperCase()} STOCK</div>` : ''}
-                    </div>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>#</th><th>BUNNE WALA</th><th>SAREE</th>${hasNaap ? '<th style="text-align:center;">NAAP</th>' : ''}<th style="text-align:right;">PCS</th>
-                            </tr>
-                        </thead>
-                        <tbody>${rowsHtml}</tbody>
-                    </table>
-                    <div class="total-box">
-                        KUL SAREE: ${tot} Pcs ${b.damagePcs > 0 ? `(Dmg: ${b.damagePcs})` : ''}
-                    </div>
-                    <div class="signs">
-                        <div>हस्ताक्षर मुंशी<br><br>________</div>
-                        <div>हस्ताक्षर पाने वाला<br><br>________</div>
-                    </div>
-                </div>
-                <script>
-                    window.onload = function() {
-                        window.focus();
-                        window.print();
-                        setTimeout(() => window.close(), 600);
-                    };
-                <\/script>
-            </body>
-            </html>
-        `);
-        printWindow.document.close();
+        const pw = window.open('', '', 'width=420,height=560');
+        if (!pw) return alert('Popup block hai!');
+        pw.document.write(`<html><head><title>JobWork Challan - A6</title>
+            <style>
+                @page { size: A6 portrait; margin: 4mm; }
+                body { font-family: monospace, sans-serif; font-size: 11px; margin: 0; padding: 4mm; color: #000; }
+                .box { border: 1.5px dashed #000; padding: 8px; max-width: 92mm; margin: 0 auto; }
+                .hdr { text-align: center; border-bottom: 1.5px dashed #000; padding-bottom: 5px; margin-bottom: 6px; }
+                table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 6px 0; }
+                th { border-top: 1px solid #000; border-bottom: 1px solid #000; text-align: left; padding: 3px 2px; }
+                .tot { background: #eee; border: 1px solid #000; text-align: center; font-size: 13px; font-weight: 900; padding: 5px; margin: 8px 0; }
+                .sign { display: flex; justify-content: space-between; margin-top: 20px; font-size: 10px; }
+            </style></head><body>
+            <div class="box">
+                <div class="hdr"><h3 style="margin:0;">SIMPLICITY ERP</h3><div>${esc(b.title)}</div></div>
+                <div><strong>Party / Worker:</strong> ${esc(b.party)}</div>
+                <div><strong>Tarikh:</strong> ${esc(formatDisplay(b.date))}</div>
+                <table><thead><tr><th>#</th><th>KARIGER</th><th>SAREE &amp; TRAIL</th><th style="text-align:right;">PCS</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+                <div class="tot">KUL SAREE: ${tot} Pcs</div>
+                <div class="sign"><div>हस्ताक्षर मुंशी<br><br>_______</div><div>हस्ताक्षर पाने वाला<br><br>_______</div></div>
+            </div>
+            <script>window.onload=function(){window.focus();window.print();setTimeout(()=>window.close(),600);};<\/script>
+            </body></html>`);
+        pw.document.close();
     };
 
-    /* ========================================================================
-       11. GLOBAL EXPORT
-       ------------------------------------------------------------------------
-    ======================================================================== */
     window.JobWorkExpressEngine = {
         openJobWorkExpressModal,
         closeJobWorkExpressModal,
         switchJobWorkCategory,
-        onExpressSourceDropdownChange,
-        toggleStockSource,
         toggleMovementType,
         addExpressBatchRow,
         removeExpressBatchItem,
         submitMasterJobWorkExpress,
         printLastSavedJobWorkChallan
     };
-
 })();
