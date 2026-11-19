@@ -400,7 +400,8 @@
                 return obj;
             }
         },
-       bana_stock: {
+
+        bana_stock: {
             defaultSourceKey: 'bana_stock',
             resolveSourceKey: () => 'bana_stock',
             toSqlRow: (item, ctx) => {
@@ -810,7 +811,8 @@
                 };
             }
         },
-       tani_orders: {
+
+        tani_orders: {
             defaultSourceKey: 'tani_orders_list',
             resolveSourceKey: () => 'tani_orders_list',
             sortList: (arr) => arr.sort((a, b) =>
@@ -1224,7 +1226,8 @@
         }
         // === ADD NEW ROW-BY-ROW MODULES HERE IN FUTURE ===
     };
-   const isLightweightLocalKey = (key) => {
+
+    const isLightweightLocalKey = (key) => {
         if (typeof window.StorageEngine?.isLightweightKey === 'function') {
             return window.StorageEngine.isLightweightKey(key);
         }
@@ -1461,7 +1464,7 @@
             case 'sancha_list':
             case 'sancha_history': return 'Sancha (Tani & Chukka • Delta Sync) load ho raha hai...';
             case 'karigers':
-            case 'tani_sheets': return 'Sabhi Karigers & Tani Sheets (Delta Sync) load ho rahi hain...';
+            case 'tani_sheets': return 'Sabhi Karigers & Tani Sheets (Delta Sync) load rahi hain...';
             case 'material_transfers': return 'Material Transfers (Delta Sync) load ho rahe hain...';
             case 'dukan_challans': return 'Dukan Challans (Delta Sync) load ho rahe hain...';
             case 'payments': return 'Payments & Bakaya Hisab (Delta Sync) load ho raha hai...';
@@ -1639,8 +1642,76 @@
         const tid = getSafeTenantId();
         if (!uid) return false;
 
-        const sess = schema.isGlobal ? 'global' : ex
-       /* ========================================================================
+        const sess = schema.isGlobal ? 'global' : extractSessionFromKey(fullKey, sessionOverride);
+
+        let shortKey = String(fullKey || '');
+        const fullPrefix = `${uid}_${sess}_`;
+        const uidPrefix = `${uid}_`;
+        if (shortKey.startsWith(fullPrefix)) {
+            shortKey = shortKey.slice(fullPrefix.length);
+        } else if (shortKey.startsWith(uidPrefix)) {
+            shortKey = shortKey.slice(uidPrefix.length);
+        }
+
+        const sourceKey = schema.resolveSourceKey
+            ? schema.resolveSourceKey(shortKey)
+            : (schema.defaultSourceKey || shortKey);
+
+        recentSelfWrites[targetTable] = Date.now();
+        showSyncStatus('syncing');
+
+        try {
+            const ctx = { uid, tid, sess, sourceKey, shortKey, fullKey };
+
+            // 1. Upsert sirf badli / nayi rows (chunked)
+            const validUpserts = (upserts || []).filter((it) => it && it.id !== undefined && it.id !== null);
+            for (let i = 0; i < validUpserts.length; i += ROW_WRITE_CHUNK) {
+                const chunk = validUpserts.slice(i, i + ROW_WRITE_CHUNK).map((it) => schema.toSqlRow(it, ctx));
+                const { error } = await supabaseClient
+                    .from(targetTable)
+                    .upsert(chunk, { onConflict: 'id' });
+
+                if (error) {
+                    console.error(`❌ [Supabase Row Upsert Error in ${targetTable}]:`, error.message);
+                    showSyncStatus('error');
+                    return false;
+                }
+            }
+
+            // 2. Soft Delete hataayi gayi rows (is_deleted = true)
+            const validDeleteIds = (deletes || [])
+                .map((rid) => String(rid || '').trim())
+                .filter(Boolean)
+                .map((rid) => `${uid}_${sess}_${sourceKey}_${rid}`);
+
+            for (let i = 0; i < validDeleteIds.length; i += ROW_WRITE_CHUNK) {
+                const idChunk = validDeleteIds.slice(i, i + ROW_WRITE_CHUNK);
+                const { error } = await supabaseClient
+                    .from(targetTable)
+                    .update({ is_deleted: true })
+                    .eq('user_id', uid)
+                    .eq('session', sess)
+                    .in('id', idChunk);
+
+                if (error) {
+                    console.error(`❌ [Supabase Soft Delete Error in ${targetTable}]:`, error.message);
+                    showSyncStatus('error');
+                    return false;
+                }
+            }
+
+            recentSelfWrites[targetTable] = Date.now();
+            isConnectedToCloud = true;
+            showSyncStatus('online');
+            return true;
+        } catch (err) {
+            console.error(`❌ [RowDelta Exception in ${targetTable}]:`, err);
+            showSyncStatus('error');
+            return false;
+        }
+    };
+
+    /* ========================================================================
        GENERIC ROW-BY-ROW DELTA PULL ENGINE (updated_at > last_sync)
     ======================================================================== */
     const getDeltaSyncCursorKey = (tbl, uid, sess) => `erp_delta_sync_${tbl}_${uid}_${sess}`;
@@ -2157,5 +2228,140 @@
         const hasNew = payload && payload.new && Object.keys(payload.new).length > 0;
         const row = hasNew ? payload.new : (payload ? payload.old : null);
         if (!row) return;
-        if (row.user_id && String(row.user_id).toLowerCase
-       
+        if (row.user_id && String(row.user_id).toLowerCase() !== String(uid).toLowerCase()) return;
+
+        const rKey = String(row.id || row.key || '');
+        if (rKey === `${uid}_app_active_session` && hasNew) {
+            const rawVal = payload.new.data !== undefined ? payload.new.data : payload.new.value;
+            const cloudActiveSess = String(rawVal || '').replace(/['"]+/g, '').trim();
+            const currentLocalSess = getActiveSessionVal();
+
+            if (/^\d{4}-\d{4}$/.test(cloudActiveSess) && cloudActiveSess !== currentLocalSess) {
+                localStorage.setItem(`${uid}_app_active_session`, cloudActiveSess);
+                if (typeof window.clearMemoryCache === 'function') window.clearMemoryCache();
+                window.location.reload();
+                return;
+            }
+        }
+
+        if (tbl && recentSelfWrites[tbl] && (Date.now() - recentSelfWrites[tbl]) < 3000) {
+            return;
+        }
+
+        if (tbl && !isSyncingInProgress) {
+            if (tablePullTimers[tbl]) clearTimeout(tablePullTimers[tbl]);
+            tablePullTimers[tbl] = setTimeout(() => {
+                pullSingleTable(tbl);
+            }, 350);
+        }
+    };
+
+    const initSupabaseRealtime = () => {
+        if (!supabaseClient) return;
+        const uid = getSafeUserId();
+        if (!uid) return;
+
+        detachSupabaseRealtime();
+
+        try {
+            let channel = supabaseClient.channel(`public_db_realtime_${uid}`);
+            const userFilter = `user_id=eq.${uid}`;
+
+            REALTIME_TABLES.forEach((tbl) => {
+                channel = channel.on(
+                    'postgres_changes',
+                    { event: '*', schema: 'public', table: tbl, filter: userFilter },
+                    (payload) => handleRealtimePayload(tbl, uid, payload)
+                );
+            });
+
+            realtimeChannel = channel.subscribe((status) => {
+                if (status === 'SUBSCRIBED') {
+                    isConnectedToCloud = true;
+                    showSyncStatus('online');
+                }
+            });
+
+            pullAllCloudData(false, true);
+        } catch (err) {
+            console.warn('[CloudEngine] Realtime setup:', err);
+        }
+    };
+
+    const detachSupabaseRealtime = () => {
+        try {
+            Object.keys(tablePullTimers).forEach((t) => {
+                clearTimeout(tablePullTimers[t]);
+                delete tablePullTimers[t];
+            });
+            if (realtimeChannel && supabaseClient) {
+                supabaseClient.removeChannel(realtimeChannel);
+                realtimeChannel = null;
+            }
+        } catch (_) {}
+    };
+
+    const switchSessionListeners = () => { pullAllCloudData(false, true); };
+
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && navigator.onLine && getSafeUserId()) {
+            pullAllCloudData(true, false);
+        }
+    });
+
+    window.addEventListener('focus', () => {
+        if (navigator.onLine && getSafeUserId()) {
+            pullAllCloudData(true, false);
+        }
+    });
+
+    const publicCloudAPI = {
+        get db() { return supabaseClient; },
+        get supabase() { return supabaseClient; },
+        get isConnectedToCloud() { return isConnectedToCloud; },
+        ROW_SYNC_SCHEMAS,
+        isRowSyncKey,
+        showSyncStatus,
+        initSupabaseRealtime,
+        detachSupabaseRealtime,
+        switchSessionListeners,
+        cloudWrite,
+        cloudWriteDelta,
+        pullAllCloudData,
+        autoPushKarkhanasToSupabase,
+        triggerSmartUIRepaint
+    };
+
+    window.db = supabaseClient;
+    window.supabaseClient = supabaseClient;
+    window.showSyncStatus = showSyncStatus;
+    window.initSupabaseRealtime = initSupabaseRealtime;
+    window.detachSupabaseRealtime = detachSupabaseRealtime;
+    window.CloudEngine = publicCloudAPI;
+    window.cloudWrite = cloudWrite;
+    window.cloudWriteDelta = cloudWriteDelta;
+    window.pullAllCloudData = pullAllCloudData;
+
+    window.addEventListener('online', () => {
+        isConnectedToCloud = true;
+        showSyncStatus('online');
+        if (getSafeUserId()) initSupabaseRealtime();
+    });
+
+    window.addEventListener('offline', () => {
+        isConnectedToCloud = false;
+        showSyncStatus('offline');
+    });
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            if (getSafeUserId()) setTimeout(initSupabaseRealtime, 30);
+        });
+    } else {
+        if (getSafeUserId()) setTimeout(initSupabaseRealtime, 30);
+    }
+
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = publicCloudAPI;
+    }
+})();
