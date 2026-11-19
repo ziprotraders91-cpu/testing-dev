@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - TALLYPRIME DASHBOARD, GATEWAY, STOCK SUMMARY & CREATE/ALTER
    File: core/tally-master.js • Developed by Farhan Jawed
-   Note: Uses existing kariger_list & jobwork_workers stores (100% Supabase-safe)
+   Note: Uses kariger_list, kariger_sheets_<id> & jobwork_workers (100% Supabase-safe)
 ============================================================================ */
 
 (() => {
@@ -533,16 +533,37 @@
     };
 
     /* ========================================================================
-       4. TALLY MASTER CREATE & ALTER MODULE (SELF-INJECTED HTML + ENGINE)
+       4. TALLY MASTER CREATE & ALTER MODULE (KARIGER MASTER SHEET LINKED)
     ======================================================================== */
     let tmMode = 'create'; // 'create' | 'alter-list' | 'alter-edit'
     let tmSelectedGroup = 'kariger';
     let tmAlterFilter = 'all';
     let tmAlterActiveIdx = 0;
 
+    const tmEscHtml = (s) => String(s || '').replace(/[&<>"']/g, (m) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[m]));
+
+    const tmNumOrFallback = (val, fallback = 0) => {
+        if (val === undefined || val === null || String(val).trim() === '') return fallback;
+        const n = parseFloat(val);
+        return isNaN(n) || !isFinite(n) ? fallback : n;
+    };
+
     const tmGetToday = () => (typeof window.getTodayDate === 'function')
         ? window.getTodayDate()
         : new Date().toISOString().split('T')[0];
+
+    const tmToIsoDate = (d) => {
+        if (!d) return new Date().toISOString().split('T')[0];
+        const s = String(d).trim();
+        if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+        const parts = s.split(/[-/]/);
+        if (parts.length === 3 && parts[0].length === 2 && parts[2].length === 4) {
+            return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+        }
+        return new Date().toISOString().split('T')[0];
+    };
 
     const tmGetKarigers = () => {
         if (typeof window.sanitizeKarigerList === 'function') return window.sanitizeKarigerList();
@@ -556,7 +577,526 @@
         return Array.isArray(raw) ? raw.filter((w) => w && w.name) : [];
     };
 
+    const tmGetSheetsSafe = (karId) => {
+        if (!karId) return [];
+        if (typeof window.getKarigerSheets === 'function') return window.getKarigerSheets(karId);
+        const raw = (typeof window.getStore === 'function') ? window.getStore(`kariger_sheets_${String(karId).trim()}`) : [];
+        return Array.isArray(raw) ? raw : [];
+    };
+
+    const tmSaveSheetsSafe = (karId, sheets) => {
+        if (!karId) return;
+        if (typeof window.saveKarigerSheets === 'function') {
+            window.saveKarigerSheets(karId, sheets);
+        } else if (typeof window.setStore === 'function') {
+            window.setStore(`kariger_sheets_${String(karId).trim()}`, Array.isArray(sheets) ? sheets : []);
+        }
+    };
+
+    const ensureTallyMasterStyles = () => {
+        const old = document.getElementById('tm-kariger-sheet-styles');
+        if (old) old.remove();
+
+        const style = document.createElement('style');
+        style.id = 'tm-kariger-sheet-styles';
+        style.textContent = `
+            #tally-master-section input[type="number"]::-webkit-outer-spin-button,
+            #tally-master-section input[type="number"]::-webkit-inner-spin-button {
+                -webkit-appearance: none !important;
+                margin: 0 !important;
+            }
+            #tally-master-section input[type="number"] {
+                -moz-appearance: textfield !important;
+            }
+            #tm-kariger-fields .tm-kar-sheet-card {
+                margin-top: 10px;
+                background: #fdfcf7;
+                border: 1.5px solid #e5d5a7;
+                border-radius: 8px;
+                padding: 10px 11px;
+            }
+            #tm-kariger-fields .tm-kar-sheet-head {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 8px;
+                flex-wrap: wrap;
+                padding-bottom: 7px;
+                margin-bottom: 9px;
+                border-bottom: 1.5px solid #efe4c4;
+            }
+            #tm-kariger-fields .tm-kar-sheet-head strong {
+                font-size: 12.5px;
+                font-weight: 800;
+                color: #1f2937;
+            }
+            #tm-kariger-fields .tm-sheet-pill {
+                background: #fdf6e2;
+                border: 1px solid #d9b86c;
+                color: #92400e;
+                padding: 2px 8px;
+                border-radius: 999px;
+                font-size: 10.5px;
+                font-weight: 800;
+            }
+            #tm-kariger-fields .tm-sub-head {
+                font-size: 10.5px;
+                font-weight: 800;
+                text-transform: uppercase;
+                letter-spacing: 0.4px;
+                color: #92400e;
+                margin: 9px 0 5px 0;
+                padding-top: 6px;
+                border-top: 1px dashed #e5d5a7;
+            }
+            #tm-kariger-fields .tm-kar-grid-4 {
+                display: grid;
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+                gap: 7px;
+                margin-bottom: 6px;
+            }
+            #tm-kariger-fields .tm-kar-grid-2 {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 8px;
+                margin-bottom: 6px;
+            }
+            #tm-kariger-fields .tm-kar-colors-grid {
+                display: grid;
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+                gap: 6px;
+            }
+            #tm-kariger-fields .tm-fbox {
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+                min-width: 0;
+                position: relative;
+            }
+            #tm-kariger-fields .tm-fbox label {
+                font-size: 10.5px;
+                font-weight: 700;
+                color: #374151;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            #tm-kariger-fields .tm-fbox input,
+            #tm-kariger-fields .tm-kar-colors-grid input {
+                width: 100%;
+                min-width: 0;
+                box-sizing: border-box;
+                padding: 6px 8px;
+                border: 1px solid #d1d5db;
+                border-radius: 4px;
+                font-size: 12px;
+                font-weight: 700;
+                color: #111827;
+                background: #ffffff;
+                outline: none;
+            }
+            #tm-kariger-fields .tm-fbox input:focus,
+            #tm-kariger-fields .tm-kar-colors-grid input:focus {
+                border-color: #d9a425;
+                background: #fffdf5;
+                box-shadow: 0 0 0 2px rgba(242, 183, 29, 0.2);
+            }
+            #tm-kariger-fields .tm-live-badge {
+                font-size: 10px;
+                font-weight: 700;
+                color: #b47d00;
+                margin-top: 1px;
+            }
+            #tm-kariger-fields .tm-sancha-box {
+                background: #ffffff;
+                border: 1px solid #e5d5a7;
+                border-radius: 6px;
+                padding: 7px 8px;
+                margin-bottom: 6px;
+            }
+            #tally-master-section .tm-suggest-pop {
+                position: absolute;
+                left: 0;
+                right: 0;
+                top: 100%;
+                z-index: 9999;
+                background: #ffffff;
+                border: 1.5px solid #d9b86c;
+                border-radius: 5px;
+                box-shadow: 0 8px 20px rgba(0,0,0,0.14);
+                max-height: 160px;
+                overflow-y: auto;
+                display: none;
+            }
+            #tally-master-section .tm-suggest-opt {
+                padding: 6px 8px;
+                font-size: 11.5px;
+                font-weight: 700;
+                color: #1f2937;
+                cursor: pointer;
+                display: flex;
+                justify-content: space-between;
+                gap: 6px;
+                border-bottom: 1px solid #f3f4f6;
+            }
+            #tally-master-section .tm-suggest-opt:hover,
+            #tally-master-section .tm-suggest-opt.active {
+                background: #f2b71d;
+                color: #1f2937;
+            }
+            @media (max-width: 720px) {
+                #tm-kariger-fields .tm-kar-grid-4,
+                #tm-kariger-fields .tm-kar-colors-grid {
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                }
+                #tm-kariger-fields .tm-kar-grid-2 {
+                    grid-template-columns: 1fr;
+                }
+            }
+        `;
+        document.head.appendChild(style);
+    };
+
+    const bindTallyManualNumberGuard = () => {
+        if (window.__tmManualNumGuardBound) return;
+        window.__tmManualNumGuardBound = true;
+
+        document.addEventListener('wheel', (e) => {
+            const target = e.target;
+            if (target && target.tagName === 'INPUT' && target.type === 'number') {
+                if (target.closest('#tally-master-section')) {
+                    e.preventDefault();
+                }
+            }
+        }, { passive: false });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+            const target = e.target;
+            if (target && target.tagName === 'INPUT' && target.type === 'number') {
+                if (target.closest('#tally-master-section')) {
+                    e.preventDefault();
+                }
+            }
+        }, true);
+    };
+
+    const tmGetStockOptions = (fieldId) => {
+        const kGodown = document.getElementById('tm-karkhana')?.value || 'k_main';
+        const seen = new Set();
+        const items = [];
+
+        if (fieldId === 'tm-bana-item') {
+            const raw = (typeof window.getStore === 'function') ? window.getStore('bana_stock') : [];
+            (Array.isArray(raw) ? raw : []).forEach((b) => {
+                const nm = b?.name ? String(b.name).trim() : '';
+                if (nm && !seen.has(nm.toLowerCase())) {
+                    seen.add(nm.toLowerCase());
+                    const bacha = (typeof window.getBanaItemStats === 'function')
+                        ? tmNumOrFallback(window.getBanaItemStats(nm, kGodown).bacha, 0)
+                        : tmNumOrFallback(b.bacha, 0);
+                    items.push({ name: nm, meta: `${bacha.toFixed(2)} Kg` });
+                }
+            });
+        } else if (fieldId === 'tm-zari-item') {
+            const raw = (typeof window.getStore === 'function') ? window.getStore('zari_stock') : [];
+            (Array.isArray(raw) ? raw : []).forEach((z) => {
+                const nm = z?.name ? String(z.name).trim() : '';
+                if (nm && !seen.has(nm.toLowerCase())) {
+                    seen.add(nm.toLowerCase());
+                    const bacha = (typeof window.getZariItemStats === 'function')
+                        ? tmNumOrFallback(window.getZariItemStats(nm, kGodown).bacha, 0)
+                        : tmNumOrFallback(z.bacha, 0);
+                    items.push({ name: nm, meta: `${bacha.toFixed(2)} Kg` });
+                }
+            });
+        } else if (fieldId === 'tm-tani-item' || fieldId === 'tm-chukka-item') {
+            const targetCat = (fieldId === 'tm-chukka-item') ? 'chukka' : 'tani';
+            const raw = (typeof window.getStore === 'function') ? window.getStore('sancha_items') : [];
+            (Array.isArray(raw) ? raw : [])
+                .filter((s) => s && (s.category || 'tani').toLowerCase() === targetCat)
+                .forEach((s) => {
+                    const nm = s?.name ? String(s.name).trim() : '';
+                    if (nm && !seen.has(nm.toLowerCase())) {
+                        seen.add(nm.toLowerCase());
+                        const bacha = tmNumOrFallback(s.bacha !== undefined ? s.bacha : s.aaya, 0);
+                        items.push({ name: nm, meta: `${bacha.toFixed(2)} Kg` });
+                    }
+                });
+        }
+        return items;
+    };
+
+    const tmUpdateLiveStockBadges = () => {
+        const kGodown = document.getElementById('tm-karkhana')?.value || 'k_main';
+        const bName = String(document.getElementById('tm-bana-item')?.value || '').trim();
+        const zName = String(document.getElementById('tm-zari-item')?.value || '').trim();
+        const tName = String(document.getElementById('tm-tani-item')?.value || '').trim().toLowerCase();
+        const cName = String(document.getElementById('tm-chukka-item')?.value || '').trim().toLowerCase();
+
+        let bBacha = 0;
+        if (bName && typeof window.getBanaItemStats === 'function') {
+            bBacha = tmNumOrFallback(window.getBanaItemStats(bName, kGodown).bacha, 0);
+        } else if (bName && typeof window.getStore === 'function') {
+            const bList = window.getStore('bana_stock');
+            const bIt = (Array.isArray(bList) ? bList : []).find((x) =>
+                x && x.name && x.name.trim().toLowerCase() === bName.toLowerCase() &&
+                ((!x.karkhanaId && kGodown === 'k_main') || String(x.karkhanaId) === String(kGodown))
+            );
+            if (bIt) bBacha = tmNumOrFallback(bIt.bacha, 0);
+        }
+
+        let zBacha = 0;
+        if (zName && typeof window.getZariItemStats === 'function') {
+            zBacha = tmNumOrFallback(window.getZariItemStats(zName, kGodown).bacha, 0);
+        } else if (zName && typeof window.getStore === 'function') {
+            const zList = window.getStore('zari_stock');
+            const zIt = (Array.isArray(zList) ? zList : []).find((x) =>
+                x && x.name && x.name.trim().toLowerCase() === zName.toLowerCase() &&
+                ((!x.karkhanaId && kGodown === 'k_main') || String(x.karkhanaId) === String(kGodown))
+            );
+            if (zIt) zBacha = tmNumOrFallback(zIt.bacha, 0);
+        }
+
+        const sRaw = (typeof window.getStore === 'function') ? window.getStore('sancha_items') : [];
+        const sList = Array.isArray(sRaw) ? sRaw : [];
+
+        const tItem = sList.find((x) => {
+            const matchK = (!x?.karkhanaId && kGodown === 'k_main') || String(x?.karkhanaId) === String(kGodown);
+            return x && x.name && x.name.trim().toLowerCase() === tName && (x.category || 'tani').toLowerCase() === 'tani' && matchK;
+        });
+
+        const cItem = sList.find((x) => {
+            const matchK = (!x?.karkhanaId && kGodown === 'k_main') || String(x?.karkhanaId) === String(kGodown);
+            return x && x.name && x.name.trim().toLowerCase() === cName && (x.category || '').toLowerCase() === 'chukka' && matchK;
+        });
+
+        const setB = (id, txt) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = txt;
+        };
+
+        setB('tm-live-bana-badge', `Bacha: ${bBacha.toFixed(2)} Kg`);
+        setB('tm-live-zari-badge', `Bacha: ${zBacha.toFixed(2)} Kg`);
+        setB('tm-live-tani-badge', `Bacha: ${tItem ? tmNumOrFallback(tItem.bacha !== undefined ? tItem.bacha : tItem.aaya, 0).toFixed(2) : '0.00'} Kg`);
+        setB('tm-live-chukka-badge', `Bacha: ${cItem ? tmNumOrFallback(cItem.bacha !== undefined ? cItem.bacha : cItem.aaya, 0).toFixed(2) : '0.00'} Kg`);
+    };
+
+    const tmAttachInlineSuggest = (inputId, nextFocusId) => {
+        const inp = document.getElementById(inputId);
+        if (!inp || inp.dataset.tmSugBound === '1') return;
+        inp.dataset.tmSugBound = '1';
+        inp.setAttribute('autocomplete', 'off');
+
+        const parent = inp.parentElement;
+        if (!parent) return;
+        parent.style.position = 'relative';
+
+        const pop = document.createElement('div');
+        pop.className = 'tm-suggest-pop';
+        parent.appendChild(pop);
+
+        let activeSugIdx = -1;
+
+        const renderPop = (autoSelectFirst = false) => {
+            const q = inp.value.trim().toLowerCase();
+            const opts = tmGetStockOptions(inputId).filter((o) => !q || o.name.toLowerCase().includes(q));
+            if (!opts.length) {
+                pop.style.display = 'none';
+                pop.innerHTML = '';
+                activeSugIdx = -1;
+                return;
+            }
+            if (autoSelectFirst && q) {
+                if (activeSugIdx < 0 || activeSugIdx >= opts.length) activeSugIdx = 0;
+            } else if (!autoSelectFirst) {
+                activeSugIdx = -1;
+            }
+
+            pop.innerHTML = opts.map((o, i) => `
+                <div class="tm-suggest-opt${i === activeSugIdx ? ' active' : ''}" data-val="${tmEscHtml(o.name)}">
+                    <span>${tmEscHtml(o.name)}</span>
+                    <small style="color:#92400e;">${tmEscHtml(o.meta)}</small>
+                </div>
+            `).join('');
+            pop.style.display = 'block';
+
+            pop.querySelectorAll('.tm-suggest-opt').forEach((el) => {
+                el.addEventListener('mousedown', (ev) => {
+                    ev.preventDefault();
+                    inp.value = el.dataset.val || '';
+                    pop.style.display = 'none';
+                    activeSugIdx = -1;
+                    tmUpdateLiveStockBadges();
+                    if (nextFocusId) document.getElementById(nextFocusId)?.focus();
+                });
+            });
+        };
+
+        inp.addEventListener('focus', () => {
+            renderPop(false);
+        });
+
+        inp.addEventListener('input', () => {
+            tmUpdateLiveStockBadges();
+            renderPop(true);
+        });
+
+        inp.addEventListener('blur', () => {
+            setTimeout(() => {
+                pop.style.display = 'none';
+                activeSugIdx = -1;
+            }, 150);
+        });
+
+        inp.addEventListener('keydown', (e) => {
+            if (pop.style.display !== 'block') return;
+            const opts = Array.from(pop.querySelectorAll('.tm-suggest-opt'));
+            if (!opts.length) return;
+
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                e.stopPropagation();
+                activeSugIdx = (activeSugIdx + 1) % opts.length;
+                opts.forEach((o, i) => o.classList.toggle('active', i === activeSugIdx));
+                opts[activeSugIdx]?.scrollIntoView({ block: 'nearest' });
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                e.stopPropagation();
+                activeSugIdx = (activeSugIdx <= 0) ? (opts.length - 1) : (activeSugIdx - 1);
+                opts.forEach((o, i) => o.classList.toggle('active', i === activeSugIdx));
+                opts[activeSugIdx]?.scrollIntoView({ block: 'nearest' });
+            } else if (e.key === 'Enter') {
+                if (activeSugIdx >= 0 && opts[activeSugIdx]) {
+                    inp.value = opts[activeSugIdx].dataset.val || inp.value;
+                    tmUpdateLiveStockBadges();
+                }
+                pop.style.display = 'none';
+                activeSugIdx = -1;
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                pop.style.display = 'none';
+                activeSugIdx = -1;
+            }
+        });
+    };
+
+    const tmRevertSanchaStock = (itemName, category, wazan, kGodown) => {
+        if (!itemName || !wazan || typeof window.getStore !== 'function') return;
+        const raw = window.getStore('sancha_items');
+        const sList = Array.isArray(raw) ? raw : [];
+        const found = sList.find((x) => {
+            const matchKid = (!x?.karkhanaId && kGodown === 'k_main') || String(x?.karkhanaId) === String(kGodown);
+            return x && x.name && x.name.toLowerCase() === itemName.toLowerCase() &&
+                (x.category || 'tani').toLowerCase() === category.toLowerCase() && matchKid;
+        });
+        if (found) {
+            found.gaya = Math.max(0, tmNumOrFallback((tmNumOrFallback(found.gaya, 0) - tmNumOrFallback(wazan, 0)).toFixed(2), 0));
+            found.bacha = tmNumOrFallback((tmNumOrFallback(found.aaya, 0) - found.gaya).toFixed(2), 0);
+            if (typeof window.setStore === 'function') window.setStore('sancha_items', sList);
+        }
+    };
+
+    const tmSyncSanchaStockForSheet = (karId, kName, kGodown, sh, oldState) => {
+        if (typeof window.getStore !== 'function' || typeof window.setStore !== 'function') return;
+
+        const oldTaniItem = oldState?.taniItem || '';
+        const oldTaniWazan = tmNumOrFallback(oldState?.taniWazan, 0);
+        const newTaniWazan = tmNumOrFallback(sh.taniWazan, 0);
+        const taniItemChanged = oldTaniItem.toLowerCase() !== String(sh.taniItem || '').toLowerCase();
+
+        if (newTaniWazan !== oldTaniWazan || taniItemChanged) {
+            if (oldTaniItem && taniItemChanged && oldTaniWazan > 0) {
+                tmRevertSanchaStock(oldTaniItem, 'tani', oldTaniWazan, kGodown);
+            }
+            if (sh.taniItem) {
+                const sRaw = window.getStore('sancha_items');
+                const sList = Array.isArray(sRaw) ? sRaw : [];
+                const tFound = sList.find((x) => {
+                    const matchKid = (!x?.karkhanaId && kGodown === 'k_main') || String(x?.karkhanaId) === String(kGodown);
+                    return x && x.name && x.name.toLowerCase() === sh.taniItem.toLowerCase() &&
+                        (x.category || 'tani').toLowerCase() === 'tani' && matchKid;
+                });
+                if (tFound) {
+                    const diffT = (oldTaniItem && taniItemChanged) ? newTaniWazan : (newTaniWazan - oldTaniWazan);
+                    tFound.gaya = Math.max(0, tmNumOrFallback((tmNumOrFallback(tFound.gaya, 0) + diffT).toFixed(2), 0));
+                    tFound.bacha = tmNumOrFallback((tmNumOrFallback(tFound.aaya, 0) - tFound.gaya).toFixed(2), 0);
+                    window.setStore('sancha_items', sList);
+                }
+            }
+            const hRaw = window.getStore('sancha_history');
+            let sHist = Array.isArray(hRaw) ? hRaw : [];
+            const refKey = `${karId}_${sh.id}_tani`;
+            sHist = sHist.filter((h) => !h || h.refId !== refKey);
+            if (sh.taniItem && newTaniWazan > 0) {
+                sHist.push({
+                    id: `shist_${Date.now()}_t`,
+                    refId: refKey,
+                    date: tmToIsoDate(tmGetToday()),
+                    category: 'tani',
+                    name: sh.taniItem,
+                    kariger: kName,
+                    type: 'Kariger Issue (Tani)',
+                    aaya: 0,
+                    gaya: newTaniWazan,
+                    karkhanaId: kGodown,
+                    timestamp: Date.now()
+                });
+            }
+            window.setStore('sancha_history', sHist);
+        }
+
+        const oldChukkaItem = oldState?.chukkaItem || '';
+        const oldChukkaWazan = tmNumOrFallback(oldState?.chukkaWazan, 0);
+        const newChukkaWazan = tmNumOrFallback(sh.chukkaWazan, 0);
+        const chukkaItemChanged = oldChukkaItem.toLowerCase() !== String(sh.chukkaItem || '').toLowerCase();
+
+        if (newChukkaWazan !== oldChukkaWazan || chukkaItemChanged) {
+            if (oldChukkaItem && chukkaItemChanged && oldChukkaWazan > 0) {
+                tmRevertSanchaStock(oldChukkaItem, 'chukka', oldChukkaWazan, kGodown);
+            }
+            if (sh.chukkaItem) {
+                const sRaw2 = window.getStore('sancha_items');
+                const sList2 = Array.isArray(sRaw2) ? sRaw2 : [];
+                const cFound = sList2.find((x) => {
+                    const matchKid = (!x?.karkhanaId && kGodown === 'k_main') || String(x?.karkhanaId) === String(kGodown);
+                    return x && x.name && x.name.toLowerCase() === sh.chukkaItem.toLowerCase() &&
+                        (x.category || '').toLowerCase() === 'chukka' && matchKid;
+                });
+                if (cFound) {
+                    const diffC = (oldChukkaItem && chukkaItemChanged) ? newChukkaWazan : (newChukkaWazan - oldChukkaWazan);
+                    cFound.gaya = Math.max(0, tmNumOrFallback((tmNumOrFallback(cFound.gaya, 0) + diffC).toFixed(2), 0));
+                    cFound.bacha = tmNumOrFallback((tmNumOrFallback(cFound.aaya, 0) - cFound.gaya).toFixed(2), 0);
+                    window.setStore('sancha_items', sList2);
+                }
+            }
+            const hRaw2 = window.getStore('sancha_history');
+            let sHist2 = Array.isArray(hRaw2) ? hRaw2 : [];
+            const refKey2 = `${karId}_${sh.id}_chukka`;
+            sHist2 = sHist2.filter((h) => !h || h.refId !== refKey2);
+            if (sh.chukkaItem && newChukkaWazan > 0) {
+                sHist2.push({
+                    id: `shist_${Date.now()}_c`,
+                    refId: refKey2,
+                    date: tmToIsoDate(tmGetToday()),
+                    category: 'chukka',
+                    name: sh.chukkaItem,
+                    kariger: kName,
+                    type: 'Kariger Issue (Chukka)',
+                    aaya: 0,
+                    gaya: newChukkaWazan,
+                    karkhanaId: kGodown,
+                    timestamp: Date.now()
+                });
+            }
+            window.setStore('sancha_history', sHist2);
+        }
+    };
+
     const ensureTallyMasterDOM = () => {
+        ensureTallyMasterStyles();
+        bindTallyManualNumberGuard();
         const sec = document.getElementById('tally-master-section');
         if (!sec || sec.dataset.tmInitialized === '1') return;
 
@@ -603,7 +1143,7 @@
                         </div>
 
                         <div id="tm-kariger-fields" class="tm-divider">
-                            <div class="tm-sec-lbl">Kariger Master Details (Auto-Save: Kariger List)</div>
+                            <div class="tm-sec-lbl">Kariger Master Details (Auto-Save: Kariger List + Tani Sheet)</div>
                             <div class="tm-row">
                                 <label for="tm-karkhana">Karkhana :</label>
                                 <select id="tm-karkhana"></select>
@@ -611,6 +1151,119 @@
                             <div class="tm-row">
                                 <label for="tm-saree">Saree Design :</label>
                                 <input type="text" id="tm-saree" placeholder="Jaise: Banarasi Katan">
+                            </div>
+
+                            <div class="tm-kar-sheet-card">
+                                <div class="tm-kar-sheet-head">
+                                    <strong>Kariger Master Sheet Setup</strong>
+                                    <span class="tm-sheet-pill" id="tm-sheet-link-badge">Auto-Save: Tani 1</span>
+                                </div>
+
+                                <div class="tm-kar-grid-4">
+                                    <div class="tm-fbox">
+                                        <label for="tm-rate-bana">Bana Rate/Saree</label>
+                                        <input type="number" step="0.001" id="tm-rate-bana" value="0.311">
+                                    </div>
+                                    <div class="tm-fbox">
+                                        <label for="tm-rate-zari">Zari Rate/Saree</label>
+                                        <input type="number" step="0.001" id="tm-rate-zari" value="0.110">
+                                    </div>
+                                    <div class="tm-fbox">
+                                        <label for="tm-rate-bani">Bani/Saree (₹)</label>
+                                        <input type="number" id="tm-rate-bani" value="240">
+                                    </div>
+                                    <div class="tm-fbox">
+                                        <label for="tm-pichla-bana">Pichla Bana (Kg)</label>
+                                        <input type="number" step="0.01" id="tm-pichla-bana" value="0">
+                                    </div>
+                                    <div class="tm-fbox">
+                                        <label for="tm-pichla-zari">Pichla Zari (Kg)</label>
+                                        <input type="number" step="0.01" id="tm-pichla-zari" value="0">
+                                    </div>
+                                    <div class="tm-fbox">
+                                        <label for="tm-pichla-bani">Pichla Bani (₹)</label>
+                                        <input type="number" id="tm-pichla-bani" value="0">
+                                    </div>
+                                    <div class="tm-fbox">
+                                        <label for="tm-waste-bana">Bana Waste (Kg)</label>
+                                        <input type="number" step="0.01" id="tm-waste-bana" value="0">
+                                    </div>
+                                    <div class="tm-fbox">
+                                        <label for="tm-waste-zari">Zari Waste (Kg)</label>
+                                        <input type="number" step="0.01" id="tm-waste-zari" value="0">
+                                    </div>
+                                </div>
+
+                                <div class="tm-sub-head">Item Selection (Bana &amp; Zari)</div>
+                                <div class="tm-kar-grid-2">
+                                    <div class="tm-fbox">
+                                        <label for="tm-bana-item">1. Bana Item :</label>
+                                        <input type="text" id="tm-bana-item" placeholder="Bana Item chunein...">
+                                        <small class="tm-live-badge" id="tm-live-bana-badge">Bacha: 0.00 Kg</small>
+                                    </div>
+                                    <div class="tm-fbox">
+                                        <label for="tm-zari-item">2. Zari Item :</label>
+                                        <input type="text" id="tm-zari-item" placeholder="Zari Item chunein...">
+                                        <small class="tm-live-badge" id="tm-live-zari-badge">Bacha: 0.00 Kg</small>
+                                    </div>
+                                </div>
+
+                                <div class="tm-sub-head">Sancha Selection (Tani &amp; Chukka)</div>
+                                <div class="tm-sancha-box">
+                                    <div class="tm-kar-grid-4" style="margin-bottom:0;">
+                                        <div class="tm-fbox">
+                                            <label for="tm-tani-item">3. Tani Item :</label>
+                                            <input type="text" id="tm-tani-item" placeholder="Tani Item...">
+                                            <small class="tm-live-badge" id="tm-live-tani-badge">Bacha: 0.00 Kg</small>
+                                        </div>
+                                        <div class="tm-fbox">
+                                            <label for="tm-tani-sancha">Sancha Name :</label>
+                                            <input type="text" id="tm-tani-sancha" placeholder="Azhar / Arman">
+                                        </div>
+                                        <div class="tm-fbox">
+                                            <label for="tm-tani-wazan">Wazan (Kg) :</label>
+                                            <input type="number" step="0.01" id="tm-tani-wazan" placeholder="0.00">
+                                        </div>
+                                        <div class="tm-fbox">
+                                            <label for="tm-tani-pcs">Tani Saree (Pcs) :</label>
+                                            <input type="number" id="tm-tani-pcs" value="72">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="tm-sancha-box">
+                                    <div class="tm-kar-grid-4" style="margin-bottom:0;">
+                                        <div class="tm-fbox">
+                                            <label for="tm-chukka-item">4. Chukka Item :</label>
+                                            <input type="text" id="tm-chukka-item" placeholder="Chukka Item...">
+                                            <small class="tm-live-badge" id="tm-live-chukka-badge">Bacha: 0.00 Kg</small>
+                                        </div>
+                                        <div class="tm-fbox">
+                                            <label for="tm-chukka-sancha">Sancha Name :</label>
+                                            <input type="text" id="tm-chukka-sancha" placeholder="Sancha Naam...">
+                                        </div>
+                                        <div class="tm-fbox">
+                                            <label for="tm-chukka-wazan">Wazan (Kg) :</label>
+                                            <input type="number" step="0.01" id="tm-chukka-wazan" placeholder="0.00">
+                                        </div>
+                                        <div class="tm-fbox">
+                                            <label for="tm-chukka-pcs">Chukka Saree (Pcs) :</label>
+                                            <input type="number" id="tm-chukka-pcs" value="72">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="tm-sub-head">Tani Ke 8 Colors (Optional Matching)</div>
+                                <div class="tm-kar-colors-grid">
+                                    <input type="text" id="tm-color-1" placeholder="1. Rani">
+                                    <input type="text" id="tm-color-2" placeholder="2. Lal">
+                                    <input type="text" id="tm-color-3" placeholder="3. Mehendi">
+                                    <input type="text" id="tm-color-4" placeholder="4. Blue">
+                                    <input type="text" id="tm-color-5" placeholder="5. Peela">
+                                    <input type="text" id="tm-color-6" placeholder="6. Wine">
+                                    <input type="text" id="tm-color-7" placeholder="7. Firozi">
+                                    <input type="text" id="tm-color-8" placeholder="8. Mungia">
+                                </div>
                             </div>
                         </div>
 
@@ -640,7 +1293,7 @@
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; gap:10px;">
                             <button type="button" class="tm-esc-btn" id="tm-back-to-alter-btn" style="display:none;" onclick="openTallyAlterModule()">← Alter List</button>
                             <div style="margin-left:auto; display:flex; gap:8px;">
-                                <button type="button" class="tm-btn-yes" onclick="tmAskAccept()">Save [Enter]</button>
+                                <button type="button" class="tm-btn-yes" onclick="tmAskAccept()">Save [Ctrl+Enter]</button>
                             </div>
                         </div>
                     </div>
@@ -649,7 +1302,7 @@
                         <div class="tm-group-box" id="tm-group-list-box">
                             <div class="tm-group-head">List of Groups</div>
                             <div id="tm-group-list">
-                                <div class="tm-group-opt selected" data-grp="kariger" data-label="Kariger" onclick="tmPickGroup('kariger', true)"><span>Kariger (Weaver)</span><small>Kariger Master</small></div>
+                                <div class="tm-group-opt selected" data-grp="kariger" data-label="Kariger" onclick="tmPickGroup('kariger', true)"><span>Kariger (Weaver)</span><small>Kariger + Sheet</small></div>
                                 <div class="tm-group-opt" data-grp="cutting" data-label="Cutting" onclick="tmPickGroup('cutting', true)"><span>Cutting</span><small>JobWork</small></div>
                                 <div class="tm-group-opt" data-grp="embroidery" data-label="Embroidery" onclick="tmPickGroup('embroidery', true)"><span>Embroidery</span><small>JobWork</small></div>
                                 <div class="tm-group-opt" data-grp="calender" data-label="Calender" onclick="tmPickGroup('calender', true)"><span>Calender</span><small>JobWork</small></div>
@@ -677,7 +1330,7 @@
             </div>
 
             <div class="tm-status-strip">
-                <span class="tm-toast" id="tm-toast-msg">Tally Master Ready — Enter se aage badhein, Esc se wapas jayein.</span>
+                <span class="tm-toast" id="tm-toast-msg">Tally Master Ready — Enter se aage badhein, Ctrl+Enter se turant Accept, Esc se wapas.</span>
                 <span id="tm-live-counts">Kariger: 0 · Cutting: 0 · Embroidery: 0 · Calender: 0</span>
             </div>
         `;
@@ -702,6 +1355,16 @@
                 }
             });
         }
+
+        const kSel = document.getElementById('tm-karkhana');
+        if (kSel) {
+            kSel.addEventListener('change', () => tmUpdateLiveStockBadges());
+        }
+
+        tmAttachInlineSuggest('tm-bana-item', 'tm-zari-item');
+        tmAttachInlineSuggest('tm-zari-item', 'tm-tani-item');
+        tmAttachInlineSuggest('tm-tani-item', 'tm-tani-sancha');
+        tmAttachInlineSuggest('tm-chukka-item', 'tm-chukka-sancha');
 
         const alterSearch = document.getElementById('tm-alter-search');
         if (alterSearch) {
@@ -733,6 +1396,74 @@
             const navKid = document.getElementById('app-karkhana-select')?.value;
             if (navKid && navKid !== 'all') sel.value = navKid;
         }
+    };
+
+    const tmResetKarigerSheetInputs = () => {
+        const setV = (id, v) => {
+            const el = document.getElementById(id);
+            if (el) el.value = v;
+        };
+        setV('tm-rate-bana', '0.311');
+        setV('tm-rate-zari', '0.110');
+        setV('tm-rate-bani', '240');
+        setV('tm-pichla-bana', '0');
+        setV('tm-pichla-zari', '0');
+        setV('tm-pichla-bani', '0');
+        setV('tm-waste-bana', '0');
+        setV('tm-waste-zari', '0');
+        setV('tm-bana-item', '');
+        setV('tm-zari-item', '');
+        setV('tm-tani-item', '');
+        setV('tm-tani-sancha', '');
+        setV('tm-tani-wazan', '');
+        setV('tm-tani-pcs', '72');
+        setV('tm-chukka-item', '');
+        setV('tm-chukka-sancha', '');
+        setV('tm-chukka-wazan', '');
+        setV('tm-chukka-pcs', '72');
+        for (let i = 1; i <= 8; i++) setV(`tm-color-${i}`, '');
+        const pill = document.getElementById('tm-sheet-link-badge');
+        if (pill) pill.textContent = 'Auto-Save: Tani 1';
+        tmUpdateLiveStockBadges();
+    };
+
+    const tmLoadKarigerSheetInputs = (karId) => {
+        tmResetKarigerSheetInputs();
+        const sheets = tmGetSheetsSafe(karId);
+        const sh = sheets.length ? sheets[sheets.length - 1] : null;
+        if (!sh) return;
+
+        const setV = (id, v) => {
+            const el = document.getElementById(id);
+            if (el) el.value = (v !== undefined && v !== null) ? v : '';
+        };
+        setV('tm-rate-bana', sh.rateBana !== undefined ? sh.rateBana : 0.311);
+        setV('tm-rate-zari', sh.rateZari !== undefined ? sh.rateZari : 0.110);
+        setV('tm-rate-bani', sh.rateBani !== undefined ? sh.rateBani : 240);
+        setV('tm-pichla-bana', sh.pichlaBana || 0);
+        setV('tm-pichla-zari', sh.pichlaZari || 0);
+        setV('tm-pichla-bani', sh.pichlaBani || 0);
+        setV('tm-waste-bana', sh.banaWaste || 0);
+        setV('tm-waste-zari', sh.zariWaste || 0);
+
+        setV('tm-bana-item', sh.banaItem || '');
+        setV('tm-zari-item', sh.zariItem || '');
+        setV('tm-tani-item', sh.taniItem || '');
+        setV('tm-tani-sancha', sh.taniSancha || '');
+        setV('tm-tani-wazan', sh.taniWazan || '');
+        setV('tm-tani-pcs', sh.taniPcs !== undefined ? sh.taniPcs : 72);
+        setV('tm-chukka-item', sh.chukkaItem || '');
+        setV('tm-chukka-sancha', sh.chukkaSancha || '');
+        setV('tm-chukka-wazan', sh.chukkaWazan || '');
+        setV('tm-chukka-pcs', sh.chukkaPcs !== undefined ? sh.chukkaPcs : 72);
+
+        for (let i = 1; i <= 8; i++) {
+            setV(`tm-color-${i}`, (sh.colors && sh.colors[i - 1]) ? sh.colors[i - 1] : '');
+        }
+
+        const pill = document.getElementById('tm-sheet-link-badge');
+        if (pill) pill.textContent = `Linked Sheet: ${sh.title || 'Tani 1'}`;
+        tmUpdateLiveStockBadges();
     };
 
     const tmUpdateCountsBar = () => {
@@ -772,6 +1503,8 @@
             const tTxt = document.getElementById('tm-jw-target-txt');
             if (sLbl) sLbl.textContent = `JobWork Details (Auto-Save: ${lbl})`;
             if (tTxt) tTxt.textContent = `JobWork → ${lbl}`;
+        } else {
+            tmUpdateLiveStockBadges();
         }
 
         if (moveFocus) {
@@ -807,12 +1540,13 @@
         document.getElementById('tm-saree').value = '';
         document.getElementById('tm-mobile').value = '';
         document.getElementById('tm-address').value = '';
-        document.getElementById('tm-date').value = tmGetToday();
+        document.getElementById('tm-date').value = tmToIsoDate(tmGetToday());
 
         tmPopulateKarkhanaDropdown();
+        tmResetKarigerSheetInputs();
         window.tmPickGroup('kariger', false);
         tmUpdateCountsBar();
-        tmSetToast('Nayi Profile Banayein — Enter se aage badhein, Esc se Dashboard.');
+        tmSetToast('Nayi Profile + Kariger Master Sheet Banayein — Enter se aage badhein, Ctrl+Enter se turant Accept.');
         setTimeout(() => document.getElementById('tm-name')?.focus(), 40);
     };
 
@@ -904,15 +1638,14 @@
         }
         if (tmAlterActiveIdx >= items.length) tmAlterActiveIdx = 0;
 
-        const escHtml = (s) => String(s || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
         container.innerHTML = items.map((p, idx) => {
             const meta = p.group === 'kariger'
-                ? `${escHtml(p.karkhanaName)}${p.saree ? ' · ' + escHtml(p.saree) : ''}${p.address ? ' · ' + escHtml(p.address) : ''}`
-                : `${escHtml(p.address || '-')}${p.mobile ? ' · ' + escHtml(p.mobile) : ''}`;
+                ? `${tmEscHtml(p.karkhanaName)}${p.saree ? ' · ' + tmEscHtml(p.saree) : ''}${p.address ? ' · ' + tmEscHtml(p.address) : ''}`
+                : `${tmEscHtml(p.address || '-')}${p.mobile ? ' · ' + tmEscHtml(p.mobile) : ''}`;
             return `
-                <div class="tm-alter-row ${idx === tmAlterActiveIdx ? 'active' : ''}" data-idx="${idx}" onclick="tmOpenAlterEdit('${escHtml(p.id)}', '${escHtml(p.source)}')">
-                    <div><strong>${escHtml(p.name)}</strong>${p.mobile ? ` <small style="color:#6b7280;">(${escHtml(p.mobile)})</small>` : ''}</div>
-                    <div><span class="tm-grp-pill">${escHtml(p.groupLabel)}</span></div>
+                <div class="tm-alter-row ${idx === tmAlterActiveIdx ? 'active' : ''}" data-idx="${idx}" onclick="tmOpenAlterEdit('${tmEscHtml(p.id)}', '${tmEscHtml(p.source)}')">
+                    <div><strong>${tmEscHtml(p.name)}</strong>${p.mobile ? ` <small style="color:#6b7280;">(${tmEscHtml(p.mobile)})</small>` : ''}</div>
+                    <div><span class="tm-grp-pill">${tmEscHtml(p.groupLabel)}</span></div>
                     <div class="tm-alter-hide-sm"><small style="color:#6b7280;">${meta || '-'}</small></div>
                     <div style="text-align:right; font-weight:700; font-size:12px;">Edit →</div>
                 </div>`;
@@ -937,7 +1670,7 @@
         document.getElementById('tm-name').value = found.name;
         document.getElementById('tm-mobile').value = found.mobile;
         document.getElementById('tm-address').value = found.address;
-        document.getElementById('tm-date').value = found.date || tmGetToday();
+        document.getElementById('tm-date').value = tmToIsoDate(found.date || tmGetToday());
 
         const grpInp = document.getElementById('tm-group');
         if (grpInp) grpInp.readOnly = true;
@@ -946,9 +1679,13 @@
         document.getElementById('tm-saree').value = found.saree || '';
         window.tmPickGroup(found.group, false);
 
+        if (found.group === 'kariger') {
+            tmLoadKarigerSheetInputs(found.id);
+        }
+
         document.getElementById('tm-alter-grp-label').textContent = found.groupLabel;
         document.getElementById('tm-alter-id-label').textContent = found.id;
-        tmSetToast(`Editing [${found.name}] — Badlav karke Enter dabayein.`);
+        tmSetToast(`Editing [${found.name}] — Badlav karke Enter / Ctrl+Enter dabayein.`);
         setTimeout(() => document.getElementById('tm-name')?.focus(), 40);
     };
 
@@ -969,7 +1706,7 @@
     window.tmCancelAccept = function () {
         const box = document.getElementById('tm-accept-box');
         if (box) box.style.display = 'none';
-        document.getElementById('tm-address')?.focus();
+        document.getElementById('tm-date')?.focus();
     };
 
     window.tmSaveProfile = function () {
@@ -978,7 +1715,7 @@
         const name = (document.getElementById('tm-name')?.value || '').trim().toUpperCase();
         const mobile = (document.getElementById('tm-mobile')?.value || '').trim();
         const address = (document.getElementById('tm-address')?.value || '').trim();
-        const dateVal = (document.getElementById('tm-date')?.value || '').trim() || tmGetToday();
+        const dateVal = tmToIsoDate((document.getElementById('tm-date')?.value || '').trim() || tmGetToday());
 
         if (!name) return;
 
@@ -989,6 +1726,8 @@
             const saree = (document.getElementById('tm-saree')?.value || '').trim();
 
             const list = tmGetKarigers();
+            const targetKarId = editId || `kar_${Date.now()}`;
+
             if (editId) {
                 const it = list.find((x) => String(x.id) === String(editId));
                 if (it) {
@@ -1002,7 +1741,7 @@
                 }
             } else {
                 list.push({
-                    id: `kar_${Date.now()}`,
+                    id: targetKarId,
                     name: name,
                     saree: saree,
                     mobile: mobile,
@@ -1013,6 +1752,57 @@
                 });
             }
             if (typeof window.setStore === 'function') window.setStore('kariger_list', list);
+
+            // Kariger Master Sheet (Tani 1 / Latest Sheet) ko seedha save & sync karein
+            const sheets = tmGetSheetsSafe(targetKarId);
+            let targetSheet = sheets.length ? sheets[sheets.length - 1] : null;
+            const oldSheetState = targetSheet ? {
+                taniItem: targetSheet.taniItem || '',
+                taniWazan: tmNumOrFallback(targetSheet.taniWazan, 0),
+                chukkaItem: targetSheet.chukkaItem || '',
+                chukkaWazan: tmNumOrFallback(targetSheet.chukkaWazan, 0)
+            } : { taniItem: '', taniWazan: 0, chukkaItem: '', chukkaWazan: 0 };
+
+            if (!targetSheet) {
+                targetSheet = {
+                    id: 'tani_1',
+                    title: 'Tani 1',
+                    note: '',
+                    rows: []
+                };
+                sheets.push(targetSheet);
+            }
+
+            targetSheet.rateBana = tmNumOrFallback(document.getElementById('tm-rate-bana')?.value, 0.311);
+            targetSheet.rateZari = tmNumOrFallback(document.getElementById('tm-rate-zari')?.value, 0.110);
+            targetSheet.rateBani = tmNumOrFallback(document.getElementById('tm-rate-bani')?.value, 240);
+            targetSheet.pichlaBana = tmNumOrFallback(document.getElementById('tm-pichla-bana')?.value, 0);
+            targetSheet.pichlaZari = tmNumOrFallback(document.getElementById('tm-pichla-zari')?.value, 0);
+            targetSheet.pichlaBani = tmNumOrFallback(document.getElementById('tm-pichla-bani')?.value, 0);
+            targetSheet.banaWaste = tmNumOrFallback(document.getElementById('tm-waste-bana')?.value, 0);
+            targetSheet.zariWaste = tmNumOrFallback(document.getElementById('tm-waste-zari')?.value, 0);
+
+            targetSheet.banaItem = String(document.getElementById('tm-bana-item')?.value || '').trim();
+            targetSheet.zariItem = String(document.getElementById('tm-zari-item')?.value || '').trim();
+            targetSheet.taniItem = String(document.getElementById('tm-tani-item')?.value || '').trim();
+            targetSheet.taniSancha = String(document.getElementById('tm-tani-sancha')?.value || '').trim();
+            targetSheet.taniWazan = tmNumOrFallback(document.getElementById('tm-tani-wazan')?.value, 0);
+            targetSheet.taniPcs = tmNumOrFallback(document.getElementById('tm-tani-pcs')?.value, 72);
+            targetSheet.chukkaItem = String(document.getElementById('tm-chukka-item')?.value || '').trim();
+            targetSheet.chukkaSancha = String(document.getElementById('tm-chukka-sancha')?.value || '').trim();
+            targetSheet.chukkaWazan = tmNumOrFallback(document.getElementById('tm-chukka-wazan')?.value, 0);
+            targetSheet.chukkaPcs = tmNumOrFallback(document.getElementById('tm-chukka-pcs')?.value, 72);
+
+            const newColors = [];
+            for (let i = 1; i <= 8; i++) {
+                const cVal = String(document.getElementById(`tm-color-${i}`)?.value || '').trim();
+                if (cVal) newColors.push(cVal);
+            }
+            targetSheet.colors = newColors;
+            if (!Array.isArray(targetSheet.rows)) targetSheet.rows = [];
+
+            tmSyncSanchaStockForSheet(targetKarId, name, kId, targetSheet, oldSheetState);
+            tmSaveSheetsSafe(targetKarId, sheets);
         } else {
             const jwList = [...tmGetJobWorkers()];
             if (editId) {
@@ -1051,13 +1841,18 @@
 
         if (tmMode === 'alter-edit') {
             window.openTallyAlterModule();
-            tmSetToast(`✅ [${name}] ki profile update ho gayi!`);
+            tmSetToast(`✅ [${name}] + Master Sheet update ho gayi!`);
         } else {
             document.getElementById('tm-name').value = '';
             document.getElementById('tm-saree').value = '';
             document.getElementById('tm-mobile').value = '';
             document.getElementById('tm-address').value = '';
-            tmSetToast(`✅ [${name}] (${tmSelectedGroup.toUpperCase()}) save ho gaya! Agli entry karein.`);
+            tmResetKarigerSheetInputs();
+            tmSetToast(
+                tmSelectedGroup === 'kariger'
+                    ? `✅ [${name}] + Tani 1 Master Sheet save ho gayi! Agli entry karein.`
+                    : `✅ [${name}] (${tmSelectedGroup.toUpperCase()}) save ho gaya! Agli entry karein.`
+            );
             document.getElementById('tm-name')?.focus();
         }
     };
@@ -1161,7 +1956,18 @@
                 return;
             }
 
-            const activeId = document.activeElement?.id || '';
+            // Classic Tally Quick Accept: Ctrl+Enter or Ctrl+A
+            if (e.ctrlKey && (e.key === 'Enter' || e.key.toLowerCase() === 'a')) {
+                e.preventDefault();
+                window.tmAskAccept();
+                return;
+            }
+
+            const activeEl = document.activeElement;
+            const activeId = activeEl?.id || '';
+            const openPop = activeEl?.parentElement?.querySelector('.tm-suggest-pop');
+            const isPopOpen = Boolean(openPop && openPop.style.display === 'block');
+
             if (activeId === 'tm-group' && tmMode === 'create' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
                 e.preventDefault();
                 const visible = Array.from(document.querySelectorAll('#tm-group-list .tm-group-opt')).filter((x) => x.style.display !== 'none');
@@ -1175,21 +1981,57 @@
                 return;
             }
 
-            if (e.key === 'Enter') {
-                const order = (tmSelectedGroup === 'kariger')
-                    ? (tmMode === 'alter-edit' ? ['tm-name', 'tm-karkhana', 'tm-saree', 'tm-mobile', 'tm-address', 'tm-date'] : ['tm-name', 'tm-group', 'tm-karkhana', 'tm-saree', 'tm-mobile', 'tm-address', 'tm-date'])
-                    : (tmMode === 'alter-edit' ? ['tm-name', 'tm-mobile', 'tm-address', 'tm-date'] : ['tm-name', 'tm-group', 'tm-mobile', 'tm-address', 'tm-date']);
-                const curIdx = order.indexOf(activeId);
-                if (curIdx >= 0) {
+            const karCreateOrder = [
+                'tm-name', 'tm-group', 'tm-karkhana', 'tm-saree',
+                'tm-rate-bana', 'tm-rate-zari', 'tm-rate-bani',
+                'tm-pichla-bana', 'tm-pichla-zari', 'tm-pichla-bani',
+                'tm-waste-bana', 'tm-waste-zari',
+                'tm-bana-item', 'tm-zari-item',
+                'tm-tani-item', 'tm-tani-sancha', 'tm-tani-wazan', 'tm-tani-pcs',
+                'tm-chukka-item', 'tm-chukka-sancha', 'tm-chukka-wazan', 'tm-chukka-pcs',
+                'tm-color-1', 'tm-color-2', 'tm-color-3', 'tm-color-4',
+                'tm-color-5', 'tm-color-6', 'tm-color-7', 'tm-color-8',
+                'tm-mobile', 'tm-address', 'tm-date'
+            ];
+
+            const order = (tmSelectedGroup === 'kariger')
+                ? (tmMode === 'alter-edit' ? karCreateOrder.filter((id) => id !== 'tm-group') : karCreateOrder)
+                : (tmMode === 'alter-edit' ? ['tm-name', 'tm-mobile', 'tm-address', 'tm-date'] : ['tm-name', 'tm-group', 'tm-mobile', 'tm-address', 'tm-date']);
+
+            const curIdx = order.indexOf(activeId);
+            if (curIdx >= 0) {
+                if (e.key === 'Enter') {
                     e.preventDefault();
                     if (activeId === 'tm-group') {
                         window.tmPickGroup(tmSelectedGroup, true);
                         return;
                     }
+                    if (e.shiftKey) {
+                        if (curIdx > 0) {
+                            const prev = document.getElementById(order[curIdx - 1]);
+                            if (prev) { prev.focus(); if (prev.select) prev.select(); }
+                        }
+                        return;
+                    }
                     if (curIdx < order.length - 1) {
-                        document.getElementById(order[curIdx + 1])?.focus();
+                        const nxt = document.getElementById(order[curIdx + 1]);
+                        if (nxt) { nxt.focus(); if (nxt.select) nxt.select(); }
                     } else {
                         window.tmAskAccept();
+                    }
+                    return;
+                }
+
+                // ArrowDown / ArrowUp field navigation (skip when suggest popup is open or on <select> with Alt)
+                if (!isPopOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                    if (activeEl?.tagName === 'SELECT' && e.altKey) return;
+                    e.preventDefault();
+                    if (e.key === 'ArrowDown' && curIdx < order.length - 1) {
+                        const nxt = document.getElementById(order[curIdx + 1]);
+                        if (nxt) { nxt.focus(); if (nxt.select) nxt.select(); }
+                    } else if (e.key === 'ArrowUp' && curIdx > 0) {
+                        const prev = document.getElementById(order[curIdx - 1]);
+                        if (prev) { prev.focus(); if (prev.select) prev.select(); }
                     }
                 }
             }
