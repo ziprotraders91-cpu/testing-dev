@@ -16,6 +16,7 @@
     // View State: 'hub' (5 Stages) | 'list' (Stage Items) | 'passbook' (Inline Ledger)
     let sareeViewMode = 'hub';
     let sareeHubActiveIdx = 0; // 0:fresh, 1:cutting, 2:embroidery, 3:finished, 4:lott
+    let sareeOpenedAt = 0;
     let activePassbookMeta = null; // { sareeName, karigerName, karkhanaId }
 
     // Pagination & Cursor State - Passbook
@@ -554,6 +555,7 @@
             return;
         }
         if (sareeViewMode === 'list') {
+            sareeOpenedAt = performance.now();
             setSareeViewMode('hub');
             renderSareeHubTotals();
             return;
@@ -571,6 +573,7 @@
        4. NAVIGATION & 5-TAB PIPELINE CONTROLLER
        ======================================================================== */
     const openSareeModule = () => {
+        sareeOpenedAt = performance.now();
         ensureSareeTallyStyles();
         const dView = document.getElementById('dashboard-view');
         if (dView) dView.style.display = 'none';
@@ -583,6 +586,7 @@
     };
 
     const switchSareeStockTab = (tabName) => {
+        sareeOpenedAt = performance.now();
         ensureSareeTallyStyles();
         window.currentSareeTab = normTabName(tabName);
         const foundIdx = STAGE_LIST.findIndex(s => s.key === window.currentSareeTab);
@@ -970,7 +974,7 @@
         const pageRows = getSareeCurrentPageRows();
         const chosen = pageRows[sareeListActiveIdx];
         if (!chosen) return alert('Pehle koi Saree item chunein!');
-        const bachi = safeInt(chosen.bachi);
+        const bachi = safeInt(chosen.bacha !== undefined ? chosen.bacha : chosen.bachi);
         if (bachi <= 0) return alert(`[${chosen.sareeName}] me transfer ke liye koi Pcs nahi bache hain.`);
         openSareeTransferModal(
             encodeURIComponent(chosen.sareeName),
@@ -1630,6 +1634,11 @@
 
         if (isTyping) return;
 
+        // Guard: Prevent Enter bleed-through right after opening Hub or switching to Stage List
+        if (e.key === 'Enter' && (performance.now() - sareeOpenedAt) < 200) {
+            return;
+        }
+
         // 3. Level 1: 5-Stage Hub View
         if (sareeViewMode === 'hub') {
             if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -1637,6 +1646,7 @@
                 highlightSareeHubRow(sareeHubActiveIdx + (e.key === 'ArrowDown' ? 1 : -1));
             } else if (e.key === 'Enter') {
                 e.preventDefault();
+                e.stopImmediatePropagation();
                 const st = STAGE_LIST[sareeHubActiveIdx] || STAGE_LIST[0];
                 switchSareeStockTab(st.key);
             } else if (e.key === '+') {
@@ -1647,6 +1657,7 @@
                 const found = STAGE_LIST.find(s => s.shortcut.toLowerCase() === k || s.num === k);
                 if (found) {
                     e.preventDefault();
+                    e.stopImmediatePropagation();
                     switchSareeStockTab(found.key);
                 }
             }
