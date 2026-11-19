@@ -1,7 +1,7 @@
 /* ========================================================
    SIMPLICITY ERP - ACCURATE ZARI STOCK CALCULATION ENGINE
    File: zari/zari-calc.js • Developed by Farhan Jawed
-   (Purana Accurate Calculation + Zero Over-Deduction Math)
+   (Purana Accurate Calculation + Ignore 0-Kg Dead Rows)
 ======================================================== */
 
 (() => {
@@ -27,7 +27,6 @@
 
     /**
      * 1. Kisi specific Zari Item ka wazan calculate karna (Aaya, Gaya, Bacha)
-     * Purane zari-calc (1).js ka authentic logic
      */
     const getZariItemStats = (itemName, targetKarkhanaId) => {
         const kId = normalizeGodownId(targetKarkhanaId || window.currentZariKarkhanaFilter || "all");
@@ -43,18 +42,20 @@
         let lastDate = "";
 
         const zStock = window.safeArray ? window.safeArray(window.getStore("zari_stock")) : [];
-        const transfers = (window.safeArray ? window.safeArray(window.getStore("material_transfers")) : []).filter(function(t) { 
-            return t && t.type === "zari"; 
+        const transfers = (window.safeArray ? window.safeArray(window.getStore("material_transfers")) : []).filter(function(t) {
+            return t && t.type === "zari";
         });
-        const allKarigers = (typeof window.sanitizeKarigerList === "function") 
-            ? window.sanitizeKarigerList() 
+        const allKarigers = (typeof window.sanitizeKarigerList === "function")
+            ? window.sanitizeKarigerList()
             : (window.safeArray ? window.safeArray(window.getStore("kariger_list")) : []);
 
-        // Check karein ki godam me kul kitne alag-alag zari items hain
+        // Sirf active (aaya > 0) items count karein taaki 0 Kg dead rows match na bigaadein
         let uniqueItemCount = 0;
         const seenNames = [];
         zStock.forEach(function(z) {
             if (z && z.name) {
+                const qtyVal = safeNum(z.aaya !== undefined ? z.aaya : (z.qty || z.totalQty));
+                if (qtyVal <= 0) return;
                 const n = z.name.trim().toLowerCase();
                 if (seenNames.indexOf(n) === -1) {
                     seenNames.push(n);
@@ -63,7 +64,7 @@
             }
         });
 
-        // Helper match rule: Item name strictly match hona chahiye (Khali naam se doosre item ka wazan na kate)
+        // Helper match rule: Item name strictly match hona chahiye
         const isItemMatch = function(rowItemName) {
             const rN = (rowItemName || "").trim().toLowerCase();
             if (rN === nameLower) return true;
@@ -73,7 +74,6 @@
 
         // --- CASE 1: SABHI KARKHANE (TOTAL CONSOLIDATED VIEW) ---
         if (kId === "all") {
-            // 1. Direct Purchases / Openings across all branches
             zStock.forEach(function(z) {
                 if (z && z.name && z.name.trim().toLowerCase() === nameLower) {
                     totalAaya += safeNum(z.aaya !== undefined ? z.aaya : (z.qty || z.totalQty));
@@ -81,7 +81,6 @@
                 }
             });
 
-            // 2. Kariger Consumption across all branches
             allKarigers.forEach(function(k) {
                 const sheets = (typeof window.getKarigerSheets === "function") ? window.getKarigerSheets(k.id) : [];
                 sheets.forEach(function(sh) {
@@ -102,7 +101,6 @@
 
         // --- CASE 2: MAIN GODOWN ONLY ---
         else if (kId === "k_main") {
-            // 1. Main Godown Purchase / Opening
             zStock.forEach(function(z) {
                 const matchK = (!z.karkhanaId || z.karkhanaId === "k_main");
                 if (z && matchK && z.name && z.name.trim().toLowerCase() === nameLower) {
@@ -111,7 +109,6 @@
                 }
             });
 
-            // 2. Transfers Sent OUT to branches (-)
             transfers.forEach(function(t) {
                 const fromK = normalizeGodownId(t.fromKarkhanaId);
                 if (fromK === "k_main" && t.itemName && t.itemName.trim().toLowerCase() === nameLower) {
@@ -120,7 +117,6 @@
                 }
             });
 
-            // 3. Transfers Received IN from branches (+)
             transfers.forEach(function(t) {
                 const toK = normalizeGodownId(t.toKarkhanaId);
                 if (toK === "k_main" && t.itemName && t.itemName.trim().toLowerCase() === nameLower) {
@@ -129,7 +125,6 @@
                 }
             });
 
-            // 4. Main Godown Kariger Consumption
             allKarigers.forEach(function(k) {
                 const sheets = (typeof window.getKarigerSheets === "function") ? window.getKarigerSheets(k.id) : [];
                 sheets.forEach(function(sh) {
@@ -153,7 +148,6 @@
 
         // --- CASE 3: BRANCH GODOWN ---
         else {
-            // 1. Direct Purchase at Branch
             zStock.forEach(function(z) {
                 if (z && String(z.karkhanaId) === String(kId) && z.name && z.name.trim().toLowerCase() === nameLower) {
                     totalAaya += safeNum(z.aaya !== undefined ? z.aaya : (z.qty || z.totalQty));
@@ -161,7 +155,6 @@
                 }
             });
 
-            // 2. Transfers Received IN from Main/other Godam (+)
             transfers.forEach(function(t) {
                 const toK = normalizeGodownId(t.toKarkhanaId);
                 if (String(toK) === String(kId) && t.itemName && t.itemName.trim().toLowerCase() === nameLower) {
@@ -170,7 +163,6 @@
                 }
             });
 
-            // 3. Transfers Sent OUT from this branch (-)
             transfers.forEach(function(t) {
                 const fromK = normalizeGodownId(t.fromKarkhanaId);
                 if (String(fromK) === String(kId) && t.itemName && t.itemName.trim().toLowerCase() === nameLower) {
@@ -179,7 +171,6 @@
                 }
             });
 
-            // 4. Branch Kariger Consumption
             allKarigers.forEach(function(k) {
                 const sheets = (typeof window.getKarigerSheets === "function") ? window.getKarigerSheets(k.id) : [];
                 sheets.forEach(function(sh) {
