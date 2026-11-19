@@ -2,7 +2,7 @@
    SIMPLICITY ERP - BANA STOCK CALCULATION ENGINE
    File: bana/bana-calc.js • Developed by Farhan Jawed
    (Multi-Godam Stock, Inter-Transfer & Passbook Reconcile)
-   [FIXED: Sheet-Level Default Item & Zero-Leakage Kariger Match]
+   [FIXED: Sheet-Level Default Item + Ignore 0-Kg Dead Rows]
 ======================================================== */
 
 var currentBanaKarkhanaFilter = "all";
@@ -32,18 +32,20 @@ function getBanaItemStats(itemName, targetKarkhanaId) {
     var lastDate = "";
 
     var bStock = safeArray(getStore("bana_stock"));
-    var transfers = safeArray(getStore("material_transfers")).filter(function(t) { 
-        return t && t.type === "bana"; 
+    var transfers = safeArray(getStore("material_transfers")).filter(function(t) {
+        return t && t.type === "bana";
     });
-    var allKarigers = (typeof sanitizeKarigerList === "function") 
-        ? sanitizeKarigerList() 
+    var allKarigers = (typeof sanitizeKarigerList === "function")
+        ? sanitizeKarigerList()
         : safeArray(getStore("kariger_list"));
 
-    // Check karein ki godam me kul kitne alag-alag bana items hain
+    // Sirf active (aaya > 0) items count karein taaki 0 Kg dead rows match na bigaadein
     var uniqueItemCount = 0;
     var seenNames = [];
     bStock.forEach(function(b) {
         if (b && b.name) {
+            var qtyVal = Number(b.aaya !== undefined ? b.aaya : (b.qty || b.totalQty || 0)) || 0;
+            if (qtyVal <= 0) return;
             var n = b.name.trim().toLowerCase();
             if (seenNames.indexOf(n) === -1) {
                 seenNames.push(n);
