@@ -533,12 +533,18 @@
     };
 
     /* ========================================================================
-       4. TALLY MASTER CREATE & ALTER MODULE (KARIGER MASTER SHEET LINKED)
+       4. TALLY MASTER CREATE & ALTER MODULE (FORWARD SUB-FORM + SIDE LIST)
     ======================================================================== */
     let tmMode = 'create'; // 'create' | 'alter-list' | 'alter-edit'
     let tmSelectedGroup = 'kariger';
     let tmAlterFilter = 'all';
     let tmAlterActiveIdx = 0;
+
+    // Kariger Master Sheet Overlay State
+    let tmSheetModalOpen = false;
+    let tmActiveSideField = null; // 'tm-s-karkhana' | 'tm-bana-item' | 'tm-zari-item' | 'tm-tani-item' | 'tm-chukka-item'
+    let tmSideItems = [];
+    let tmSideActiveIdx = -1;
 
     const tmEscHtml = (s) => String(s || '').replace(/[&<>"']/g, (m) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -546,7 +552,7 @@
 
     const tmNumOrFallback = (val, fallback = 0) => {
         if (val === undefined || val === null || String(val).trim() === '') return fallback;
-        const n = parseFloat(val);
+        const n = parseFloat(String(val).replace(/,/g, '').trim());
         return isNaN(n) || !isFinite(n) ? fallback : n;
     };
 
@@ -601,155 +607,283 @@
         style.id = 'tm-kariger-sheet-styles';
         style.textContent = `
             #tally-master-section input[type="number"]::-webkit-outer-spin-button,
-            #tally-master-section input[type="number"]::-webkit-inner-spin-button {
+            #tally-master-section input[type="number"]::-webkit-inner-spin-button,
+            #tm-kar-sheet-overlay input[type="number"]::-webkit-outer-spin-button,
+            #tm-kar-sheet-overlay input[type="number"]::-webkit-inner-spin-button {
                 -webkit-appearance: none !important;
                 margin: 0 !important;
             }
-            #tally-master-section input[type="number"] {
+            #tally-master-section input[type="number"],
+            #tm-kar-sheet-overlay input[type="number"] {
                 -moz-appearance: textfield !important;
             }
-            #tm-kariger-fields .tm-kar-sheet-card {
-                margin-top: 10px;
-                background: #fdfcf7;
-                border: 1.5px solid #e5d5a7;
-                border-radius: 8px;
-                padding: 10px 11px;
-            }
-            #tm-kariger-fields .tm-kar-sheet-head {
+
+            /* Summary Strip inside Create/Alter when Kariger Sheet is configured */
+            .tm-kar-summary-card {
+                background: #fdf6e2;
+                border: 1.5px solid #d9b86c;
+                border-radius: 6px;
+                padding: 9px 11px;
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                gap: 8px;
+                gap: 10px;
                 flex-wrap: wrap;
-                padding-bottom: 7px;
-                margin-bottom: 9px;
-                border-bottom: 1.5px solid #efe4c4;
+                margin-bottom: 6px;
             }
-            #tm-kariger-fields .tm-kar-sheet-head strong {
-                font-size: 12.5px;
+            .tm-kar-summary-card small {
+                display: block;
+                font-size: 11px;
+                color: #92400e;
+                font-weight: 700;
+                margin-top: 2px;
+            }
+
+            /* Forward Tally Sub-Screen Overlay (Hides background Create screen) */
+            #tm-kar-sheet-overlay {
+                position: fixed;
+                inset: 0;
+                z-index: 99990;
+                background: rgba(17, 24, 39, 0.72);
+                backdrop-filter: blur(3px);
+                display: none;
+                align-items: center;
+                justify-content: center;
+                padding: 12px;
+                box-sizing: border-box;
+                font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+            }
+            #tm-kar-sheet-overlay * {
+                box-sizing: border-box;
+            }
+            .tm-so-shell {
+                width: 100%;
+                max-width: 1060px;
+                background: #ffffff;
+                border: 2px solid #d9b86c;
+                border-radius: 8px;
+                box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+                overflow: hidden;
+                display: flex;
+                flex-direction: column;
+                max-height: 96vh;
+            }
+            .tm-so-topbar {
+                background: #fdf6e2;
+                border-bottom: 1.5px solid #e5d5a7;
+                padding: 10px 16px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 10px;
+                flex-wrap: wrap;
+            }
+            .tm-so-topbar-left {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                flex-wrap: wrap;
+            }
+            .tm-so-topbar h3 {
+                margin: 0;
+                font-size: 15.5px;
                 font-weight: 800;
                 color: #1f2937;
             }
-            #tm-kariger-fields .tm-sheet-pill {
-                background: #fdf6e2;
+            .tm-so-pill {
+                background: #ffffff;
                 border: 1px solid #d9b86c;
                 color: #92400e;
-                padding: 2px 8px;
+                padding: 2px 9px;
                 border-radius: 999px;
-                font-size: 10.5px;
+                font-size: 11px;
                 font-weight: 800;
             }
-            #tm-kariger-fields .tm-sub-head {
+            .tm-so-grid {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) 290px;
+                flex: 1;
+                min-height: 0;
+            }
+            .tm-so-left {
+                padding: 12px 16px;
+                background: #ffffff;
+                border-right: 1.5px solid #e5d5a7;
+                overflow-y: auto;
+            }
+            .tm-so-right {
+                padding: 12px;
+                background: #fdfcf7;
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                overflow-y: auto;
+            }
+            .tm-so-sec-lbl {
                 font-size: 10.5px;
                 font-weight: 800;
                 text-transform: uppercase;
-                letter-spacing: 0.4px;
+                letter-spacing: 0.45px;
                 color: #92400e;
                 margin: 9px 0 5px 0;
                 padding-top: 6px;
                 border-top: 1px dashed #e5d5a7;
             }
-            #tm-kariger-fields .tm-kar-grid-4 {
+            .tm-so-sec-lbl.first {
+                margin-top: 0;
+                padding-top: 0;
+                border-top: none;
+            }
+            .tm-so-row-4 {
                 display: grid;
                 grid-template-columns: repeat(4, minmax(0, 1fr));
-                gap: 7px;
+                gap: 8px;
                 margin-bottom: 6px;
             }
-            #tm-kariger-fields .tm-kar-grid-2 {
+            .tm-so-row-2 {
                 display: grid;
                 grid-template-columns: repeat(2, minmax(0, 1fr));
                 gap: 8px;
                 margin-bottom: 6px;
             }
-            #tm-kariger-fields .tm-kar-colors-grid {
-                display: grid;
-                grid-template-columns: repeat(4, minmax(0, 1fr));
-                gap: 6px;
+            .tm-so-sancha-box {
+                background: #fdfcf7;
+                border: 1px solid #e5d5a7;
+                border-radius: 6px;
+                padding: 7px 9px;
+                margin-bottom: 6px;
             }
-            #tm-kariger-fields .tm-fbox {
+            .tm-so-f {
                 display: flex;
                 flex-direction: column;
                 gap: 2px;
                 min-width: 0;
-                position: relative;
             }
-            #tm-kariger-fields .tm-fbox label {
-                font-size: 10.5px;
+            .tm-so-f label {
+                font-size: 11px;
                 font-weight: 700;
                 color: #374151;
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
             }
-            #tm-kariger-fields .tm-fbox input,
-            #tm-kariger-fields .tm-kar-colors-grid input {
+            .tm-so-f input,
+            .tm-so-colors input {
                 width: 100%;
                 min-width: 0;
-                box-sizing: border-box;
                 padding: 6px 8px;
                 border: 1px solid #d1d5db;
                 border-radius: 4px;
-                font-size: 12px;
+                font-size: 12.5px;
                 font-weight: 700;
                 color: #111827;
                 background: #ffffff;
                 outline: none;
             }
-            #tm-kariger-fields .tm-fbox input:focus,
-            #tm-kariger-fields .tm-kar-colors-grid input:focus {
+            .tm-so-f input:focus,
+            .tm-so-colors input:focus {
                 border-color: #d9a425;
                 background: #fffdf5;
-                box-shadow: 0 0 0 2px rgba(242, 183, 29, 0.2);
+                box-shadow: 0 0 0 2px rgba(242, 183, 29, 0.22);
             }
-            #tm-kariger-fields .tm-live-badge {
-                font-size: 10px;
+            .tm-so-f input.tm-side-linked {
+                border-color: #d9b86c;
+                background: #fffefb;
+            }
+            .tm-so-badge {
+                font-size: 10.5px;
                 font-weight: 700;
                 color: #b47d00;
-                margin-top: 1px;
             }
-            #tm-kariger-fields .tm-sancha-box {
-                background: #ffffff;
-                border: 1px solid #e5d5a7;
-                border-radius: 6px;
-                padding: 7px 8px;
-                margin-bottom: 6px;
+            .tm-so-colors {
+                display: grid;
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+                gap: 6px;
             }
-            #tally-master-section .tm-suggest-pop {
-                position: absolute;
-                left: 0;
-                right: 0;
-                top: 100%;
-                z-index: 9999;
+
+            /* Right Side List Box (Exact Tally List of Groups style) */
+            .tm-side-box {
                 background: #ffffff;
                 border: 1.5px solid #d9b86c;
-                border-radius: 5px;
-                box-shadow: 0 8px 20px rgba(0,0,0,0.14);
-                max-height: 160px;
-                overflow-y: auto;
-                display: none;
+                border-radius: 6px;
+                overflow: hidden;
+                display: flex;
+                flex-direction: column;
             }
-            #tally-master-section .tm-suggest-opt {
-                padding: 6px 8px;
-                font-size: 11.5px;
+            .tm-side-head {
+                background: #fdf6e2;
+                color: #1f2937;
+                border-bottom: 1.5px solid #e5d5a7;
+                padding: 8px 11px;
+                font-size: 12.5px;
+                font-weight: 800;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .tm-side-head small {
+                font-size: 10.5px;
+                color: #92400e;
+                font-weight: 700;
+            }
+            .tm-side-list {
+                max-height: 340px;
+                overflow-y: auto;
+            }
+            .tm-side-opt {
+                padding: 8px 11px;
+                font-size: 12.5px;
                 font-weight: 700;
                 color: #1f2937;
+                border-bottom: 1px solid #f3f4f6;
                 cursor: pointer;
                 display: flex;
                 justify-content: space-between;
-                gap: 6px;
-                border-bottom: 1px solid #f3f4f6;
+                align-items: center;
+                gap: 8px;
             }
-            #tally-master-section .tm-suggest-opt:hover,
-            #tally-master-section .tm-suggest-opt.active {
+            .tm-side-opt:hover {
+                background: #fef9ea;
+            }
+            .tm-side-opt.selected {
                 background: #f2b71d;
                 color: #1f2937;
             }
-            @media (max-width: 720px) {
-                #tm-kariger-fields .tm-kar-grid-4,
-                #tm-kariger-fields .tm-kar-colors-grid {
+            .tm-side-opt small {
+                font-size: 11px;
+                font-weight: 800;
+                color: #92400e;
+                white-space: nowrap;
+            }
+            .tm-side-opt.selected small {
+                color: #1f2937;
+            }
+            .tm-so-footer {
+                background: #fdf6e2;
+                border-top: 1px solid #e5d5a7;
+                padding: 8px 16px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 10px;
+                flex-wrap: wrap;
+                font-size: 11.5px;
+                color: #92400e;
+                font-weight: 700;
+            }
+            @media (max-width: 860px) {
+                .tm-so-grid {
+                    grid-template-columns: 1fr;
+                }
+                .tm-so-left {
+                    border-right: none;
+                    border-bottom: 1.5px solid #e5d5a7;
+                }
+                .tm-so-row-4,
+                .tm-so-colors {
                     grid-template-columns: repeat(2, minmax(0, 1fr));
                 }
-                #tm-kariger-fields .tm-kar-grid-2 {
+                .tm-so-row-2 {
                     grid-template-columns: 1fr;
                 }
             }
@@ -763,8 +897,8 @@
 
         document.addEventListener('wheel', (e) => {
             const target = e.target;
-            if (target && target.tagName === 'INPUT' && target.type === 'number') {
-                if (target.closest('#tally-master-section')) {
+            if (target && target.tagName === 'INPUT' && target.closest('#tally-master-section, #tm-kar-sheet-overlay')) {
+                if (target.type === 'number' || target.inputMode === 'decimal') {
                     e.preventDefault();
                 }
             }
@@ -774,18 +908,56 @@
             if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
             const target = e.target;
             if (target && target.tagName === 'INPUT' && target.type === 'number') {
-                if (target.closest('#tally-master-section')) {
+                if (target.closest('#tally-master-section, #tm-kar-sheet-overlay')) {
                     e.preventDefault();
                 }
             }
         }, true);
     };
 
-    const tmGetStockOptions = (fieldId) => {
-        const kGodown = document.getElementById('tm-karkhana')?.value || 'k_main';
-        const seen = new Set();
+    const tmGetKarkhanasList = () => {
+        let list = (typeof window.getKarkhanasSafe === 'function')
+            ? window.getKarkhanasSafe()
+            : ((typeof window.getStore === 'function') ? window.getStore('karkhana_list') : []);
+        if (!Array.isArray(list) || !list.length) {
+            list = [{ id: 'k_main', name: 'Main Godown', isDefault: true }];
+        }
+        return list;
+    };
+
+    const tmGetSelectedKarkhanaId = () => {
+        return document.getElementById('tm-karkhana-id')?.value || 'k_main';
+    };
+
+    const tmSetSelectedKarkhana = (kId, kName = null) => {
+        const list = tmGetKarkhanasList();
+        const found = list.find((k) => String(k.id) === String(kId)) || list[0];
+        const finalId = found ? found.id : 'k_main';
+        const finalName = kName || (found ? found.name : 'Main Godown');
+
+        const hidEl = document.getElementById('tm-karkhana-id');
+        const dispEl = document.getElementById('tm-s-karkhana');
+        if (hidEl) hidEl.value = finalId;
+        if (dispEl) dispEl.value = finalName;
+        tmUpdateLiveStockBadges();
+    };
+
+    const tmGetSideOptionsForField = (fieldId, filterText = '') => {
+        const kGodown = tmGetSelectedKarkhanaId();
+        const q = String(filterText || '').trim().toLowerCase();
         const items = [];
 
+        if (fieldId === 'tm-s-karkhana') {
+            tmGetKarkhanasList().forEach((k) => {
+                const nm = String(k.name || '').trim();
+                if (!q || nm.toLowerCase().includes(q)) {
+                    items.push({ value: nm, id: k.id, meta: k.isDefault || k.id === 'k_main' ? 'Default' : 'Unit' });
+                }
+            });
+            return items;
+        }
+
+        const seen = new Set();
         if (fieldId === 'tm-bana-item') {
             const raw = (typeof window.getStore === 'function') ? window.getStore('bana_stock') : [];
             (Array.isArray(raw) ? raw : []).forEach((b) => {
@@ -795,7 +967,9 @@
                     const bacha = (typeof window.getBanaItemStats === 'function')
                         ? tmNumOrFallback(window.getBanaItemStats(nm, kGodown).bacha, 0)
                         : tmNumOrFallback(b.bacha, 0);
-                    items.push({ name: nm, meta: `${bacha.toFixed(2)} Kg` });
+                    if (!q || nm.toLowerCase().includes(q)) {
+                        items.push({ value: nm, meta: `${bacha.toFixed(2)} Kg` });
+                    }
                 }
             });
         } else if (fieldId === 'tm-zari-item') {
@@ -807,7 +981,9 @@
                     const bacha = (typeof window.getZariItemStats === 'function')
                         ? tmNumOrFallback(window.getZariItemStats(nm, kGodown).bacha, 0)
                         : tmNumOrFallback(z.bacha, 0);
-                    items.push({ name: nm, meta: `${bacha.toFixed(2)} Kg` });
+                    if (!q || nm.toLowerCase().includes(q)) {
+                        items.push({ value: nm, meta: `${bacha.toFixed(2)} Kg` });
+                    }
                 }
             });
         } else if (fieldId === 'tm-tani-item' || fieldId === 'tm-chukka-item') {
@@ -820,15 +996,109 @@
                     if (nm && !seen.has(nm.toLowerCase())) {
                         seen.add(nm.toLowerCase());
                         const bacha = tmNumOrFallback(s.bacha !== undefined ? s.bacha : s.aaya, 0);
-                        items.push({ name: nm, meta: `${bacha.toFixed(2)} Kg` });
+                        if (!q || nm.toLowerCase().includes(q)) {
+                            items.push({ value: nm, meta: `${bacha.toFixed(2)} Kg` });
+                        }
                     }
                 });
         }
+
         return items;
     };
 
+    const tmRenderSideList = (fieldId = null, autoHighlight = false) => {
+        const titleEl = document.getElementById('tm-side-list-title');
+        const subEl = document.getElementById('tm-side-list-sub');
+        const listEl = document.getElementById('tm-side-list-body');
+        if (!titleEl || !listEl) return;
+
+        tmActiveSideField = fieldId;
+
+        const titleMap = {
+            'tm-s-karkhana': 'List of Karkhanas',
+            'tm-bana-item': 'List of Bana Items',
+            'tm-zari-item': 'List of Zari Items',
+            'tm-tani-item': 'List of Tani Items',
+            'tm-chukka-item': 'List of Chukka Items'
+        };
+
+        if (!fieldId || !titleMap[fieldId]) {
+            tmSideItems = [];
+            tmSideActiveIdx = -1;
+            titleEl.textContent = 'Sheet Help & Controls';
+            if (subEl) subEl.textContent = 'Tally Mode';
+            listEl.innerHTML = `
+                <div style="padding:11px; font-size:12px; color:#4b5563; line-height:1.6;">
+                    <div><strong>• Enter / ↓ :</strong> Agle box par jayein</div>
+                    <div><strong>• ↑ / Shift+Enter :</strong> Pichhle box par</div>
+                    <div><strong>• Item Boxes :</strong> Jab Bana, Zari, Tani ya Chukka box par jayenge toh yahan side mein unki poori list khud aa jayegi</div>
+                    <div><strong>• Ctrl + Enter :</strong> Seedha Sheet Confirm karein</div>
+                    <div><strong>• Esc :</strong> Wapas pichhli screen par</div>
+                </div>
+            `;
+            return;
+        }
+
+        const inp = document.getElementById(fieldId);
+        const query = (fieldId === 'tm-s-karkhana') ? '' : (inp ? inp.value : '');
+        tmSideItems = tmGetSideOptionsForField(fieldId, query);
+
+        titleEl.textContent = titleMap[fieldId];
+        if (subEl) subEl.textContent = `${tmSideItems.length} Available`;
+
+        if (!tmSideItems.length) {
+            tmSideActiveIdx = -1;
+            listEl.innerHTML = `<div style="padding:16px 11px; text-align:center; color:#9ca3af; font-size:12px;">Koi item nahi mila.<br><small>Naya naam manual type karke Enter dabaye.</small></div>`;
+            return;
+        }
+
+        if (fieldId === 'tm-s-karkhana') {
+            const curKid = tmGetSelectedKarkhanaId();
+            const foundIdx = tmSideItems.findIndex((it) => String(it.id) === String(curKid));
+            tmSideActiveIdx = foundIdx >= 0 ? foundIdx : 0;
+        } else if (autoHighlight && query.trim()) {
+            tmSideActiveIdx = 0;
+        } else {
+            tmSideActiveIdx = -1;
+        }
+
+        listEl.innerHTML = tmSideItems.map((it, idx) => `
+            <div class="tm-side-opt${idx === tmSideActiveIdx ? ' selected' : ''}" data-sidx="${idx}" onmousedown="event.preventDefault(); tmPickSideItem(${idx});">
+                <span>${tmEscHtml(it.value)}</span>
+                <small>${tmEscHtml(it.meta)}</small>
+            </div>
+        `).join('');
+    };
+
+    window.tmPickSideItem = function (idx) {
+        if (!tmActiveSideField || !tmSideItems[idx]) return;
+        const chosen = tmSideItems[idx];
+        const inp = document.getElementById(tmActiveSideField);
+        if (inp) inp.value = chosen.value;
+
+        if (tmActiveSideField === 'tm-s-karkhana' && chosen.id) {
+            tmSetSelectedKarkhana(chosen.id, chosen.value);
+        } else {
+            tmUpdateLiveStockBadges();
+        }
+
+        const nextMap = {
+            'tm-s-karkhana': 'tm-s-saree',
+            'tm-bana-item': 'tm-zari-item',
+            'tm-zari-item': 'tm-tani-item',
+            'tm-tani-item': 'tm-tani-sancha',
+            'tm-chukka-item': 'tm-chukka-sancha'
+        };
+        const nxtId = nextMap[tmActiveSideField];
+        tmSideActiveIdx = -1;
+        if (nxtId) {
+            const nxt = document.getElementById(nxtId);
+            if (nxt) { nxt.focus(); if (nxt.select) nxt.select(); }
+        }
+    };
+
     const tmUpdateLiveStockBadges = () => {
-        const kGodown = document.getElementById('tm-karkhana')?.value || 'k_main';
+        const kGodown = tmGetSelectedKarkhanaId();
         const bName = String(document.getElementById('tm-bana-item')?.value || '').trim();
         const zName = String(document.getElementById('tm-zari-item')?.value || '').trim();
         const tName = String(document.getElementById('tm-tani-item')?.value || '').trim().toLowerCase();
@@ -882,104 +1152,17 @@
         setB('tm-live-chukka-badge', `Bacha: ${cItem ? tmNumOrFallback(cItem.bacha !== undefined ? cItem.bacha : cItem.aaya, 0).toFixed(2) : '0.00'} Kg`);
     };
 
-    const tmAttachInlineSuggest = (inputId, nextFocusId) => {
-        const inp = document.getElementById(inputId);
-        if (!inp || inp.dataset.tmSugBound === '1') return;
-        inp.dataset.tmSugBound = '1';
-        inp.setAttribute('autocomplete', 'off');
-
-        const parent = inp.parentElement;
-        if (!parent) return;
-        parent.style.position = 'relative';
-
-        const pop = document.createElement('div');
-        pop.className = 'tm-suggest-pop';
-        parent.appendChild(pop);
-
-        let activeSugIdx = -1;
-
-        const renderPop = (autoSelectFirst = false) => {
-            const q = inp.value.trim().toLowerCase();
-            const opts = tmGetStockOptions(inputId).filter((o) => !q || o.name.toLowerCase().includes(q));
-            if (!opts.length) {
-                pop.style.display = 'none';
-                pop.innerHTML = '';
-                activeSugIdx = -1;
-                return;
-            }
-            if (autoSelectFirst && q) {
-                if (activeSugIdx < 0 || activeSugIdx >= opts.length) activeSugIdx = 0;
-            } else if (!autoSelectFirst) {
-                activeSugIdx = -1;
-            }
-
-            pop.innerHTML = opts.map((o, i) => `
-                <div class="tm-suggest-opt${i === activeSugIdx ? ' active' : ''}" data-val="${tmEscHtml(o.name)}">
-                    <span>${tmEscHtml(o.name)}</span>
-                    <small style="color:#92400e;">${tmEscHtml(o.meta)}</small>
-                </div>
-            `).join('');
-            pop.style.display = 'block';
-
-            pop.querySelectorAll('.tm-suggest-opt').forEach((el) => {
-                el.addEventListener('mousedown', (ev) => {
-                    ev.preventDefault();
-                    inp.value = el.dataset.val || '';
-                    pop.style.display = 'none';
-                    activeSugIdx = -1;
-                    tmUpdateLiveStockBadges();
-                    if (nextFocusId) document.getElementById(nextFocusId)?.focus();
-                });
-            });
-        };
-
-        inp.addEventListener('focus', () => {
-            renderPop(false);
-        });
-
-        inp.addEventListener('input', () => {
-            tmUpdateLiveStockBadges();
-            renderPop(true);
-        });
-
-        inp.addEventListener('blur', () => {
-            setTimeout(() => {
-                pop.style.display = 'none';
-                activeSugIdx = -1;
-            }, 150);
-        });
-
-        inp.addEventListener('keydown', (e) => {
-            if (pop.style.display !== 'block') return;
-            const opts = Array.from(pop.querySelectorAll('.tm-suggest-opt'));
-            if (!opts.length) return;
-
-            if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                e.stopPropagation();
-                activeSugIdx = (activeSugIdx + 1) % opts.length;
-                opts.forEach((o, i) => o.classList.toggle('active', i === activeSugIdx));
-                opts[activeSugIdx]?.scrollIntoView({ block: 'nearest' });
-            } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                e.stopPropagation();
-                activeSugIdx = (activeSugIdx <= 0) ? (opts.length - 1) : (activeSugIdx - 1);
-                opts.forEach((o, i) => o.classList.toggle('active', i === activeSugIdx));
-                opts[activeSugIdx]?.scrollIntoView({ block: 'nearest' });
-            } else if (e.key === 'Enter') {
-                if (activeSugIdx >= 0 && opts[activeSugIdx]) {
-                    inp.value = opts[activeSugIdx].dataset.val || inp.value;
-                    tmUpdateLiveStockBadges();
-                }
-                pop.style.display = 'none';
-                activeSugIdx = -1;
-            } else if (e.key === 'Escape') {
-                e.preventDefault();
-                e.stopPropagation();
-                pop.style.display = 'none';
-                activeSugIdx = -1;
-            }
-        });
+    const tmUpdateSummaryStrip = () => {
+        const kName = document.getElementById('tm-s-karkhana')?.value || 'Main Godown';
+        const rBana = document.getElementById('tm-rate-bana')?.value || '0.311';
+        const rZari = document.getElementById('tm-rate-zari')?.value || '0.110';
+        const rBani = document.getElementById('tm-rate-bani')?.value || '240';
+        const bItem = document.getElementById('tm-bana-item')?.value || '-';
+        const zItem = document.getElementById('tm-zari-item')?.value || '-';
+        const el = document.getElementById('tm-kar-summary-txt');
+        if (el) {
+            el.textContent = `${kName} · Bana: ${rBana} | Zari: ${rZari} | Bani: ₹${rBani} · Items: ${bItem} / ${zItem}`;
+        }
     };
 
     const tmRevertSanchaStock = (itemName, category, wazan, kGodown) => {
@@ -1094,9 +1277,244 @@
         }
     };
 
+    const ensureKarigerSheetOverlayDOM = () => {
+        if (document.getElementById('tm-kar-sheet-overlay')) return;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'tm-kar-sheet-overlay';
+        overlay.innerHTML = `
+            <div class="tm-so-shell" role="dialog" aria-modal="true">
+                <div class="tm-so-topbar">
+                    <div class="tm-so-topbar-left">
+                        <h3 id="tm-so-title">Kariger Master Sheet Setup</h3>
+                        <span class="tm-so-pill" id="tm-so-kar-pill">New Kariger</span>
+                        <span class="tm-so-pill" id="tm-sheet-link-badge">Auto-Save: Tani 1</span>
+                    </div>
+                    <button type="button" class="tm-esc-btn" onclick="tmCloseSheetOverlay(false)">← [Esc] Back</button>
+                </div>
+
+                <div class="tm-so-grid">
+                    <div class="tm-so-left">
+                        <input type="hidden" id="tm-karkhana-id" value="k_main">
+
+                        <div class="tm-so-sec-lbl first">1. Karkhana &amp; Saree Design</div>
+                        <div class="tm-so-row-2">
+                            <div class="tm-so-f">
+                                <label for="tm-s-karkhana">Karkhana (Side List se chunein) :</label>
+                                <input type="text" id="tm-s-karkhana" class="tm-side-linked" readonly placeholder="Main Godown" autocomplete="off">
+                            </div>
+                            <div class="tm-so-f">
+                                <label for="tm-s-saree">Saree Design :</label>
+                                <input type="text" id="tm-s-saree" placeholder="Jaise: Banarasi Katan" autocomplete="off">
+                            </div>
+                        </div>
+
+                        <div class="tm-so-sec-lbl">2. Rates &amp; Opening Balance (Manual Entry)</div>
+                        <div class="tm-so-row-4">
+                            <div class="tm-so-f">
+                                <label for="tm-rate-bana">Bana Rate/Saree</label>
+                                <input type="text" inputmode="decimal" id="tm-rate-bana" value="0.311" autocomplete="off">
+                            </div>
+                            <div class="tm-so-f">
+                                <label for="tm-rate-zari">Zari Rate/Saree</label>
+                                <input type="text" inputmode="decimal" id="tm-rate-zari" value="0.110" autocomplete="off">
+                            </div>
+                            <div class="tm-so-f">
+                                <label for="tm-rate-bani">Bani/Saree (₹)</label>
+                                <input type="text" inputmode="decimal" id="tm-rate-bani" value="240" autocomplete="off">
+                            </div>
+                            <div class="tm-so-f">
+                                <label for="tm-pichla-bana">Pichla Bana (Kg)</label>
+                                <input type="text" inputmode="decimal" id="tm-pichla-bana" value="0" autocomplete="off">
+                            </div>
+                            <div class="tm-so-f">
+                                <label for="tm-pichla-zari">Pichla Zari (Kg)</label>
+                                <input type="text" inputmode="decimal" id="tm-pichla-zari" value="0" autocomplete="off">
+                            </div>
+                            <div class="tm-so-f">
+                                <label for="tm-pichla-bani">Pichla Bani (₹)</label>
+                                <input type="text" inputmode="decimal" id="tm-pichla-bani" value="0" autocomplete="off">
+                            </div>
+                            <div class="tm-so-f">
+                                <label for="tm-waste-bana">Bana Waste (Kg)</label>
+                                <input type="text" inputmode="decimal" id="tm-waste-bana" value="0" autocomplete="off">
+                            </div>
+                            <div class="tm-so-f">
+                                <label for="tm-waste-zari">Zari Waste (Kg)</label>
+                                <input type="text" inputmode="decimal" id="tm-waste-zari" value="0" autocomplete="off">
+                            </div>
+                        </div>
+
+                        <div class="tm-so-sec-lbl">3. Raw Material Items (Right Side List se chunein)</div>
+                        <div class="tm-so-row-2">
+                            <div class="tm-so-f">
+                                <label for="tm-bana-item">1. Bana Item :</label>
+                                <input type="text" id="tm-bana-item" class="tm-side-linked" placeholder="Type karein ya Side List chunein..." autocomplete="off">
+                                <small class="tm-so-badge" id="tm-live-bana-badge">Bacha: 0.00 Kg</small>
+                            </div>
+                            <div class="tm-so-f">
+                                <label for="tm-zari-item">2. Zari Item :</label>
+                                <input type="text" id="tm-zari-item" class="tm-side-linked" placeholder="Type karein ya Side List chunein..." autocomplete="off">
+                                <small class="tm-so-badge" id="tm-live-zari-badge">Bacha: 0.00 Kg</small>
+                            </div>
+                        </div>
+
+                        <div class="tm-so-sec-lbl">4. Sancha Selection (Tani &amp; Chukka)</div>
+                        <div class="tm-so-sancha-box">
+                            <div class="tm-so-row-4" style="margin-bottom:0;">
+                                <div class="tm-so-f">
+                                    <label for="tm-tani-item">3. Tani Item :</label>
+                                    <input type="text" id="tm-tani-item" class="tm-side-linked" placeholder="Side List..." autocomplete="off">
+                                    <small class="tm-so-badge" id="tm-live-tani-badge">Bacha: 0.00 Kg</small>
+                                </div>
+                                <div class="tm-so-f">
+                                    <label for="tm-tani-sancha">Sancha Name :</label>
+                                    <input type="text" id="tm-tani-sancha" placeholder="Azhar / Arman" autocomplete="off">
+                                </div>
+                                <div class="tm-so-f">
+                                    <label for="tm-tani-wazan">Wazan (Kg) :</label>
+                                    <input type="text" inputmode="decimal" id="tm-tani-wazan" placeholder="0.00" autocomplete="off">
+                                </div>
+                                <div class="tm-so-f">
+                                    <label for="tm-tani-pcs">Tani Saree (Pcs) :</label>
+                                    <input type="text" inputmode="decimal" id="tm-tani-pcs" value="72" autocomplete="off">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="tm-so-sancha-box">
+                            <div class="tm-so-row-4" style="margin-bottom:0;">
+                                <div class="tm-so-f">
+                                    <label for="tm-chukka-item">4. Chukka Item :</label>
+                                    <input type="text" id="tm-chukka-item" class="tm-side-linked" placeholder="Side List..." autocomplete="off">
+                                    <small class="tm-so-badge" id="tm-live-chukka-badge">Bacha: 0.00 Kg</small>
+                                </div>
+                                <div class="tm-so-f">
+                                    <label for="tm-chukka-sancha">Sancha Name :</label>
+                                    <input type="text" id="tm-chukka-sancha" placeholder="Sancha Naam..." autocomplete="off">
+                                </div>
+                                <div class="tm-so-f">
+                                    <label for="tm-chukka-wazan">Wazan (Kg) :</label>
+                                    <input type="text" inputmode="decimal" id="tm-chukka-wazan" placeholder="0.00" autocomplete="off">
+                                </div>
+                                <div class="tm-so-f">
+                                    <label for="tm-chukka-pcs">Chukka Saree (Pcs) :</label>
+                                    <input type="text" inputmode="decimal" id="tm-chukka-pcs" value="72" autocomplete="off">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="tm-so-sec-lbl">5. Tani Ke 8 Colors (Optional Matching)</div>
+                        <div class="tm-so-colors">
+                            <input type="text" id="tm-color-1" placeholder="1. Rani" autocomplete="off">
+                            <input type="text" id="tm-color-2" placeholder="2. Lal" autocomplete="off">
+                            <input type="text" id="tm-color-3" placeholder="3. Mehendi" autocomplete="off">
+                            <input type="text" id="tm-color-4" placeholder="4. Blue" autocomplete="off">
+                            <input type="text" id="tm-color-5" placeholder="5. Peela" autocomplete="off">
+                            <input type="text" id="tm-color-6" placeholder="6. Wine" autocomplete="off">
+                            <input type="text" id="tm-color-7" placeholder="7. Firozi" autocomplete="off">
+                            <input type="text" id="tm-color-8" placeholder="8. Mungia" autocomplete="off">
+                        </div>
+
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding-top:10px; border-top:1.5px solid #efe4c4; gap:8px;">
+                            <button type="button" class="tm-esc-btn" onclick="tmCloseSheetOverlay(false)">← Back [Esc]</button>
+                            <button type="button" class="tm-btn-yes" onclick="tmConfirmSheetOverlay()">Done &amp; Continue [Ctrl+Enter]</button>
+                        </div>
+                    </div>
+
+                    <div class="tm-so-right">
+                        <div class="tm-side-box">
+                            <div class="tm-side-head">
+                                <span id="tm-side-list-title">List of Items</span>
+                                <small id="tm-side-list-sub">Select</small>
+                            </div>
+                            <div class="tm-side-list" id="tm-side-list-body"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tm-so-footer">
+                    <span>[Enter / ↓] Agla Box · [↑ ↓] Side List Chunein · [Ctrl+Enter] Sheet Confirm &amp; Aage Badhein</span>
+                    <span>TallyPrime Kariger Master Sheet</span>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        const sideFieldIds = ['tm-s-karkhana', 'tm-bana-item', 'tm-zari-item', 'tm-tani-item', 'tm-chukka-item'];
+        sideFieldIds.forEach((fid) => {
+            const el = document.getElementById(fid);
+            if (!el) return;
+            el.addEventListener('focus', () => tmRenderSideList(fid, false));
+            el.addEventListener('click', () => tmRenderSideList(fid, false));
+            el.addEventListener('input', () => {
+                tmUpdateLiveStockBadges();
+                tmRenderSideList(fid, true);
+            });
+        });
+
+        const allOverlayInputs = overlay.querySelectorAll('input');
+        allOverlayInputs.forEach((el) => {
+            if (!sideFieldIds.includes(el.id)) {
+                el.addEventListener('focus', () => tmRenderSideList(null, false));
+            }
+        });
+    };
+
+    window.tmOpenSheetOverlay = function (focusFirst = true) {
+        ensureTallyMasterStyles();
+        ensureKarigerSheetOverlayDOM();
+        tmSheetModalOpen = true;
+
+        const nameVal = (document.getElementById('tm-name')?.value || '').trim().toUpperCase() || 'NEW KARIGER';
+        const pill = document.getElementById('tm-so-kar-pill');
+        if (pill) pill.textContent = nameVal;
+
+        const deskSec = document.getElementById('tally-master-section');
+        if (deskSec) deskSec.style.visibility = 'hidden';
+
+        const overlay = document.getElementById('tm-kar-sheet-overlay');
+        if (overlay) overlay.style.display = 'flex';
+
+        tmUpdateLiveStockBadges();
+        tmRenderSideList('tm-s-karkhana', false);
+
+        if (focusFirst) {
+            setTimeout(() => {
+                const first = document.getElementById('tm-s-karkhana');
+                if (first) first.focus();
+            }, 30);
+        }
+    };
+
+    window.tmCloseSheetOverlay = function (advanceToContact = false) {
+        tmSheetModalOpen = false;
+        const overlay = document.getElementById('tm-kar-sheet-overlay');
+        if (overlay) overlay.style.display = 'none';
+
+        const deskSec = document.getElementById('tally-master-section');
+        if (deskSec) deskSec.style.visibility = 'visible';
+
+        tmUpdateSummaryStrip();
+
+        if (advanceToContact) {
+            tmSetToast('✅ Kariger Master Sheet set! Mobile/Address bharein ya [Ctrl+Enter] se Save karein.');
+            setTimeout(() => document.getElementById('tm-mobile')?.focus(), 30);
+        } else {
+            const target = (tmMode === 'alter-edit') ? 'tm-name' : 'tm-group';
+            setTimeout(() => document.getElementById(target)?.focus(), 30);
+        }
+    };
+
+    window.tmConfirmSheetOverlay = function () {
+        window.tmCloseSheetOverlay(true);
+    };
+
     const ensureTallyMasterDOM = () => {
         ensureTallyMasterStyles();
         bindTallyManualNumberGuard();
+        ensureKarigerSheetOverlayDOM();
+
         const sec = document.getElementById('tally-master-section');
         if (!sec || sec.dataset.tmInitialized === '1') return;
 
@@ -1139,131 +1557,18 @@
 
                         <div class="tm-row">
                             <label for="tm-group">Under (Group) :</label>
-                            <input type="text" id="tm-group" placeholder="Type karein ya right list chunein..." autocomplete="off">
+                            <input type="text" id="tm-group" placeholder="Kariger / Cutting / Embroidery / Calender..." autocomplete="off">
                         </div>
 
-                        <div id="tm-kariger-fields" class="tm-divider">
-                            <div class="tm-sec-lbl">Kariger Master Details (Auto-Save: Kariger List + Tani Sheet)</div>
-                            <div class="tm-row">
-                                <label for="tm-karkhana">Karkhana :</label>
-                                <select id="tm-karkhana"></select>
-                            </div>
-                            <div class="tm-row">
-                                <label for="tm-saree">Saree Design :</label>
-                                <input type="text" id="tm-saree" placeholder="Jaise: Banarasi Katan">
-                            </div>
-
-                            <div class="tm-kar-sheet-card">
-                                <div class="tm-kar-sheet-head">
-                                    <strong>Kariger Master Sheet Setup</strong>
-                                    <span class="tm-sheet-pill" id="tm-sheet-link-badge">Auto-Save: Tani 1</span>
+                        <!-- HIDDEN UNTIL KARIGER GROUP IS SELECTED -->
+                        <div id="tm-kariger-fields" class="tm-divider" style="display:none;">
+                            <div class="tm-sec-lbl">Kariger Master Sheet (Auto-Linked)</div>
+                            <div class="tm-kar-summary-card">
+                                <div>
+                                    <strong style="font-size:12.5px; color:#1f2937;">Tani 1 Master Sheet Details</strong>
+                                    <small id="tm-kar-summary-txt">Main Godown · Bana: 0.311 | Zari: 0.110 | Bani: ₹240</small>
                                 </div>
-
-                                <div class="tm-kar-grid-4">
-                                    <div class="tm-fbox">
-                                        <label for="tm-rate-bana">Bana Rate/Saree</label>
-                                        <input type="number" step="0.001" id="tm-rate-bana" value="0.311">
-                                    </div>
-                                    <div class="tm-fbox">
-                                        <label for="tm-rate-zari">Zari Rate/Saree</label>
-                                        <input type="number" step="0.001" id="tm-rate-zari" value="0.110">
-                                    </div>
-                                    <div class="tm-fbox">
-                                        <label for="tm-rate-bani">Bani/Saree (₹)</label>
-                                        <input type="number" id="tm-rate-bani" value="240">
-                                    </div>
-                                    <div class="tm-fbox">
-                                        <label for="tm-pichla-bana">Pichla Bana (Kg)</label>
-                                        <input type="number" step="0.01" id="tm-pichla-bana" value="0">
-                                    </div>
-                                    <div class="tm-fbox">
-                                        <label for="tm-pichla-zari">Pichla Zari (Kg)</label>
-                                        <input type="number" step="0.01" id="tm-pichla-zari" value="0">
-                                    </div>
-                                    <div class="tm-fbox">
-                                        <label for="tm-pichla-bani">Pichla Bani (₹)</label>
-                                        <input type="number" id="tm-pichla-bani" value="0">
-                                    </div>
-                                    <div class="tm-fbox">
-                                        <label for="tm-waste-bana">Bana Waste (Kg)</label>
-                                        <input type="number" step="0.01" id="tm-waste-bana" value="0">
-                                    </div>
-                                    <div class="tm-fbox">
-                                        <label for="tm-waste-zari">Zari Waste (Kg)</label>
-                                        <input type="number" step="0.01" id="tm-waste-zari" value="0">
-                                    </div>
-                                </div>
-
-                                <div class="tm-sub-head">Item Selection (Bana &amp; Zari)</div>
-                                <div class="tm-kar-grid-2">
-                                    <div class="tm-fbox">
-                                        <label for="tm-bana-item">1. Bana Item :</label>
-                                        <input type="text" id="tm-bana-item" placeholder="Bana Item chunein...">
-                                        <small class="tm-live-badge" id="tm-live-bana-badge">Bacha: 0.00 Kg</small>
-                                    </div>
-                                    <div class="tm-fbox">
-                                        <label for="tm-zari-item">2. Zari Item :</label>
-                                        <input type="text" id="tm-zari-item" placeholder="Zari Item chunein...">
-                                        <small class="tm-live-badge" id="tm-live-zari-badge">Bacha: 0.00 Kg</small>
-                                    </div>
-                                </div>
-
-                                <div class="tm-sub-head">Sancha Selection (Tani &amp; Chukka)</div>
-                                <div class="tm-sancha-box">
-                                    <div class="tm-kar-grid-4" style="margin-bottom:0;">
-                                        <div class="tm-fbox">
-                                            <label for="tm-tani-item">3. Tani Item :</label>
-                                            <input type="text" id="tm-tani-item" placeholder="Tani Item...">
-                                            <small class="tm-live-badge" id="tm-live-tani-badge">Bacha: 0.00 Kg</small>
-                                        </div>
-                                        <div class="tm-fbox">
-                                            <label for="tm-tani-sancha">Sancha Name :</label>
-                                            <input type="text" id="tm-tani-sancha" placeholder="Azhar / Arman">
-                                        </div>
-                                        <div class="tm-fbox">
-                                            <label for="tm-tani-wazan">Wazan (Kg) :</label>
-                                            <input type="number" step="0.01" id="tm-tani-wazan" placeholder="0.00">
-                                        </div>
-                                        <div class="tm-fbox">
-                                            <label for="tm-tani-pcs">Tani Saree (Pcs) :</label>
-                                            <input type="number" id="tm-tani-pcs" value="72">
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div class="tm-sancha-box">
-                                    <div class="tm-kar-grid-4" style="margin-bottom:0;">
-                                        <div class="tm-fbox">
-                                            <label for="tm-chukka-item">4. Chukka Item :</label>
-                                            <input type="text" id="tm-chukka-item" placeholder="Chukka Item...">
-                                            <small class="tm-live-badge" id="tm-live-chukka-badge">Bacha: 0.00 Kg</small>
-                                        </div>
-                                        <div class="tm-fbox">
-                                            <label for="tm-chukka-sancha">Sancha Name :</label>
-                                            <input type="text" id="tm-chukka-sancha" placeholder="Sancha Naam...">
-                                        </div>
-                                        <div class="tm-fbox">
-                                            <label for="tm-chukka-wazan">Wazan (Kg) :</label>
-                                            <input type="number" step="0.01" id="tm-chukka-wazan" placeholder="0.00">
-                                        </div>
-                                        <div class="tm-fbox">
-                                            <label for="tm-chukka-pcs">Chukka Saree (Pcs) :</label>
-                                            <input type="number" id="tm-chukka-pcs" value="72">
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div class="tm-sub-head">Tani Ke 8 Colors (Optional Matching)</div>
-                                <div class="tm-kar-colors-grid">
-                                    <input type="text" id="tm-color-1" placeholder="1. Rani">
-                                    <input type="text" id="tm-color-2" placeholder="2. Lal">
-                                    <input type="text" id="tm-color-3" placeholder="3. Mehendi">
-                                    <input type="text" id="tm-color-4" placeholder="4. Blue">
-                                    <input type="text" id="tm-color-5" placeholder="5. Peela">
-                                    <input type="text" id="tm-color-6" placeholder="6. Wine">
-                                    <input type="text" id="tm-color-7" placeholder="7. Firozi">
-                                    <input type="text" id="tm-color-8" placeholder="8. Mungia">
-                                </div>
+                                <button type="button" class="tm-btn-yes" style="padding:5px 11px; font-size:11.5px;" onclick="tmOpenSheetOverlay(true)">Open Sheet Form [F9]</button>
                             </div>
                         </div>
 
@@ -1330,7 +1635,7 @@
             </div>
 
             <div class="tm-status-strip">
-                <span class="tm-toast" id="tm-toast-msg">Tally Master Ready — Enter se aage badhein, Ctrl+Enter se turant Accept, Esc se wapas.</span>
+                <span class="tm-toast" id="tm-toast-msg">Tally Master Ready — Enter se Group chunein, Kariger par Sheet khud khulegi.</span>
                 <span id="tm-live-counts">Kariger: 0 · Cutting: 0 · Embroidery: 0 · Calender: 0</span>
             </div>
         `;
@@ -1356,16 +1661,6 @@
             });
         }
 
-        const kSel = document.getElementById('tm-karkhana');
-        if (kSel) {
-            kSel.addEventListener('change', () => tmUpdateLiveStockBadges());
-        }
-
-        tmAttachInlineSuggest('tm-bana-item', 'tm-zari-item');
-        tmAttachInlineSuggest('tm-zari-item', 'tm-tani-item');
-        tmAttachInlineSuggest('tm-tani-item', 'tm-tani-sancha');
-        tmAttachInlineSuggest('tm-chukka-item', 'tm-chukka-sancha');
-
         const alterSearch = document.getElementById('tm-alter-search');
         if (alterSearch) {
             alterSearch.addEventListener('input', () => {
@@ -1375,34 +1670,16 @@
         }
     };
 
-    const tmPopulateKarkhanaDropdown = (selectedId) => {
-        const sel = document.getElementById('tm-karkhana');
-        if (!sel) return;
-        sel.innerHTML = '';
-        let list = (typeof window.getKarkhanasSafe === 'function')
-            ? window.getKarkhanasSafe()
-            : ((typeof window.getStore === 'function') ? window.getStore('karkhana_list') : []);
-        if (!Array.isArray(list) || !list.length) {
-            list = [{ id: 'k_main', name: 'Main Godown', isDefault: true }];
-        }
-        list.forEach((k) => {
-            const opt = document.createElement('option');
-            opt.value = k.id;
-            opt.textContent = (k.id === 'k_main' || k.isDefault ? '🏢 ' : '🏭 ') + k.name;
-            if (selectedId && String(k.id) === String(selectedId)) opt.selected = true;
-            sel.appendChild(opt);
-        });
-        if (!selectedId && sel.options.length > 0) {
-            const navKid = document.getElementById('app-karkhana-select')?.value;
-            if (navKid && navKid !== 'all') sel.value = navKid;
-        }
-    };
-
     const tmResetKarigerSheetInputs = () => {
         const setV = (id, v) => {
             const el = document.getElementById(id);
             if (el) el.value = v;
         };
+        const navKid = document.getElementById('app-karkhana-select')?.value;
+        const defaultKid = (navKid && navKid !== 'all') ? navKid : 'k_main';
+        tmSetSelectedKarkhana(defaultKid);
+
+        setV('tm-s-saree', '');
         setV('tm-rate-bana', '0.311');
         setV('tm-rate-zari', '0.110');
         setV('tm-rate-bani', '240');
@@ -1425,13 +1702,23 @@
         const pill = document.getElementById('tm-sheet-link-badge');
         if (pill) pill.textContent = 'Auto-Save: Tani 1';
         tmUpdateLiveStockBadges();
+        tmUpdateSummaryStrip();
     };
 
-    const tmLoadKarigerSheetInputs = (karId) => {
+    const tmLoadKarigerSheetInputs = (karId, karProfile = null) => {
         tmResetKarigerSheetInputs();
+        if (karProfile) {
+            tmSetSelectedKarkhana(karProfile.karkhanaId || 'k_main', karProfile.karkhanaName || null);
+            const sEl = document.getElementById('tm-s-saree');
+            if (sEl) sEl.value = karProfile.saree || '';
+        }
+
         const sheets = tmGetSheetsSafe(karId);
         const sh = sheets.length ? sheets[sheets.length - 1] : null;
-        if (!sh) return;
+        if (!sh) {
+            tmUpdateSummaryStrip();
+            return;
+        }
 
         const setV = (id, v) => {
             const el = document.getElementById(id);
@@ -1464,6 +1751,7 @@
         const pill = document.getElementById('tm-sheet-link-badge');
         if (pill) pill.textContent = `Linked Sheet: ${sh.title || 'Tani 1'}`;
         tmUpdateLiveStockBadges();
+        tmUpdateSummaryStrip();
     };
 
     const tmUpdateCountsBar = () => {
@@ -1481,7 +1769,7 @@
         if (el) el.textContent = msg;
     };
 
-    window.tmPickGroup = function (grp, moveFocus) {
+    window.tmPickGroup = function (grp, openSheetOrFocus) {
         tmSelectedGroup = grp || 'kariger';
         const labelMap = { kariger: 'Kariger', cutting: 'Cutting', embroidery: 'Embroidery', calender: 'Calender' };
         const grpInput = document.getElementById('tm-group');
@@ -1495,25 +1783,32 @@
         const isKar = (tmSelectedGroup === 'kariger');
         const karBox = document.getElementById('tm-kariger-fields');
         const jwBox = document.getElementById('tm-jobwork-fields');
-        if (karBox) karBox.style.display = isKar ? 'block' : 'none';
-        if (jwBox) jwBox.style.display = isKar ? 'none' : 'block';
+
         if (!isKar) {
+            if (karBox) karBox.style.display = 'none';
+            if (jwBox) jwBox.style.display = 'block';
             const lbl = labelMap[tmSelectedGroup] || 'Cutting';
             const sLbl = document.getElementById('tm-jw-sec-lbl');
             const tTxt = document.getElementById('tm-jw-target-txt');
             if (sLbl) sLbl.textContent = `JobWork Details (Auto-Save: ${lbl})`;
             if (tTxt) tTxt.textContent = `JobWork → ${lbl}`;
+            if (openSheetOrFocus) {
+                document.getElementById('tm-mobile')?.focus();
+            }
         } else {
-            tmUpdateLiveStockBadges();
-        }
-
-        if (moveFocus) {
-            document.getElementById(isKar ? 'tm-karkhana' : 'tm-mobile')?.focus();
+            if (jwBox) jwBox.style.display = 'none';
+            if (karBox) karBox.style.display = 'block';
+            tmUpdateSummaryStrip();
+            if (openSheetOrFocus) {
+                window.tmOpenSheetOverlay(true);
+            }
         }
     };
 
     window.openTallyCreateModule = function () {
         ensureTallyMasterDOM();
+        if (tmSheetModalOpen) window.tmCloseSheetOverlay(false);
+
         document.querySelectorAll('.module-section').forEach((s) => s.style.display = 'none');
         const dView = document.getElementById('dashboard-view');
         if (dView) dView.style.display = 'none';
@@ -1521,6 +1816,7 @@
         if (sec) sec.style.display = 'block';
 
         tmMode = 'create';
+        tmSelectedGroup = 'kariger';
         document.getElementById('tm-screen-title').textContent = 'Profile Creation (Tally Style)';
         document.getElementById('tm-tab-create').classList.add('active');
         document.getElementById('tm-tab-alter').classList.remove('active');
@@ -1531,27 +1827,37 @@
         document.getElementById('tm-alter-info-box').style.display = 'none';
         document.getElementById('tm-accept-box').style.display = 'none';
 
+        // Shuru me Kariger Master Sheet form HIDE rahega (sirf Group select karne par khulega)
+        document.getElementById('tm-kariger-fields').style.display = 'none';
+        document.getElementById('tm-jobwork-fields').style.display = 'none';
+
         const grpInp = document.getElementById('tm-group');
-        if (grpInp) grpInp.readOnly = false;
+        if (grpInp) {
+            grpInp.readOnly = false;
+            grpInp.value = '';
+        }
+        document.querySelectorAll('#tm-group-list .tm-group-opt').forEach((el) => {
+            el.classList.toggle('selected', el.dataset.grp === 'kariger');
+            el.style.display = 'flex';
+        });
 
         document.getElementById('tm-edit-id').value = '';
         document.getElementById('tm-edit-source').value = '';
         document.getElementById('tm-name').value = '';
-        document.getElementById('tm-saree').value = '';
         document.getElementById('tm-mobile').value = '';
         document.getElementById('tm-address').value = '';
         document.getElementById('tm-date').value = tmToIsoDate(tmGetToday());
 
-        tmPopulateKarkhanaDropdown();
         tmResetKarigerSheetInputs();
-        window.tmPickGroup('kariger', false);
         tmUpdateCountsBar();
-        tmSetToast('Nayi Profile + Kariger Master Sheet Banayein — Enter se aage badhein, Ctrl+Enter se turant Accept.');
+        tmSetToast('Name daalein aur Under (Group) me Kariger select karein — Sheet form khud khulega!');
         setTimeout(() => document.getElementById('tm-name')?.focus(), 40);
     };
 
     window.openTallyAlterModule = function () {
         ensureTallyMasterDOM();
+        if (tmSheetModalOpen) window.tmCloseSheetOverlay(false);
+
         document.querySelectorAll('.module-section').forEach((s) => s.style.display = 'none');
         const dView = document.getElementById('dashboard-view');
         if (dView) dView.style.display = 'none';
@@ -1675,21 +1981,23 @@
         const grpInp = document.getElementById('tm-group');
         if (grpInp) grpInp.readOnly = true;
 
-        tmPopulateKarkhanaDropdown(found.karkhanaId);
-        document.getElementById('tm-saree').value = found.saree || '';
         window.tmPickGroup(found.group, false);
 
         if (found.group === 'kariger') {
-            tmLoadKarigerSheetInputs(found.id);
+            tmLoadKarigerSheetInputs(found.id, found);
         }
 
         document.getElementById('tm-alter-grp-label').textContent = found.groupLabel;
         document.getElementById('tm-alter-id-label').textContent = found.id;
-        tmSetToast(`Editing [${found.name}] — Badlav karke Enter / Ctrl+Enter dabayein.`);
+        tmSetToast(`Editing [${found.name}] — [F9] se Master Sheet edit karein, [Ctrl+Enter] se Update.`);
         setTimeout(() => document.getElementById('tm-name')?.focus(), 40);
     };
 
     window.tmAskAccept = function () {
+        if (tmSheetModalOpen) {
+            window.tmConfirmSheetOverlay();
+            return;
+        }
         const name = (document.getElementById('tm-name')?.value || '').trim();
         if (!name) {
             alert('Pehle Name bharein!');
@@ -1720,10 +2028,11 @@
         if (!name) return;
 
         if (tmSelectedGroup === 'kariger' || editSource === 'kariger_list') {
-            const kSel = document.getElementById('tm-karkhana');
-            const kId = kSel ? (kSel.value || 'k_main') : 'k_main';
-            const kName = (typeof window.getKarkhanaNameById === 'function') ? window.getKarkhanaNameById(kId) : 'Main Godown';
-            const saree = (document.getElementById('tm-saree')?.value || '').trim();
+            const kId = tmGetSelectedKarkhanaId() || 'k_main';
+            const kName = (typeof window.getKarkhanaNameById === 'function')
+                ? window.getKarkhanaNameById(kId)
+                : (document.getElementById('tm-s-karkhana')?.value || 'Main Godown');
+            const saree = (document.getElementById('tm-s-saree')?.value || '').trim();
 
             const list = tmGetKarigers();
             const targetKarId = editId || `kar_${Date.now()}`;
@@ -1843,21 +2152,20 @@
             window.openTallyAlterModule();
             tmSetToast(`✅ [${name}] + Master Sheet update ho gayi!`);
         } else {
-            document.getElementById('tm-name').value = '';
-            document.getElementById('tm-saree').value = '';
-            document.getElementById('tm-mobile').value = '';
-            document.getElementById('tm-address').value = '';
-            tmResetKarigerSheetInputs();
+            window.openTallyCreateModule();
             tmSetToast(
                 tmSelectedGroup === 'kariger'
                     ? `✅ [${name}] + Tani 1 Master Sheet save ho gayi! Agli entry karein.`
                     : `✅ [${name}] (${tmSelectedGroup.toUpperCase()}) save ho gaya! Agli entry karein.`
             );
-            document.getElementById('tm-name')?.focus();
         }
     };
 
     window.tmHandleEscKey = function () {
+        if (tmSheetModalOpen) {
+            window.tmCloseSheetOverlay(false);
+            return;
+        }
         const acc = document.getElementById('tm-accept-box');
         if (acc && acc.style.display === 'block') {
             window.tmCancelAccept();
@@ -1871,11 +2179,92 @@
     };
 
     /* ========================================================================
-       5. GLOBAL KEYBOARD SHORTCUTS (STOCK SUMMARY + CREATE/ALTER + GATEWAY)
+       5. GLOBAL KEYBOARD SHORTCUTS (STOCK SUMMARY + CREATE/ALTER + OVERLAY)
     ======================================================================== */
     document.addEventListener('keydown', (e) => {
         const desk = document.getElementById('desktop-screen');
         if (!desk || desk.style.display === 'none') return;
+
+        // 0A. Inside Forward Kariger Master Sheet Overlay (Takes top priority)
+        if (tmSheetModalOpen) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                window.tmCloseSheetOverlay(false);
+                return;
+            }
+            if (e.ctrlKey && (e.key === 'Enter' || e.key.toLowerCase() === 'a')) {
+                e.preventDefault();
+                window.tmConfirmSheetOverlay();
+                return;
+            }
+
+            const overlayOrder = [
+                'tm-s-karkhana', 'tm-s-saree',
+                'tm-rate-bana', 'tm-rate-zari', 'tm-rate-bani',
+                'tm-pichla-bana', 'tm-pichla-zari', 'tm-pichla-bani',
+                'tm-waste-bana', 'tm-waste-zari',
+                'tm-bana-item', 'tm-zari-item',
+                'tm-tani-item', 'tm-tani-sancha', 'tm-tani-wazan', 'tm-tani-pcs',
+                'tm-chukka-item', 'tm-chukka-sancha', 'tm-chukka-wazan', 'tm-chukka-pcs',
+                'tm-color-1', 'tm-color-2', 'tm-color-3', 'tm-color-4',
+                'tm-color-5', 'tm-color-6', 'tm-color-7', 'tm-color-8'
+            ];
+
+            const activeEl = document.activeElement;
+            const activeId = activeEl?.id || '';
+            const curIdx = overlayOrder.indexOf(activeId);
+            const isSideField = Boolean(tmActiveSideField && tmActiveSideField === activeId && tmSideItems.length > 0);
+
+            if (isSideField && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                e.preventDefault();
+                if (e.key === 'ArrowDown') {
+                    tmSideActiveIdx = (tmSideActiveIdx + 1) % tmSideItems.length;
+                } else {
+                    tmSideActiveIdx = (tmSideActiveIdx <= 0) ? (tmSideItems.length - 1) : (tmSideActiveIdx - 1);
+                }
+                const listEl = document.getElementById('tm-side-list-body');
+                const opts = listEl ? Array.from(listEl.querySelectorAll('.tm-side-opt')) : [];
+                opts.forEach((o, i) => o.classList.toggle('selected', i === tmSideActiveIdx));
+                opts[tmSideActiveIdx]?.scrollIntoView({ block: 'nearest' });
+                return;
+            }
+
+            if (curIdx >= 0) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (isSideField && tmSideActiveIdx >= 0 && tmSideItems[tmSideActiveIdx]) {
+                        window.tmPickSideItem(tmSideActiveIdx);
+                        return;
+                    }
+                    if (e.shiftKey) {
+                        if (curIdx > 0) {
+                            const prev = document.getElementById(overlayOrder[curIdx - 1]);
+                            if (prev) { prev.focus(); if (prev.select) prev.select(); }
+                        }
+                        return;
+                    }
+                    if (curIdx < overlayOrder.length - 1) {
+                        const nxt = document.getElementById(overlayOrder[curIdx + 1]);
+                        if (nxt) { nxt.focus(); if (nxt.select) nxt.select(); }
+                    } else {
+                        window.tmConfirmSheetOverlay();
+                    }
+                    return;
+                }
+
+                if (!isSideField && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                    e.preventDefault();
+                    if (e.key === 'ArrowDown' && curIdx < overlayOrder.length - 1) {
+                        const nxt = document.getElementById(overlayOrder[curIdx + 1]);
+                        if (nxt) { nxt.focus(); if (nxt.select) nxt.select(); }
+                    } else if (e.key === 'ArrowUp' && curIdx > 0) {
+                        const prev = document.getElementById(overlayOrder[curIdx - 1]);
+                        if (prev) { prev.focus(); if (prev.select) prev.select(); }
+                    }
+                }
+            }
+            return;
+        }
 
         const anyModalOpen = Array.from(document.querySelectorAll('.modal-overlay')).some((m) => m.style.display && m.style.display !== 'none');
         if (anyModalOpen) return;
@@ -1956,7 +2345,12 @@
                 return;
             }
 
-            // Classic Tally Quick Accept: Ctrl+Enter or Ctrl+A
+            if (e.key === 'F9' && tmSelectedGroup === 'kariger') {
+                e.preventDefault();
+                window.tmOpenSheetOverlay(true);
+                return;
+            }
+
             if (e.ctrlKey && (e.key === 'Enter' || e.key.toLowerCase() === 'a')) {
                 e.preventDefault();
                 window.tmAskAccept();
@@ -1965,8 +2359,6 @@
 
             const activeEl = document.activeElement;
             const activeId = activeEl?.id || '';
-            const openPop = activeEl?.parentElement?.querySelector('.tm-suggest-pop');
-            const isPopOpen = Boolean(openPop && openPop.style.display === 'block');
 
             if (activeId === 'tm-group' && tmMode === 'create' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
                 e.preventDefault();
@@ -1981,22 +2373,9 @@
                 return;
             }
 
-            const karCreateOrder = [
-                'tm-name', 'tm-group', 'tm-karkhana', 'tm-saree',
-                'tm-rate-bana', 'tm-rate-zari', 'tm-rate-bani',
-                'tm-pichla-bana', 'tm-pichla-zari', 'tm-pichla-bani',
-                'tm-waste-bana', 'tm-waste-zari',
-                'tm-bana-item', 'tm-zari-item',
-                'tm-tani-item', 'tm-tani-sancha', 'tm-tani-wazan', 'tm-tani-pcs',
-                'tm-chukka-item', 'tm-chukka-sancha', 'tm-chukka-wazan', 'tm-chukka-pcs',
-                'tm-color-1', 'tm-color-2', 'tm-color-3', 'tm-color-4',
-                'tm-color-5', 'tm-color-6', 'tm-color-7', 'tm-color-8',
-                'tm-mobile', 'tm-address', 'tm-date'
-            ];
-
-            const order = (tmSelectedGroup === 'kariger')
-                ? (tmMode === 'alter-edit' ? karCreateOrder.filter((id) => id !== 'tm-group') : karCreateOrder)
-                : (tmMode === 'alter-edit' ? ['tm-name', 'tm-mobile', 'tm-address', 'tm-date'] : ['tm-name', 'tm-group', 'tm-mobile', 'tm-address', 'tm-date']);
+            const order = (tmMode === 'alter-edit')
+                ? ['tm-name', 'tm-mobile', 'tm-address', 'tm-date']
+                : ['tm-name', 'tm-group', 'tm-mobile', 'tm-address', 'tm-date'];
 
             const curIdx = order.indexOf(activeId);
             if (curIdx >= 0) {
@@ -2022,9 +2401,7 @@
                     return;
                 }
 
-                // ArrowDown / ArrowUp field navigation (skip when suggest popup is open or on <select> with Alt)
-                if (!isPopOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
-                    if (activeEl?.tagName === 'SELECT' && e.altKey) return;
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                     e.preventDefault();
                     if (e.key === 'ArrowDown' && curIdx < order.length - 1) {
                         const nxt = document.getElementById(order[curIdx + 1]);
@@ -2139,6 +2516,7 @@
     };
 
     window.backToDashboard = function () {
+        if (tmSheetModalOpen) window.tmCloseSheetOverlay(false);
         window.__slReturnToStockSummary = false;
         document.querySelectorAll('.module-section').forEach((s) => s.style.display = 'none');
         const dView = document.getElementById('dashboard-view');
