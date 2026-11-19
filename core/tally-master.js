@@ -508,10 +508,12 @@
         const sec = document.getElementById('stock-summary-section');
         if (sec) sec.style.display = 'none';
 
-        if (idx === 0 && typeof window.openBanaModule === 'function') window.openBanaModule();
-        else if (idx === 1 && typeof window.openZariModule === 'function') window.openZariModule();
-        else if (idx === 2 && typeof window.openSanchaModule === 'function') window.openSanchaModule();
-        else if (idx === 3 && typeof window.openSareeModule === 'function') window.openSareeModule();
+        setTimeout(() => {
+            if (idx === 0 && typeof window.openBanaModule === 'function') window.openBanaModule();
+            else if (idx === 1 && typeof window.openZariModule === 'function') window.openZariModule();
+            else if (idx === 2 && typeof window.openSanchaModule === 'function') window.openSanchaModule();
+            else if (idx === 3 && typeof window.openSareeModule === 'function') window.openSareeModule();
+        }, 0);
     };
 
     window.openStockSummaryModule = function () {
@@ -2189,11 +2191,13 @@
         if (tmSheetModalOpen) {
             if (e.key === 'Escape') {
                 e.preventDefault();
+                e.stopImmediatePropagation();
                 window.tmCloseSheetOverlay(false);
                 return;
             }
             if (e.ctrlKey && (e.key === 'Enter' || e.key.toLowerCase() === 'a')) {
                 e.preventDefault();
+                e.stopImmediatePropagation();
                 window.tmConfirmSheetOverlay();
                 return;
             }
@@ -2274,6 +2278,7 @@
         if (ssSec && ssSec.style.display !== 'none') {
             if (e.key === 'Escape') {
                 e.preventDefault();
+                e.stopImmediatePropagation();
                 window.backToDashboard();
                 return;
             }
@@ -2289,15 +2294,16 @@
             }
             if (e.key === 'Enter') {
                 e.preventDefault();
+                e.stopImmediatePropagation();
                 window.ssOpenStockGroup(ssActiveIdx);
                 return;
             }
             if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
                 const k = e.key.toLowerCase();
-                if (k === 'b') { e.preventDefault(); window.ssOpenStockGroup(0); return; }
-                if (k === 'z') { e.preventDefault(); window.ssOpenStockGroup(1); return; }
-                if (k === 'n') { e.preventDefault(); window.ssOpenStockGroup(2); return; }
-                if (k === 'e') { e.preventDefault(); window.ssOpenStockGroup(3); return; }
+                if (k === 'b') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(0); return; }
+                if (k === 'z') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(1); return; }
+                if (k === 'n') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(2); return; }
+                if (k === 'e') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(3); return; }
             }
             return;
         }
@@ -2307,6 +2313,7 @@
         if (tmSec && tmSec.style.display !== 'none') {
             if (e.key === 'Escape') {
                 e.preventDefault();
+                e.stopImmediatePropagation();
                 window.tmHandleEscKey();
                 return;
             }
@@ -2328,6 +2335,7 @@
                     rows[tmAlterActiveIdx]?.scrollIntoView({ block: 'nearest' });
                 } else if (e.key === 'Enter') {
                     e.preventDefault();
+                    e.stopImmediatePropagation();
                     rows[tmAlterActiveIdx]?.click();
                 }
                 return;
@@ -2337,9 +2345,11 @@
             if (accBox && accBox.style.display === 'block') {
                 if (e.key.toLowerCase() === 'y' || e.key === 'Enter') {
                     e.preventDefault();
+                    e.stopImmediatePropagation();
                     window.tmSaveProfile();
                 } else if (e.key.toLowerCase() === 'n') {
                     e.preventDefault();
+                    e.stopImmediatePropagation();
                     window.tmCancelAccept();
                 }
                 return;
@@ -2347,12 +2357,14 @@
 
             if (e.key === 'F9' && tmSelectedGroup === 'kariger') {
                 e.preventDefault();
+                e.stopImmediatePropagation();
                 window.tmOpenSheetOverlay(true);
                 return;
             }
 
             if (e.ctrlKey && (e.key === 'Enter' || e.key.toLowerCase() === 'a')) {
                 e.preventDefault();
+                e.stopImmediatePropagation();
                 window.tmAskAccept();
                 return;
             }
@@ -2435,21 +2447,24 @@
             e.preventDefault();
             items[idx].classList.remove('active');
             items[(idx - 1 + items.length) % items.length].classList.add('active');
-        } else if (e.key === 'Enter' && !document.activeElement.classList.contains('gw-item') && tag !== 'BUTTON') {
+        } else if (e.key === 'Enter' && (tag !== 'BUTTON' || document.activeElement.classList.contains('gw-item'))) {
             e.preventDefault();
-            items[idx].click();
+            e.stopImmediatePropagation();
+            const targetItem = document.activeElement?.classList.contains('gw-item') ? document.activeElement : items[idx];
+            setTimeout(() => targetItem?.click(), 0);
         } else if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
             const k = e.key.toLowerCase();
             const targetBtn = items.find((el) => el.dataset.gwKey === k);
             if (targetBtn) {
                 e.preventDefault();
-                targetBtn.click();
+                e.stopImmediatePropagation();
+                setTimeout(() => targetBtn.click(), 0);
                 return;
             }
-            if (k === 'b' && typeof window.openBanaModule === 'function') { e.preventDefault(); window.__slReturnToStockSummary = false; window.openBanaModule(); }
-            else if (k === 'z' && typeof window.openZariModule === 'function') { e.preventDefault(); window.__slReturnToStockSummary = false; window.openZariModule(); }
-            else if (k === 'n' && typeof window.openSanchaModule === 'function') { e.preventDefault(); window.__slReturnToStockSummary = false; window.openSanchaModule(); }
-            else if (k === 'e' && typeof window.openSareeModule === 'function') { e.preventDefault(); window.__slReturnToStockSummary = false; window.openSareeModule(); }
+            if (k === 'b' && typeof window.openBanaModule === 'function') { e.preventDefault(); e.stopImmediatePropagation(); window.__slReturnToStockSummary = false; setTimeout(() => window.openBanaModule(), 0); }
+            else if (k === 'z' && typeof window.openZariModule === 'function') { e.preventDefault(); e.stopImmediatePropagation(); window.__slReturnToStockSummary = false; setTimeout(() => window.openZariModule(), 0); }
+            else if (k === 'n' && typeof window.openSanchaModule === 'function') { e.preventDefault(); e.stopImmediatePropagation(); window.__slReturnToStockSummary = false; setTimeout(() => window.openSanchaModule(), 0); }
+            else if (k === 'e' && typeof window.openSareeModule === 'function') { e.preventDefault(); e.stopImmediatePropagation(); window.__slReturnToStockSummary = false; setTimeout(() => window.openSareeModule(), 0); }
         }
     });
 
