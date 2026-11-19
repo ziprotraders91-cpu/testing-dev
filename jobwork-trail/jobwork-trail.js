@@ -1,6 +1,6 @@
 /* ============================================================================
-   SIMPLICITY ERP - TALLYPRIME UNIFIED JOBWORK, SAREE TRAIL, DISPATCH & BILLS
-   File: jobwork-trail/jobwork-trail.js (v3.1)
+   SIMPLICITY ERP - TALLYPRIME UNIFIED JOBWORK, TRAIL, OUTSTATION BILL & SLIP
+   File: jobwork-trail/jobwork-trail.js (v3.2)
    100% Compatible with: core/storage.js, core/database.js (Supabase Row-Delta),
    core/karkhana.js, core/tally-master.js, saree_history, jobwork_workers
 ============================================================================ */
@@ -9,14 +9,17 @@
     'use strict';
 
     const GROUPS_STORE_KEY = 'jobwork_groups';
+    const FIRM_STORE_KEY = 'jobwork_firm_profile';
+    const SEQ_STORE_KEY = 'jw_challan_seq';
+
     const DEFAULT_GROUPS = [
-        { key: 'cutting', label: 'Cutting' },
-        { key: 'embroidery', label: 'Embroidery' },
-        { key: 'calender', label: 'Calender' }
+        { key: 'cutting', label: 'Cutting', outstation: false },
+        { key: 'embroidery', label: 'Embroidery', outstation: false },
+        { key: 'calender', label: 'Calender', outstation: false }
     ];
 
     /* ========================================================================
-       1. NAVIGATION, CURSOR MEMORY & VOUCHER STATE
+       1. MODULE STATE & CURSOR MEMORY
     ======================================================================== */
     let curView = 'gateway';
     let menuIdx = 0;
@@ -32,6 +35,7 @@
     let vchRightIdx = 0;
     let vchBatch = [];
     let vchAcceptOpen = false;
+    let vchMeta = { date: '', jwNo: '', transport: '', lrNo: '', designNote: '' };
     let lastChallanObj = null;
 
     let editWorkerRowInfo = null;
@@ -73,7 +77,7 @@
     const isNavGuarded = () => (performance.now() - navGuardTs) < 130;
 
     /* ========================================================================
-       2. SAFE HELPERS & STORAGE WRAPPERS
+       2. SAFE HELPERS & STORAGE
     ======================================================================== */
     const esc = (s) => {
         if (typeof window.sanitizeHTML === 'function') return window.sanitizeHTML(s);
@@ -132,8 +136,7 @@
             if (typeof window.getStore === 'function') return window.getStore(key);
             const raw = localStorage.getItem(key);
             return raw ? JSON.parse(raw) : [];
-        } catch (err) {
-            console.warn('[JW-Trail] getStoreSafe error:', key, err);
+        } catch {
             return [];
         }
     };
@@ -200,8 +203,21 @@
     };
 
     /* ========================================================================
-       3. DYNAMIC WORK GROUPS ENGINE
+       3. FIRM PROFILE (FROM + GST) & DYNAMIC WORK GROUPS
     ======================================================================== */
+    const getFirmProfile = () => {
+        const raw = getStoreSafe(FIRM_STORE_KEY);
+        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+            return {
+                name: String(raw.name || 'INDIAN FABRICS').trim(),
+                address: String(raw.address || '').trim(),
+                mobile: String(raw.mobile || '').trim(),
+                gst: String(raw.gst || '').trim()
+            };
+        }
+        return { name: 'INDIAN FABRICS', address: '', mobile: '', gst: '' };
+    };
+
     const getWorkGroups = () => {
         const stored = safeArr(getStoreSafe(GROUPS_STORE_KEY));
         const workers = safeArr(getStoreSafe('jobwork_workers'));
@@ -211,27 +227,53 @@
             stored.forEach((g) => {
                 if (!g || !g.key) return;
                 const k = String(g.key).trim().toLowerCase();
-                if (k) map.set(k, { key: k, label: String(g.label || k).trim() });
+                if (k) map.set(k, { key: k, label: String(g.label || k).trim(), outstation: Boolean(g.outstation) });
             });
         } else {
-            DEFAULT_GROUPS.forEach((g) => map.set(g.key, { key: g.key, label: g.label }));
+            DEFAULT_GROUPS.forEach((g) => map.set(g.key, { ...g }));
         }
 
         workers.forEach((w) => {
             if (!w || !w.type) return;
             const k = String(w.type).trim().toLowerCase();
             if (k && !map.has(k)) {
-                map.set(k, { key: k, label: k.charAt(0).toUpperCase() + k.slice(1) });
+                map.set(k, { key: k, label: k.charAt(0).toUpperCase() + k.slice(1), outstation: false });
             }
         });
 
         return Array.from(map.values());
     };
 
-    const grpLabel = (key) => {
+    const getGroupObj = (key) => {
         const k = String(key || '').trim().toLowerCase();
-        const f = getWorkGroups().find((g) => g.key === k);
-        return f ? f.label : (k ? k.charAt(0).toUpperCase() + k.slice(1) : 'JobWork');
+        return getWorkGroups().find((g) => g.key === k) || { key: k, label: k ? k.charAt(0).toUpperCase() + k.slice(1) : 'JobWork', outstation: false };
+    };
+
+    const grpLabel = (key) => getGroupObj(key).label;
+
+    const getNextChallanNo = () => {
+        const storedSeq = safeInt(getStoreSafe(SEQ_STORE_KEY), 0);
+        let maxSeq = storedSeq;
+        safeArr(getStoreSafe('jobwork_workers')).forEach((w) => {
+            safeArr(getStoreSafe(`jobwork_sheets_${w.id}`)).forEach((sh) => {
+                safeArr(sh?.rows).forEach((r) => {
+                    const m = String(r?.jwNo || '').match(/(\d+)$/);
+                    if (m) {
+                        const n = parseInt(m[1], 10);
+                        if (n > maxSeq) maxSeq = n;
+                    }
+                });
+            });
+        });
+        return `JW-${String(maxSeq + 1).padStart(3, '0')}`;
+    };
+
+    const bumpChallanSeq = (jwNoStr) => {
+        const m = String(jwNoStr || '').match(/(\d+)$/);
+        if (!m) return;
+        const n = parseInt(m[1], 10);
+        const cur = safeInt(getStoreSafe(SEQ_STORE_KEY), 0);
+        if (n > cur) setStoreSafe(SEQ_STORE_KEY, n);
     };
 
     /* ========================================================================
@@ -273,7 +315,7 @@
     };
 
     /* ========================================================================
-       5. UNIFIED RECONCILIATION ENGINE (100% STOCK MATCH)
+       5. UNIFIED RECONCILIATION ENGINE
     ======================================================================== */
     const computeLiveState = (godamFilter = 'all') => {
         const groups = getWorkGroups();
@@ -290,7 +332,6 @@
 
         const sareeHist = safeArr(getStoreSafe('saree_history'));
         const activeFilter = godamFilter || 'all';
-
         const godamMap = new Map();
         const untrailedOuts = [];
 
@@ -312,28 +353,20 @@
             const hasExplicitTrail = Array.isArray(h.doneStages);
             const doneStages = inferStagesFromRow(h);
             const trailKey = doneStages.join('|');
-
             const isOut = (h.isOut === true) || (safeNum(h.gai) > 0);
             const qty = isOut ? safeInt(h.gai != null ? h.gai : h.pcs) : safeInt(h.aai != null ? h.aai : h.pcs);
             if (qty <= 0) return;
 
             const bKey = `${sName}|||${kName}|||${kid}|||${bucket}|||${trailKey}`;
-
             if (!isOut) {
                 let b = godamMap.get(bKey);
                 if (!b) {
                     b = {
                         key: bKey,
                         summaryKey: `${sName}|||${kName}|||${kid}|||${bucket}`,
-                        saree: sName,
-                        maker: kName,
-                        karkhanaId: kid,
-                        godamName: getGodamLabel(kid),
-                        bucket,
-                        doneStages: [...doneStages],
-                        trailKey,
-                        pcs: 0,
-                        lastDate: h.date || ''
+                        saree: sName, maker: kName, karkhanaId: kid,
+                        godamName: getGodamLabel(kid), bucket, doneStages: [...doneStages], trailKey,
+                        pcs: 0, lastDate: h.date || ''
                     };
                     godamMap.set(bKey, b);
                 }
@@ -341,13 +374,9 @@
                 if (h.date && (!b.lastDate || h.date > b.lastDate)) b.lastDate = h.date;
             } else {
                 const exact = godamMap.get(bKey);
-                if (exact && exact.pcs >= qty) {
-                    exact.pcs -= qty;
-                } else if (hasExplicitTrail && exact) {
-                    exact.pcs = Math.max(0, exact.pcs - qty);
-                } else {
-                    untrailedOuts.push({ sName, kName, kid, bucket, qty });
-                }
+                if (exact && exact.pcs >= qty) exact.pcs -= qty;
+                else if (hasExplicitTrail && exact) exact.pcs = Math.max(0, exact.pcs - qty);
+                else untrailedOuts.push({ sName, kName, kid, bucket, qty });
             }
         });
 
@@ -379,14 +408,8 @@
             let sg = godamSummaryMap.get(b.summaryKey);
             if (!sg) {
                 sg = {
-                    summaryKey: b.summaryKey,
-                    saree: b.saree,
-                    maker: b.maker,
-                    karkhanaId: b.karkhanaId,
-                    godamName: b.godamName,
-                    bucket: b.bucket,
-                    pcs: 0,
-                    batches: []
+                    summaryKey: b.summaryKey, saree: b.saree, maker: b.maker,
+                    karkhanaId: b.karkhanaId, godamName: b.godamName, bucket: b.bucket, pcs: 0, batches: []
                 };
                 godamSummaryMap.set(b.summaryKey, sg);
             }
@@ -403,8 +426,7 @@
             const wGroup = String(w.type || 'cutting').trim().toLowerCase();
             const sheets = safeArr(getStoreSafe(`jobwork_sheets_${w.id}`));
 
-            let diya = 0;
-            let aai = 0;
+            let diya = 0, aai = 0;
             const openingPend = sheets.length ? safeInt(sheets[0].closingPendingSaree, 0) : 0;
             const pMap = new Map();
 
@@ -419,17 +441,9 @@
                 let ex = pMap.get(pKey);
                 if (!ex) {
                     ex = {
-                        key: pKey,
-                        workerId: String(w.id),
-                        workerName: w.name,
-                        workerGroup: wGroup,
-                        saree: sN,
-                        maker: mN,
-                        karkhanaId: kId,
-                        godamName: getGodamLabel(kId),
-                        doneStages: [...st],
-                        trailKey: tKey,
-                        pcs: 0
+                        key: pKey, workerId: String(w.id), workerName: w.name, workerGroup: wGroup,
+                        saree: sN, maker: mN, karkhanaId: kId, godamName: getGodamLabel(kId),
+                        doneStages: [...st], trailKey: tKey, pcs: 0
                     };
                     pMap.set(pKey, ex);
                 }
@@ -444,39 +458,27 @@
                 const kId = kid ? normGodam(kid) : null;
 
                 if (Array.isArray(prevStages) && sN && mN && kId) {
-                    const exactKey = `${w.id}|||${sN}|||${mN}|||${kId}|||${prevStages.join('|')}`;
-                    const ex = pMap.get(exactKey);
-                    if (ex && ex.pcs > 0) {
-                        const take = Math.min(ex.pcs, rem);
-                        ex.pcs -= take;
-                        rem -= take;
-                    }
+                    const ex = pMap.get(`${w.id}|||${sN}|||${mN}|||${kId}|||${prevStages.join('|')}`);
+                    if (ex && ex.pcs > 0) { const t = Math.min(ex.pcs, rem); ex.pcs -= t; rem -= t; }
                 }
                 if (rem > 0 && mN) {
                     for (const ex of pMap.values()) {
                         if (rem <= 0) break;
                         if (ex.pcs > 0 && ex.maker === mN && (!sN || ex.saree === sN)) {
-                            const take = Math.min(ex.pcs, rem);
-                            ex.pcs -= take;
-                            rem -= take;
+                            const t = Math.min(ex.pcs, rem); ex.pcs -= t; rem -= t;
                         }
                     }
                 }
                 if (rem > 0) {
                     for (const ex of pMap.values()) {
                         if (rem <= 0) break;
-                        if (ex.pcs > 0) {
-                            const take = Math.min(ex.pcs, rem);
-                            ex.pcs -= take;
-                            rem -= take;
-                        }
+                        if (ex.pcs > 0) { const t = Math.min(ex.pcs, rem); ex.pcs -= t; rem -= t; }
                     }
                 }
             };
 
             sheets.forEach((sh) => {
-                if (!sh) return;
-                safeArr(sh.rows).forEach((r) => {
+                safeArr(sh?.rows).forEach((r) => {
                     if (!r) return;
                     const gItems = safeArr(r.gayiItems);
                     if (gItems.length) {
@@ -487,21 +489,14 @@
                             const meta = karigerMeta.get(mName) || { saree: 'GENERAL SAREE', karkhanaId: 'k_main' };
                             const sName = normText(it.saree || meta.saree, 'GENERAL SAREE');
                             const kid = normGodam(it.karkhanaId || meta.karkhanaId || 'k_main');
-                            const stages = Array.isArray(it.doneStages)
-                                ? it.doneStages
-                                : inferStagesFromRow({ type: it.source || r.stockSource || 'fresh' });
-
+                            const stages = Array.isArray(it.doneStages) ? it.doneStages : inferStagesFromRow({ type: it.source || r.stockSource || 'fresh' });
                             diya += q;
-                            if (activeFilter === 'all' || kid === activeFilter) {
-                                addPending(sName, mName, kid, stages, q);
-                            }
+                            if (activeFilter === 'all' || kid === activeFilter) addPending(sName, mName, kid, stages, q);
                         });
                     } else if (safeInt(r.gayiQty) > 0) {
                         const q = safeInt(r.gayiQty);
                         diya += q;
-                        if (activeFilter === 'all' || activeFilter === 'k_main') {
-                            addPending('GENERAL SAREE', 'KARKHANA', 'k_main', [], q);
-                        }
+                        if (activeFilter === 'all' || activeFilter === 'k_main') addPending('GENERAL SAREE', 'KARKHANA', 'k_main', [], q);
                     }
 
                     const aItems = safeArr(r.aayiItems);
@@ -513,18 +508,13 @@
                             const mName = it.karigar || it.maker ? normText(it.karigar || it.maker) : null;
                             const sName = it.saree ? normText(it.saree) : null;
                             const kid = it.karkhanaId ? normGodam(it.karkhanaId) : null;
-                            if (activeFilter === 'all' || !kid || kid === activeFilter) {
-                                deductPending(sName, mName, kid, it.prevStages, q);
-                            }
+                            if (activeFilter === 'all' || !kid || kid === activeFilter) deductPending(sName, mName, kid, it.prevStages, q);
                         });
                         if (safeInt(r.damagePcs) > 0 && !aItems.some((it) => it.isDamage)) {
-                            const dq = safeInt(r.damagePcs);
-                            aai += dq;
-                            deductPending(null, null, null, null, dq);
+                            const dq = safeInt(r.damagePcs); aai += dq; deductPending(null, null, null, null, dq);
                         }
                     } else {
-                        const aq = safeInt(r.aayiQty);
-                        const dq = safeInt(r.damagePcs);
+                        const aq = safeInt(r.aayiQty), dq = safeInt(r.damagePcs);
                         if (aq > 0) { aai += aq; deductPending(null, null, null, null, aq); }
                         if (dq > 0) { aai += dq; deductPending(null, null, null, null, dq); }
                     }
@@ -549,6 +539,7 @@
                 group: wGroup,
                 mobile: w.mobile || '',
                 address: w.address || '',
+                gst: w.gst || '',
                 date: w.date || '',
                 diya,
                 aai,
@@ -569,13 +560,7 @@
             godamBatches,
             godamSummaries,
             pendingBatches,
-            totals: {
-                raw: rawPcs,
-                pending: pendPcs,
-                finished: finPcs,
-                lott: lottPcs,
-                total: rawPcs + pendPcs + finPcs + lottPcs
-            }
+            totals: { raw: rawPcs, pending: pendPcs, finished: finPcs, lott: lottPcs, total: rawPcs + pendPcs + finPcs + lottPcs }
         };
         return cachedSnapshot;
     };
@@ -587,11 +572,9 @@
     };
 
     /* ========================================================================
-       6. SHARED 2-STEP KARIGER -> STAGE PICKER HELPERS
+       6. SHARED 2-STEP PICKER HELPERS
     ======================================================================== */
-    const getBatchUsedQty = (batchArr, batchKey) => {
-        return batchArr.filter((x) => x.batchKey === batchKey).reduce((s, x) => s + safeInt(x.qty), 0);
-    };
+    const getBatchUsedQty = (batchArr, batchKey) => batchArr.filter((x) => x.batchKey === batchKey).reduce((s, x) => s + safeInt(x.qty), 0);
 
     const buildKarigerPickerList = (batches, usedBatchArr, query = '') => {
         const q = String(query || '').trim().toLowerCase();
@@ -600,10 +583,7 @@
             const avail = b.pcs - getBatchUsedQty(usedBatchArr, b.key);
             if (avail <= 0) return;
             let ex = kMap.get(b.maker);
-            if (!ex) {
-                ex = { maker: b.maker, totalPcs: 0, stagesCount: 0, sarees: new Set() };
-                kMap.set(b.maker, ex);
-            }
+            if (!ex) { ex = { maker: b.maker, totalPcs: 0, stagesCount: 0, sarees: new Set() }; kMap.set(b.maker, ex); }
             ex.totalPcs += avail;
             ex.stagesCount += 1;
             ex.sarees.add(b.saree);
@@ -621,7 +601,7 @@
     };
 
     /* ========================================================================
-       7. DATA MUTATIONS (OUT / IN / EDIT / DELETE / FINAL OUT / BILLS)
+       7. DATA MUTATIONS
     ======================================================================== */
     const ensureWorkerSheet = (workerId) => {
         const sheets = safeArr(getStoreSafe(`jobwork_sheets_${workerId}`)).slice();
@@ -652,23 +632,17 @@
             const stages = Array.isArray(it.doneStages) ? it.doneStages : [];
             filtered.push({
                 id: `sh_jw_out_${refId}_${idx}`,
-                refId,
-                date: dDate,
+                refId, date: dDate,
                 sareeName: it.saree || 'GENERAL SAREE',
                 karigerName: it.karigar || 'KARKHANA',
                 kariger: it.karigar || 'KARKHANA',
-                partyName: targetLabel,
-                targetWorker: targetLabel,
+                partyName: targetLabel, targetWorker: targetLabel,
                 karkhanaId: it.karkhanaId || 'k_main',
                 type: legacyTypeFromTrail(stages, 'unfinished'),
                 typeLabel: `📤 ${targetLabel} Out [${formatTrail(stages, 'unfinished')}]`,
-                aai: 0,
-                gai: safeInt(it.qty),
-                isOut: true,
-                doneStages: [...stages],
-                stageBucket: 'unfinished',
-                workerId: worker.id,
-                note: `${gLabel} Out`,
+                aai: 0, gai: safeInt(it.qty), isOut: true,
+                doneStages: [...stages], stageBucket: 'unfinished',
+                workerId: worker.id, note: rowObj.jwNo ? `${rowObj.jwNo} (${gLabel} Out)` : `${gLabel} Out`,
                 timestamp: now + idx
             });
         });
@@ -679,23 +653,17 @@
             const icon = bucket === 'finished' ? '✨' : (bucket === 'lott' ? '⚠️' : '✅');
             filtered.push({
                 id: `sh_jw_in_${refId}_${idx}`,
-                refId,
-                date: dDate,
+                refId, date: dDate,
                 sareeName: it.saree || 'GENERAL SAREE',
                 karigerName: it.karigar || 'KARKHANA',
                 kariger: it.karigar || 'KARKHANA',
-                partyName: targetLabel,
-                targetWorker: targetLabel,
+                partyName: targetLabel, targetWorker: targetLabel,
                 karkhanaId: it.karkhanaId || 'k_main',
                 type: legacyTypeFromTrail(stages, bucket),
                 typeLabel: `${icon} ${targetLabel} In [${formatTrail(stages, bucket)}]`,
-                aai: safeInt(it.qty),
-                gai: 0,
-                isOut: false,
-                doneStages: [...stages],
-                stageBucket: bucket,
-                workerId: worker.id,
-                note: `${gLabel} In`,
+                aai: safeInt(it.qty), gai: 0, isOut: false,
+                doneStages: [...stages], stageBucket: bucket,
+                workerId: worker.id, note: `${gLabel} In`,
                 timestamp: now + idx
             });
         });
@@ -703,16 +671,66 @@
         return filtered;
     };
 
-    const commitVchBatch = (doPrint = false) => {
+    const syncVchMetaFromDom = () => {
+        const dEl = document.getElementById('jwt-vch-date');
+        const jEl = document.getElementById('jwt-vch-jwno');
+        const tEl = document.getElementById('jwt-vch-trans');
+        const lEl = document.getElementById('jwt-vch-lr');
+        const nEl = document.getElementById('jwt-vch-design');
+        if (dEl) vchMeta.date = dEl.value || getTodayIso();
+        if (jEl) vchMeta.jwNo = jEl.value;
+        if (tEl) vchMeta.transport = tEl.value;
+        if (lEl) vchMeta.lrNo = lEl.value;
+        if (nEl) vchMeta.designNote = nEl.value;
+    };
+
+    const buildOutstationPayloadFromRow = (worker, row) => {
+        const items = safeArr(row.gayiItems);
+        const sareeMap = new Map();
+        items.forEach((it) => {
+            const s = it.saree || 'GENERAL SAREE';
+            sareeMap.set(s, (sareeMap.get(s) || 0) + safeInt(it.qty));
+        });
+        return {
+            isOutstation: true,
+            title: 'JOB WORK CHALLAN',
+            groupLabel: grpLabel(worker.group),
+            firm: getFirmProfile(),
+            worker: {
+                name: worker.name,
+                address: worker.address || '',
+                mobile: worker.mobile || '',
+                gst: worker.gst || ''
+            },
+            jwNo: row.jwNo || getNextChallanNo(),
+            date: row.date,
+            transport: row.transport || '-',
+            lrNo: row.lrNo || '-',
+            designNote: row.designNote || '-',
+            sareeRows: Array.from(sareeMap.entries()).map(([saree, pcs]) => ({ saree, pcs })),
+            totalPcs: safeInt(row.gayiQty),
+            items: items.map((x) => ({
+                maker: x.karigar || '-',
+                saree: x.saree || 'Saree',
+                trail: formatTrail(x.doneStages || [], 'unfinished'),
+                qty: safeInt(x.qty)
+            }))
+        };
+    };
+
+    const commitVchBatch = (printType = '') => {
         if (isSaving) return;
+        syncVchMetaFromDom();
         if (!vchBatch.length) return toast('Batch khali hai! Pehle kam se kam 1 saree add karein.', true);
 
         const snap = getSnapshot();
         const worker = snap.workers.find((w) => w.id === activeWorkerId);
         if (!worker) return toast('Worker nahi mila!', true);
 
-        const dDate = toIsoDate(document.getElementById('jwt-vch-date')?.value) || getTodayIso();
-        const gLabel = grpLabel(worker.group);
+        const grpObj = getGroupObj(worker.group);
+        const isOutstationOut = (vchDir === 'out' && grpObj.outstation);
+        const dDate = toIsoDate(vchMeta.date) || getTodayIso();
+        const gLabel = grpObj.label;
 
         isSaving = true;
         try {
@@ -723,6 +741,7 @@
             let totQty = 0;
             let totDmg = 0;
             const sheetItems = [];
+            let savedRow = null;
 
             if (vchDir === 'out') {
                 vchBatch.forEach((it, idx) => {
@@ -737,7 +756,7 @@
                         qty: it.qty
                     });
                 });
-                const newRow = {
+                savedRow = {
                     id: txnId,
                     date: dDate,
                     gayiQty: totQty,
@@ -747,18 +766,23 @@
                     aayiItems: [],
                     damagePcs: 0,
                     damageAmt: 0,
-                    isTrailV2: true
+                    isTrailV2: true,
+                    isOutstation: isOutstationOut,
+                    jwNo: isOutstationOut ? (vchMeta.jwNo || getNextChallanNo()).trim() : '',
+                    transport: isOutstationOut ? (vchMeta.transport || '').trim() : '',
+                    lrNo: isOutstationOut ? (vchMeta.lrNo || '').trim() : '',
+                    designNote: isOutstationOut ? (vchMeta.designNote || '').trim() : ''
                 };
-                lastSheet.rows.push(newRow);
-                setStoreSafe('saree_history', rebuildWorkerRowSareeHistory(sH, worker, newRow));
+                if (isOutstationOut && savedRow.jwNo) bumpChallanSeq(savedRow.jwNo);
+                lastSheet.rows.push(savedRow);
+                setStoreSafe('saree_history', rebuildWorkerRowSareeHistory(sH, worker, savedRow));
             } else {
                 vchBatch.forEach((it, idx) => {
                     const nextTrail = [...it.doneStages];
                     if (worker.group && !nextTrail.includes(worker.group)) nextTrail.push(worker.group);
                     const targetBucket = it.dest === 'finished' ? 'finished' : (it.dest === 'lott' ? 'lott' : 'unfinished');
                     const isDmg = (targetBucket === 'lott');
-                    if (isDmg) totDmg += it.qty;
-                    else totQty += it.qty;
+                    if (isDmg) totDmg += it.qty; else totQty += it.qty;
 
                     sheetItems.push({
                         id: `it_${txnId}_${idx}`,
@@ -772,7 +796,7 @@
                         qty: it.qty
                     });
                 });
-                const newRow = {
+                savedRow = {
                     id: txnId,
                     date: dDate,
                     gayiQty: 0,
@@ -784,25 +808,30 @@
                     damageAmt: 0,
                     isTrailV2: true
                 };
-                lastSheet.rows.push(newRow);
-                setStoreSafe('saree_history', rebuildWorkerRowSareeHistory(sH, worker, newRow));
+                lastSheet.rows.push(savedRow);
+                setStoreSafe('saree_history', rebuildWorkerRowSareeHistory(sH, worker, savedRow));
             }
 
             setStoreSafe(`jobwork_sheets_${worker.id}`, sheets);
 
-            lastChallanObj = {
-                title: `${gLabel.toUpperCase()} ${vchDir === 'out' ? 'OUT (GAYI)' : 'IN (WAPAS AAYI)'}`,
-                party: `${worker.name} (${gLabel})`,
-                date: dDate,
-                items: vchBatch.map((x) => ({
-                    maker: x.maker,
-                    saree: x.saree,
-                    trail: vchDir === 'out'
-                        ? formatTrail(x.doneStages, 'unfinished')
-                        : formatTrail([...x.doneStages, ...(x.doneStages.includes(worker.group) ? [] : [worker.group])], x.dest === 'finished' ? 'finished' : (x.dest === 'lott' ? 'lott' : 'unfinished')),
-                    qty: x.qty
-                }))
-            };
+            if (isOutstationOut) {
+                lastChallanObj = buildOutstationPayloadFromRow(worker, savedRow);
+            } else {
+                lastChallanObj = {
+                    isOutstation: false,
+                    title: `${gLabel.toUpperCase()} ${vchDir === 'out' ? 'OUT (GAYI)' : 'IN (WAPAS AAYI)'}`,
+                    party: `${worker.name} (${gLabel})`,
+                    date: dDate,
+                    items: vchBatch.map((x) => ({
+                        maker: x.maker,
+                        saree: x.saree,
+                        trail: vchDir === 'out'
+                            ? formatTrail(x.doneStages, 'unfinished')
+                            : formatTrail([...x.doneStages, ...(x.doneStages.includes(worker.group) ? [] : [worker.group])], x.dest === 'finished' ? 'finished' : (x.dest === 'lott' ? 'lott' : 'unfinished')),
+                        qty: x.qty
+                    }))
+                };
+            }
 
             vchBatch = [];
             vchAcceptOpen = false;
@@ -810,10 +839,22 @@
             vchSelectedMaker = null;
             vchSelectedBatchKey = null;
             vchRightIdx = 0;
+            vchMeta = {
+                date: getTodayIso(),
+                jwNo: isOutstationOut ? getNextChallanNo() : '',
+                transport: '',
+                lrNo: '',
+                designNote: ''
+            };
 
             invalidateAllCaches(worker.id);
             toast(`✅ ${totQty + totDmg} Pcs Save ho gayi!`);
-            if (doPrint) printBatchChallan(lastChallanObj);
+            if (printType === 'challan') {
+                if (lastChallanObj.isOutstation) printOutstationChallan(lastChallanObj);
+                else printBatchChallan(lastChallanObj);
+            } else if (printType === 'slip' && lastChallanObj.isOutstation) {
+                printPackingSlip(lastChallanObj);
+            }
             renderScreen();
         } catch (err) {
             console.error('[JW-Trail] commitVchBatch error:', err);
@@ -841,12 +882,10 @@
         const newDate = toIsoDate(document.getElementById('jwt-eh-date')?.value) || oldRow.date;
         const isOut = safeInt(oldRow.gayiQty) > 0;
         const oldItems = isOut ? safeArr(oldRow.gayiItems) : safeArr(oldRow.aayiItems);
-
         if (!oldItems.length) return toast('Is legacy entry ke items edit nahi ho sakte.', true);
 
         const newItems = [];
-        let newTot = 0;
-        let newDmg = 0;
+        let newTot = 0, newDmg = 0;
 
         for (let i = 0; i < oldItems.length; i++) {
             const it = { ...oldItems[i] };
@@ -877,12 +916,8 @@
             it.qty = qVal;
             if (!isOut) {
                 const destEl = document.getElementById(`jwt-eh-dest-${i}`);
-                if (destEl) {
-                    it.destBucket = destEl.value;
-                    it.isDamage = (destEl.value === 'lott');
-                }
-                if (it.isDamage) newDmg += qVal;
-                else newTot += qVal;
+                if (destEl) { it.destBucket = destEl.value; it.isDamage = (destEl.value === 'lott'); }
+                if (it.isDamage) newDmg += qVal; else newTot += qVal;
             } else {
                 newTot += qVal;
             }
@@ -892,6 +927,10 @@
         const updatedRow = {
             ...oldRow,
             date: newDate,
+            jwNo: document.getElementById('jwt-eh-jwno') ? document.getElementById('jwt-eh-jwno').value.trim() : oldRow.jwNo,
+            transport: document.getElementById('jwt-eh-trans') ? document.getElementById('jwt-eh-trans').value.trim() : oldRow.transport,
+            lrNo: document.getElementById('jwt-eh-lr') ? document.getElementById('jwt-eh-lr').value.trim() : oldRow.lrNo,
+            designNote: document.getElementById('jwt-eh-design') ? document.getElementById('jwt-eh-design').value.trim() : oldRow.designNote,
             gayiQty: isOut ? newTot : 0,
             gayiItems: isOut ? newItems : [],
             aayiQty: isOut ? 0 : newTot,
@@ -954,39 +993,19 @@
             foBatch.forEach((it, idx) => {
                 const lType = legacyTypeFromTrail(it.doneStages, it.bucket);
                 const trTxt = formatTrail(it.doneStages, it.bucket);
-
                 sH.push({
                     id: `sh_fo_${challanId}_${idx}`,
                     refId: `${challanId}_${idx}`,
-                    date: dDate,
-                    sareeName: it.saree,
-                    karigerName: it.maker,
-                    kariger: it.maker,
-                    partyName: note,
-                    targetWorker: note,
-                    karkhanaId: it.karkhanaId,
-                    type: lType,
-                    typeLabel: `🚚 Final Out ➔ ${note} [${trTxt}]`,
-                    aai: 0,
-                    gai: it.qty,
-                    isOut: true,
-                    doneStages: [...it.doneStages],
-                    stageBucket: it.bucket,
-                    note,
-                    timestamp: now + idx
+                    date: dDate, sareeName: it.saree, karigerName: it.maker, kariger: it.maker,
+                    partyName: note, targetWorker: note, karkhanaId: it.karkhanaId,
+                    type: lType, typeLabel: `🚚 Final Out ➔ ${note} [${trTxt}]`,
+                    aai: 0, gai: it.qty, isOut: true,
+                    doneStages: [...it.doneStages], stageBucket: it.bucket, note, timestamp: now + idx
                 });
-
                 dukanHist.unshift({
-                    id: `${challanId}_${idx}`,
-                    date: dDate,
-                    sareeName: it.saree,
-                    karigerName: it.maker,
-                    pcs: it.qty,
-                    note: `${note} [${trTxt}]`,
-                    karkhanaId: it.karkhanaId,
-                    doneStages: [...it.doneStages],
-                    stageBucket: it.bucket,
-                    timestamp: now + idx
+                    id: `${challanId}_${idx}`, date: dDate, sareeName: it.saree, karigerName: it.maker,
+                    pcs: it.qty, note: `${note} [${trTxt}]`, karkhanaId: it.karkhanaId,
+                    doneStages: [...it.doneStages], stageBucket: it.bucket, timestamp: now + idx
                 });
             });
 
@@ -994,15 +1013,11 @@
             setStoreSafe('dukan_transfer_history', dukanHist);
 
             lastChallanObj = {
+                isOutstation: false,
                 title: 'FINAL OUT (DISPATCH CHALLAN)',
                 party: note,
                 date: dDate,
-                items: foBatch.map((x) => ({
-                    maker: x.maker,
-                    saree: x.saree,
-                    trail: formatTrail(x.doneStages, x.bucket),
-                    qty: x.qty
-                }))
+                items: foBatch.map((x) => ({ maker: x.maker, saree: x.saree, trail: formatTrail(x.doneStages, x.bucket), qty: x.qty }))
             };
 
             foBatch = [];
@@ -1013,15 +1028,10 @@
             foRightIdx = 0;
 
             invalidateAllCaches();
-            if (typeof window.renderDukanTransferTable === 'function') {
-                try { window.renderDukanTransferTable(); } catch (_) {}
-            }
+            if (typeof window.renderDukanTransferTable === 'function') { try { window.renderDukanTransferTable(); } catch (_) {} }
             toast('✅ Final Out Challan save ho gaya!');
             if (doPrint) printBatchChallan(lastChallanObj);
             renderScreen();
-        } catch (err) {
-            console.error('[JW-Trail] commitFinalOutBatch error:', err);
-            toast('Final Out save karne me error aaya!', true);
         } finally {
             isSaving = false;
         }
@@ -1083,28 +1093,142 @@
     };
 
     /* ========================================================================
-       8. A6 THERMAL PRINT ENGINE
+       8. PRINT ENGINE (OUTSTATION CHALLAN + PACKING SLIP + A6 SLIPS)
     ======================================================================== */
-    const openA6Window = (title, bodyHtml) => {
-        const pw = window.open('', '', 'width=440,height=600');
+    const openPrintWin = (title, css, bodyHtml, w = 520, h = 680) => {
+        const pw = window.open('', '', `width=${w},height=${h}`);
         if (!pw) return alert('Popup block hai! Kripya browser me allow karein.');
-        pw.document.write(`<html><head><title>${esc(title)}</title>
-            <style>
-                @page { size: A6 portrait; margin: 4mm; }
-                body { font-family: monospace, sans-serif; font-size: 11px; margin: 0; padding: 4mm; color: #000; }
-                .box { border: 1.5px dashed #000; padding: 8px; max-width: 92mm; margin: 0 auto; }
-                .hdr { text-align: center; border-bottom: 1.5px dashed #000; padding-bottom: 5px; margin-bottom: 6px; }
-                .hdr h3 { margin: 0; font-size: 14px; }
-                table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 6px 0; }
-                th, td { padding: 3px 2px; border-bottom: 1px dashed #ccc; text-align: left; }
-                th { border-top: 1px solid #000; border-bottom: 1px solid #000; }
-                .tot { background: #eee; border: 1px solid #000; text-align: center; font-size: 13px; font-weight: 900; padding: 5px; margin: 8px 0; }
-                .sign { display: flex; justify-content: space-between; margin-top: 20px; font-size: 10px; }
-            </style></head><body>
-            <div class="box">${bodyHtml}</div>
-            <script>window.onload=function(){window.focus();window.print();setTimeout(()=>window.close(),600);};<\/script>
-            </body></html>`);
+        pw.document.write(`<html><head><title>${esc(title)}</title><style>${css}</style></head><body>${bodyHtml}<script>window.onload=function(){window.focus();window.print();setTimeout(()=>window.close(),600);};<\/script></body></html>`);
         pw.document.close();
+    };
+
+    // A. OUTSTATION JOBWORK CHALLAN / BILL (FROM + TO + GST + SAREE DETAIL + DESIGN)
+    const printOutstationChallan = (c) => {
+        if (!c || !c.sareeRows || !c.sareeRows.length) return toast('Print karne ke liye data nahi hai.', true);
+        const rowsHtml = c.sareeRows.map((r, i) => `
+            <tr>
+                <td style="width:42px;">${i + 1}</td>
+                <td><strong>${esc(r.saree)}</strong></td>
+                <td style="text-align:right; font-weight:800;">${r.pcs}</td>
+            </tr>`).join('');
+
+        const css = `
+            @page { size: A5 portrait; margin: 7mm; }
+            * { box-sizing: border-box; font-family: 'Segoe UI', Arial, sans-serif; }
+            body { margin: 0; padding: 6px; color: #111; }
+            .wrap { border: 2px solid #111; padding: 14px; }
+            .head { display: flex; justify-content: space-between; border-bottom: 2px solid #111; padding-bottom: 6px; margin-bottom: 10px; }
+            .head h2 { margin: 0; font-size: 16px; font-weight: 900; }
+            .pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+            .pbox { border: 1.5px solid #111; padding: 7px 9px; font-size: 11.5px; line-height: 1.45; }
+            .pbox small { display: block; font-size: 9.5px; font-weight: 800; text-transform: uppercase; border-bottom: 1px dashed #888; margin-bottom: 3px; padding-bottom: 2px; }
+            .tr { border: 1.5px solid #111; background: #f9fafb; padding: 5px 9px; font-size: 11.5px; margin-bottom: 10px; display: flex; justify-content: space-between; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 10px; }
+            th, td { border: 1px solid #111; padding: 6px 7px; text-align: left; }
+            th { background: #f3f4f6; font-size: 11px; text-transform: uppercase; }
+            .tot td { background: #f3f4f6; font-weight: 900; font-size: 13px; border-top: 2px solid #111; }
+            .dbox { border: 1.5px dashed #111; padding: 8px 10px; font-size: 12px; margin-bottom: 18px; }
+            .sign { display: flex; justify-content: space-between; margin-top: 26px; font-size: 11px; font-weight: 700; }
+        `;
+        const html = `
+            <div class="wrap">
+                <div class="head">
+                    <div><h2>JOB WORK CHALLAN</h2><small>${esc(c.groupLabel)} Dispatch</small></div>
+                    <div style="text-align:right; font-size:11.5px; line-height:1.45;">
+                        <div><strong>JobWork No.:</strong> ${esc(c.jwNo)}</div>
+                        <div><strong>Date:</strong> ${esc(fmtDate(c.date))}</div>
+                    </div>
+                </div>
+                <div class="pgrid">
+                    <div class="pbox">
+                        <small>From (Sender)</small>
+                        <strong>${esc(c.firm.name)}</strong><br>
+                        ${c.firm.address ? `${esc(c.firm.address)}<br>` : ''}
+                        ${c.firm.mobile ? `Mob: ${esc(c.firm.mobile)}<br>` : ''}
+                        ${c.firm.gst ? `<strong>GSTIN:</strong> ${esc(c.firm.gst)}` : ''}
+                    </div>
+                    <div class="pbox">
+                        <small>To (Job Worker)</small>
+                        <strong>${esc(c.worker.name)}</strong><br>
+                        ${c.worker.address ? `${esc(c.worker.address)}<br>` : ''}
+                        ${c.worker.mobile ? `Mob: ${esc(c.worker.mobile)}<br>` : ''}
+                        ${c.worker.gst ? `<strong>GSTIN:</strong> ${esc(c.worker.gst)}` : ''}
+                    </div>
+                </div>
+                <div class="tr">
+                    <span><strong>Transport:</strong> ${esc(c.transport)}</span>
+                    <span><strong>L.R. / Bale:</strong> ${esc(c.lrNo)}</span>
+                </div>
+                <table>
+                    <thead><tr><th>Sr.</th><th>Saree Name / Quality</th><th style="text-align:right; width:85px;">Pcs</th></tr></thead>
+                    <tbody>
+                        ${rowsHtml}
+                        <tr class="tot"><td colspan="2" style="text-align:right;">TOTAL SAREE :</td><td style="text-align:right;">${c.totalPcs} Pcs</td></tr>
+                    </tbody>
+                </table>
+                <div class="dbox"><strong>Design / Work Detail:</strong><br>${esc(c.designNote)}</div>
+                <div class="sign"><span>Checked By: ___________</span><span>Receiver Sign: ___________</span></div>
+            </div>
+        `;
+        openPrintWin(`Challan-${c.jwNo}`, css, html, 680, 760);
+    };
+
+    // B. PACKING SLIP (NO SAREE DETAIL — STRICTLY TO, FROM, JW NO, TRANSPORT, TOTAL PCS, DESIGN)
+    const printPackingSlip = (c) => {
+        if (!c) return toast('Packing slip ke liye data nahi hai.', true);
+        const css = `
+            @page { size: A6 portrait; margin: 4mm; }
+            body { font-family: monospace, sans-serif; font-size: 11.5px; margin: 0; padding: 4mm; color: #000; }
+            .slip { border: 2.5px dashed #000; padding: 10px; max-width: 92mm; margin: 0 auto; }
+            .shdr { text-align: center; border-bottom: 2px dashed #000; padding-bottom: 5px; margin-bottom: 8px; }
+            .shdr h3 { margin: 0; font-size: 15px; }
+            .tobox { border: 2px solid #000; padding: 7px; margin-bottom: 7px; font-size: 12px; line-height: 1.4; }
+            .frombox { border-bottom: 1px dashed #000; padding-bottom: 6px; margin-bottom: 7px; font-size: 11px; line-height: 1.4; }
+            .info { font-size: 11.5px; line-height: 1.55; margin-bottom: 7px; }
+            .tot { background: #eee; border: 2px solid #000; text-align: center; font-size: 16px; font-weight: 900; padding: 6px; margin: 8px 0; }
+            .dbox { border: 1.5px solid #000; padding: 6px; font-size: 11.5px; font-weight: 700; }
+        `;
+        const html = `
+            <div class="slip">
+                <div class="shdr"><h3>PACKING SLIP</h3><div>${esc(c.groupLabel.toUpperCase())} PARCEL</div></div>
+                <div class="tobox">
+                    <div style="font-size:10px; font-weight:bold;">TO (DELIVERY):</div>
+                    <strong style="font-size:14px;">${esc(c.worker.name)}</strong><br>
+                    ${c.worker.address ? `${esc(c.worker.address)}<br>` : ''}
+                    ${c.worker.mobile ? `Mob: ${esc(c.worker.mobile)}<br>` : ''}
+                    ${c.worker.gst ? `GSTIN: ${esc(c.worker.gst)}` : ''}
+                </div>
+                <div class="frombox">
+                    <strong>FROM:</strong> ${esc(c.firm.name)}${c.firm.address ? `, ${esc(c.firm.address)}` : ''}<br>
+                    ${c.firm.mobile ? `Mob: ${esc(c.firm.mobile)}` : ''} ${c.firm.gst ? `| GST: ${esc(c.firm.gst)}` : ''}
+                </div>
+                <div class="info">
+                    <div><strong>JobWork No.:</strong> ${esc(c.jwNo)}</div>
+                    <div><strong>Date:</strong> ${esc(fmtDate(c.date))}</div>
+                    <div><strong>Transport:</strong> ${esc(c.transport)}</div>
+                    <div><strong>L.R. / Bale:</strong> ${esc(c.lrNo)}</div>
+                </div>
+                <div class="tot">TOTAL: ${c.totalPcs} PCS</div>
+                <div class="dbox">DESIGN: ${esc(c.designNote)}</div>
+            </div>
+        `;
+        openPrintWin(`PackingSlip-${c.jwNo}`, css, html, 420, 560);
+    };
+
+    const openA6Window = (title, bodyHtml) => {
+        const css = `
+            @page { size: A6 portrait; margin: 4mm; }
+            body { font-family: monospace, sans-serif; font-size: 11px; margin: 0; padding: 4mm; color: #000; }
+            .box { border: 1.5px dashed #000; padding: 8px; max-width: 92mm; margin: 0 auto; }
+            .hdr { text-align: center; border-bottom: 1.5px dashed #000; padding-bottom: 5px; margin-bottom: 6px; }
+            .hdr h3 { margin: 0; font-size: 14px; }
+            table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 6px 0; }
+            th, td { padding: 3px 2px; border-bottom: 1px dashed #ccc; text-align: left; }
+            th { border-top: 1px solid #000; border-bottom: 1px solid #000; }
+            .tot { background: #eee; border: 1px solid #000; text-align: center; font-size: 13px; font-weight: 900; padding: 5px; margin: 8px 0; }
+            .sign { display: flex; justify-content: space-between; margin-top: 20px; font-size: 10px; }
+        `;
+        openPrintWin(title, css, `<div class="box">${bodyHtml}</div>`, 440, 600);
     };
 
     const printBatchChallan = (c) => {
@@ -1112,12 +1236,7 @@
         let tot = 0;
         const rowsHtml = c.items.map((it, i) => {
             tot += safeInt(it.qty);
-            return `<tr>
-                <td>${i + 1}</td>
-                <td><strong>${esc(it.maker)}</strong></td>
-                <td>${esc(it.saree)}<br><small>${esc(it.trail)}</small></td>
-                <td style="text-align:right; font-weight:bold;">${it.qty}</td>
-            </tr>`;
+            return `<tr><td>${i + 1}</td><td><strong>${esc(it.maker)}</strong></td><td>${esc(it.saree)}<br><small>${esc(it.trail)}</small></td><td style="text-align:right; font-weight:bold;">${it.qty}</td></tr>`;
         }).join('');
         openA6Window('Challan A6', `
             <div class="hdr"><h3>SIMPLICITY ERP</h3><div>${esc(c.title)}</div></div>
@@ -1129,16 +1248,31 @@
         `);
     };
 
-    window.jwtPrintLastChallan = () => printBatchChallan(lastChallanObj);
+    window.jwtPrintLastChallan = () => {
+        if (!lastChallanObj) return toast('Abhi koi batch save nahi hua hai.', true);
+        if (lastChallanObj.isOutstation) printOutstationChallan(lastChallanObj);
+        else printBatchChallan(lastChallanObj);
+    };
+    window.jwtPrintLastPackingSlip = () => {
+        if (!lastChallanObj || !lastChallanObj.isOutstation) return toast('Pehle Outstation Challan save karein.', true);
+        printPackingSlip(lastChallanObj);
+    };
 
-    window.jwtPrintWorkerRow = (sheetId, rowId) => {
+    window.jwtPrintWorkerRow = (sheetId, rowId, mode = 'challan') => {
         const snap = getSnapshot();
         const w = snap.workers.find((x) => x.id === activeWorkerId);
         const sheets = safeArr(getStoreSafe(`jobwork_sheets_${activeWorkerId}`));
         const sh = sheets.find((s) => String(s.id) === String(sheetId));
         const r = sh ? safeArr(sh.rows).find((x) => String(x.id) === String(rowId)) : null;
         if (!w || !r) return;
+
         const isOut = safeInt(r.gayiQty) > 0;
+        if (isOut && (r.isOutstation || getGroupObj(w.group).outstation)) {
+            const payload = buildOutstationPayloadFromRow(w, r);
+            if (mode === 'slip') return printPackingSlip(payload);
+            return printOutstationChallan(payload);
+        }
+
         const items = isOut ? safeArr(r.gayiItems) : safeArr(r.aayiItems);
         printBatchChallan({
             title: `${grpLabel(w.group).toUpperCase()} ${isOut ? 'OUT (GAYI)' : 'IN (WAPAS AAYI)'}`,
@@ -1188,10 +1322,7 @@
 
     window.jwtPrintCurrentScreen = () => {
         const snap = getSnapshot();
-        if (curView === 'jw-voucher' || curView === 'final-out') {
-            if (lastChallanObj) return printBatchChallan(lastChallanObj);
-            return toast('Abhi koi batch save nahi hua hai.', true);
-        }
+        if (curView === 'jw-voucher' || curView === 'final-out') return window.jwtPrintLastChallan();
         if (curView === 'jw-worker-hist' || curView === 'owner-worker-detail') {
             return window.jwtPrintWorkerStatement(curView === 'owner-worker-detail' ? ownerWorkerId : activeWorkerId);
         }
@@ -1211,9 +1342,7 @@
                 <div class="tot">GODAM TOTAL: ${snap.totals.raw + snap.totals.finished + snap.totals.lott} Pcs</div>
             `);
         }
-        if (curView === 'bill-detail' && activeBillId) {
-            return window.jwtPrintBillReceipt(activeBillId);
-        }
+        if (curView === 'bill-detail' && activeBillId) return window.jwtPrintBillReceipt(activeBillId);
     };
 
     window.jwtPrintBillReceipt = (billId) => {
@@ -1225,13 +1354,11 @@
             <div><strong>Bill No:</strong> ${esc(b.billNo || '-')}</div>
             <div><strong>Worker:</strong> ${esc(b.workerName)} (${esc(grpLabel(b.workType || 'cutting'))})</div>
             <div><strong>Tarikh:</strong> ${esc(fmtDate(b.date))}</div>
-            <table>
-                <tbody>
-                    <tr><td>Saree Pcs</td><td style="text-align:right;">${safeInt(b.pcs)} Pcs</td></tr>
-                    <tr><td>Total Bill</td><td style="text-align:right;">₹ ${safeNum(b.billAmt).toFixed(2)}</td></tr>
-                    <tr><td>Paid Amount</td><td style="text-align:right;">₹ ${safeNum(b.paidAmt).toFixed(2)}</td></tr>
-                </tbody>
-            </table>
+            <table><tbody>
+                <tr><td>Saree Pcs</td><td style="text-align:right;">${safeInt(b.pcs)} Pcs</td></tr>
+                <tr><td>Total Bill</td><td style="text-align:right;">₹ ${safeNum(b.billAmt).toFixed(2)}</td></tr>
+                <tr><td>Paid Amount</td><td style="text-align:right;">₹ ${safeNum(b.paidAmt).toFixed(2)}</td></tr>
+            </tbody></table>
             <div class="tot">${baki > 0 ? `BAKI HAI: ₹ ${baki.toFixed(2)}` : 'STATUS: PAID / CHUKTA'}</div>
         `);
     };
@@ -1264,11 +1391,9 @@
         st.id = 'jwt-styles';
         st.textContent = `
             #jw-trail-section {
-                padding: 0 !important;
-                overflow: hidden;
+                padding: 0 !important; overflow: hidden;
                 font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
-                color: #1f2937;
-                background: #ffffff;
+                color: #1f2937; background: #ffffff;
             }
             #jw-trail-section * { box-sizing: border-box; }
             #jw-trail-section .jwt-topbar {
@@ -1326,27 +1451,15 @@
             #jw-trail-section .jwt-menu-val { font-size: 11.5px; color: #6b7280; font-weight: 700; }
             #jw-trail-section .jwt-menu-item.active .jwt-menu-val { color: #1f2937; }
 
-            #jw-trail-section .jwt-kpi-5 {
-                display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
-                border-bottom: 1.5px solid #e5d5a7; background: #fdfcf7;
-            }
-            #jw-trail-section .jwt-kpi-3 {
-                display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
-                border-bottom: 1.5px solid #e5d5a7; background: #fdfcf7;
-            }
+            #jw-trail-section .jwt-kpi-5 { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-bottom: 1.5px solid #e5d5a7; background: #fdfcf7; }
+            #jw-trail-section .jwt-kpi-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1.5px solid #e5d5a7; background: #fdfcf7; }
             #jw-trail-section .jwt-kpi-cell { padding: 9px 14px; border-right: 1px solid #e5d5a7; }
             #jw-trail-section .jwt-kpi-cell:last-child { border-right: none; background: #fdf6e2; }
             #jw-trail-section .jwt-kpi-cell small { display: block; font-size: 11px; color: #6b7280; font-weight: 700; }
             #jw-trail-section .jwt-kpi-cell strong { display: block; font-size: 16px; color: #b47d00; font-weight: 900; margin-top: 2px; }
 
-            #jw-trail-section table {
-                width: 100%; min-width: 0 !important; border-collapse: collapse;
-                border: 1px solid #e5d5a7; font-size: 12px; background: #fff;
-            }
-            #jw-trail-section th {
-                background: #fdf6e2; color: #1f2937; font-size: 11px; font-weight: 800;
-                padding: 7px 9px; text-align: left; border-bottom: 1.5px solid #e5d5a7;
-            }
+            #jw-trail-section table { width: 100%; min-width: 0 !important; border-collapse: collapse; border: 1px solid #e5d5a7; font-size: 12px; background: #fff; }
+            #jw-trail-section th { background: #fdf6e2; color: #1f2937; font-size: 11px; font-weight: 800; padding: 7px 9px; text-align: left; border-bottom: 1.5px solid #e5d5a7; }
             #jw-trail-section td { padding: 7px 9px; border-bottom: 1px solid #f3f4f6; color: #1f2937; vertical-align: middle; }
             #jw-trail-section tr.jwt-row { cursor: pointer; }
             #jw-trail-section tr.jwt-row:hover { background: #fef9ea; }
@@ -1361,24 +1474,15 @@
             #jw-trail-section .jwt-split { display: grid; grid-template-columns: minmax(0, 0.95fr) minmax(380px, 1.05fr); }
             #jw-trail-section .jwt-pane-l { padding: 12px 14px; border-right: 1.5px solid #e5d5a7; }
             #jw-trail-section .jwt-pane-r { padding: 10px 12px; background: #fdfcf7; }
-            #jw-trail-section .jwt-frow {
-                display: grid; grid-template-columns: 128px minmax(0, 1fr);
-                align-items: center; gap: 8px; margin-bottom: 6px;
-            }
+            #jw-trail-section .jwt-frow { display: grid; grid-template-columns: 125px minmax(0, 1fr); align-items: center; gap: 8px; margin-bottom: 6px; }
             #jw-trail-section .jwt-frow label { font-size: 11.5px; font-weight: 700; color: #374151; }
             #jw-trail-section .jwt-inp {
                 width: 100%; padding: 5px 8px; border: 1px solid #d1d5db; border-radius: 4px;
                 font-size: 12.5px; font-weight: 700; color: #111827; background: #fff; outline: none;
             }
-            #jw-trail-section .jwt-inp:focus {
-                border-color: #d9a425; background: #fffdf5;
-                box-shadow: 0 0 0 2px rgba(242,183,29,0.22);
-            }
+            #jw-trail-section .jwt-inp:focus { border-color: #d9a425; background: #fffdf5; box-shadow: 0 0 0 2px rgba(242,183,29,0.22); }
             #jw-trail-section .jwt-sidebox { border: 1.5px solid #d9b86c; border-radius: 5px; background: #fff; overflow: hidden; }
-            #jw-trail-section .jwt-sidebox-head {
-                background: #fdf6e2; border-bottom: 1.5px solid #e5d5a7; padding: 7px 10px;
-                font-size: 12px; font-weight: 800; color: #1f2937; display: flex; justify-content: space-between;
-            }
+            #jw-trail-section .jwt-sidebox-head { background: #fdf6e2; border-bottom: 1.5px solid #e5d5a7; padding: 7px 10px; font-size: 12px; font-weight: 800; color: #1f2937; display: flex; justify-content: space-between; }
             #jw-trail-section .jwt-side-list-big { max-height: 430px; overflow-y: auto; }
             #jw-trail-section .jwt-side-opt {
                 padding: 9px 11px; border-bottom: 1px solid #f3f4f6; cursor: pointer;
@@ -1388,28 +1492,13 @@
             #jw-trail-section .jwt-side-opt.active { background: #f2b71d !important; font-weight: 700; }
             #jw-trail-section .jwt-accept-bar {
                 background: #fdf6e2; border: 1.5px solid #d9a425; border-radius: 5px;
-                padding: 7px 12px; margin-top: 8px; display: flex; justify-content: space-between;
-                align-items: center; gap: 8px; flex-wrap: wrap;
+                padding: 7px 12px; margin-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;
             }
-            #jw-trail-section .jwt-subnav {
-                display: flex; gap: 14px; padding: 0 16px; border-bottom: 1.5px solid #e5d5a7;
-                background: #fdfcf7; overflow-x: auto;
-            }
-            #jw-trail-section .jwt-tab {
-                background: none; border: none; border-bottom: 2.5px solid transparent;
-                padding: 8px 4px; font-size: 12px; font-weight: 700; color: #6b7280; cursor: pointer; white-space: nowrap;
-            }
+            #jw-trail-section .jwt-subnav { display: flex; gap: 14px; padding: 0 16px; border-bottom: 1.5px solid #e5d5a7; background: #fdfcf7; overflow-x: auto; }
+            #jw-trail-section .jwt-tab { background: none; border: none; border-bottom: 2.5px solid transparent; padding: 8px 4px; font-size: 12px; font-weight: 700; color: #6b7280; cursor: pointer; white-space: nowrap; }
             #jw-trail-section .jwt-tab.active { color: #1f2937; border-bottom-color: #d9a425; font-weight: 800; }
-            #jw-trail-section .jwt-footer {
-                background: #fdf6e2; border-top: 1px solid #e5d5a7; padding: 7px 16px;
-                display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
-                font-size: 11px; color: #92400e; font-weight: 700;
-            }
-            #jwt-toast {
-                position: fixed; bottom: 16px; right: 16px; z-index: 999999;
-                padding: 9px 16px; border-radius: 6px; font-size: 12.5px; font-weight: 700;
-                display: none; box-shadow: 0 8px 20px rgba(0,0,0,0.28);
-            }
+            #jw-trail-section .jwt-footer { background: #fdf6e2; border-top: 1px solid #e5d5a7; padding: 7px 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 11px; color: #92400e; font-weight: 700; }
+            #jwt-toast { position: fixed; bottom: 16px; right: 16px; z-index: 999999; padding: 9px 16px; border-radius: 6px; font-size: 12.5px; font-weight: 700; display: none; box-shadow: 0 8px 20px rgba(0,0,0,0.28); }
             @media (max-width: 860px) {
                 #jw-trail-section .jwt-split { grid-template-columns: 1fr; }
                 #jw-trail-section .jwt-pane-l { border-right: none; border-bottom: 1.5px solid #e5d5a7; }
@@ -1494,6 +1583,7 @@
             if (!body) return;
             const snap = getSnapshot();
 
+            // 1. GATEWAY
             if (curView === 'gateway') {
                 setTopHeader('JobWork Hub', '← [Esc] Dashboard', '[↑ ↓] + [Enter] · [Esc] Dashboard', false);
                 const items = [
@@ -1520,11 +1610,14 @@
                 return;
             }
 
+            // 2. CREATE MENU (WORKER / GROUP / FIRM PROFILE)
             if (curView === 'create-menu') {
-                setTopHeader('Create (Worker / Group)', '← [Esc] Gateway');
+                setTopHeader('Create (Worker / Group / Firm)', '← [Esc] Gateway');
+                const firm = getFirmProfile();
                 const opts = [
                     { label: '1. Create JobWorker', val: `${snap.workers.length} Workers`, action: "menuIdx=0; jwtOpenCreateWorker()" },
-                    { label: '2. Create New Work Group', val: `${snap.groups.length} Groups`, action: "menuIdx=1; jwtOpenCreateGroup()" }
+                    { label: '2. Create New Work Group', val: `${snap.groups.length} Groups`, action: "menuIdx=1; jwtOpenCreateGroup()" },
+                    { label: '3. Firm Profile (From Name, Address, GST)', val: firm.name, action: "menuIdx=2; jwtGo('firm-profile')" }
                 ];
                 if (menuIdx >= opts.length || menuIdx < 0) menuIdx = 0;
                 body.innerHTML = `<div style="padding:10px 16px;"><div class="jwt-menu-shell">
@@ -1535,6 +1628,42 @@
                 return;
             }
 
+            // FIRM PROFILE (FROM + GST NO.)
+            if (curView === 'firm-profile') {
+                const f = getFirmProfile();
+                setTopHeader('Firm Profile (Challan From & GST)', '← [Esc] Back');
+                crAcceptOpen = false;
+                body.innerHTML = `<div style="padding:16px; max-width:540px;">
+                    <div class="jwt-frow"><label>Firm Name (From) :</label><input type="text" id="jwt-fm-name" class="jwt-inp" value="${esc(f.name)}" placeholder="e.g. INDIAN FABRICS"></div>
+                    <div class="jwt-frow"><label>Address :</label><input type="text" id="jwt-fm-addr" class="jwt-inp" value="${esc(f.address)}" placeholder="e.g. Madanpura, Varanasi"></div>
+                    <div class="jwt-frow"><label>Mobile No. :</label><input type="tel" id="jwt-fm-mob" class="jwt-inp" value="${esc(f.mobile)}" placeholder="Mobile No."></div>
+                    <div class="jwt-frow"><label>GST No. (GSTIN) :</label><input type="text" id="jwt-fm-gst" class="jwt-inp" value="${esc(f.gst)}" placeholder="e.g. 09ABCDE1234F1Z5"></div>
+                    <div id="jwt-cr-accept" class="jwt-accept-bar" style="display:none;">
+                        <strong style="font-size:12px;">Accept? Firm Details Save Karein?</strong>
+                        <div style="display:flex; gap:6px;">
+                            <button type="button" id="jwt-cr-yes" class="jwt-save" onclick="jwtSaveFirmProfile()">Yes [Y / Enter]</button>
+                            <button type="button" class="jwt-esc" onclick="jwtCancelCrAccept()">No [N / Esc]</button>
+                        </div>
+                    </div>
+                    <div style="text-align:right; margin-top:10px;"><button type="button" class="jwt-save" onclick="jwtAskCrAccept()">Save Firm [Enter]</button></div>
+                </div>`;
+                const order = ['jwt-fm-name', 'jwt-fm-addr', 'jwt-fm-mob', 'jwt-fm-gst'];
+                order.forEach((id, i) => {
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    el.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            if (i < order.length - 1) document.getElementById(order[i + 1])?.focus();
+                            else jwtAskCrAccept();
+                        }
+                    });
+                });
+                setTimeout(() => document.getElementById('jwt-fm-name')?.focus(), 25);
+                return;
+            }
+
+            // 2A. CREATE JOBWORKER (WITH GST NO.)
             if (curView === 'create-worker') {
                 setTopHeader('Create JobWorker', '← [Esc] Create Menu', '[Enter] Agla Box · [↑↓] Group Chunein · [Esc] Back');
                 const groups = snap.groups;
@@ -1544,10 +1673,11 @@
 
                 body.innerHTML = `<div class="jwt-split">
                     <div class="jwt-pane-l">
-                        <div class="jwt-frow"><label>Worker Name :</label><input type="text" id="jwt-cw-name" class="jwt-inp" placeholder="e.g. ASLAM BHAI"></div>
+                        <div class="jwt-frow"><label>Worker / Party Name :</label><input type="text" id="jwt-cw-name" class="jwt-inp" placeholder="e.g. G K FABRICS"></div>
                         <div class="jwt-frow"><label>Under (Work Group) :</label><input type="text" id="jwt-cw-grp" class="jwt-inp" readonly value="${esc(grpLabel(selectedCreateGroupKey))}"></div>
                         <div class="jwt-frow"><label>Mobile No. :</label><input type="tel" id="jwt-cw-mob" maxlength="10" class="jwt-inp" placeholder="10-digit Mobile"></div>
-                        <div class="jwt-frow"><label>Address / Mohalla :</label><input type="text" id="jwt-cw-addr" class="jwt-inp" placeholder="e.g. Alaipura, Varanasi"></div>
+                        <div class="jwt-frow"><label>Address / City :</label><input type="text" id="jwt-cw-addr" class="jwt-inp" placeholder="e.g. Ring Road, Surat"></div>
+                        <div class="jwt-frow"><label>GST No. (Optional) :</label><input type="text" id="jwt-cw-gst" class="jwt-inp" placeholder="e.g. 24ABCDE1234F1Z5"></div>
                         <div class="jwt-frow"><label>Join Date :</label><input type="date" id="jwt-cw-date" class="jwt-inp" value="${getTodayIso()}"></div>
                         <div id="jwt-cr-accept" class="jwt-accept-bar" style="display:none;">
                             <strong style="font-size:12px;">Accept? Worker Save Karein?</strong>
@@ -1563,7 +1693,7 @@
                             <div class="jwt-sidebox-head"><span>List of Work Groups</span><small>${groups.length}</small></div>
                             <div id="jwt-cw-side-list" class="jwt-side-list-big">${groups.map((g, i) => `
                                 <div class="jwt-side-opt ${i === createSideIdx ? 'active' : ''}" onmousedown="event.preventDefault(); jwtPickCwGroup(${i})">
-                                    <span>${esc(g.label)}</span><small>JobWork</small>
+                                    <span>${esc(g.label)}</span><small>${g.outstation ? 'Bill+Slip' : 'JobWork'}</small>
                                 </div>`).join('')}
                             </div>
                         </div>
@@ -1574,13 +1704,19 @@
                 return;
             }
 
+            // 2B. CREATE NEW WORK GROUP (WITH OUTSTATION TICK)
             if (curView === 'create-group') {
                 setTopHeader('Create New Work Group', '← [Esc] Create Menu');
                 crAcceptOpen = false;
                 body.innerHTML = `<div class="jwt-split">
                     <div class="jwt-pane-l">
-                        <div class="jwt-frow"><label>Work Group Name :</label><input type="text" id="jwt-cg-name" class="jwt-inp" placeholder="e.g. Jhalar, Stone, Tassel"></div>
-                        <div style="font-size:11.5px; color:#6b7280; margin:6px 0 12px;">Save karte hi yeh group poore software me automatic jud jayega.</div>
+                        <div class="jwt-frow"><label>Work Group Name :</label><input type="text" id="jwt-cg-name" class="jwt-inp" placeholder="e.g. Swarovski, Jhalar, Stone"></div>
+                        <div style="margin:8px 0 10px; background:#fdfcf7; border:1px solid #e5d5a7; border-radius:5px; padding:8px 10px;">
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12px; font-weight:700;">
+                                <input type="checkbox" id="jwt-cg-outstation">
+                                Outstation Bill + Packing Slip Chahiye (Transport, JW No., Design)
+                            </label>
+                        </div>
                         <div id="jwt-cr-accept" class="jwt-accept-bar" style="display:none;">
                             <strong style="font-size:12px;">Accept? Naya Group Save Karein?</strong>
                             <div style="display:flex; gap:6px;">
@@ -1593,7 +1729,7 @@
                     <div class="jwt-pane-r">
                         <div class="jwt-sidebox">
                             <div class="jwt-sidebox-head"><span>Existing Work Groups</span><small>${snap.groups.length}</small></div>
-                            <div class="jwt-side-list-big">${snap.groups.map((g) => `<div class="jwt-side-opt"><span>${esc(g.label)}</span><small>Active</small></div>`).join('')}</div>
+                            <div class="jwt-side-list-big">${snap.groups.map((g) => `<div class="jwt-side-opt"><span>${esc(g.label)}</span><small>${g.outstation ? 'Bill+Slip' : 'Active'}</small></div>`).join('')}</div>
                         </div>
                     </div>
                 </div>`;
@@ -1605,11 +1741,14 @@
                 return;
             }
 
+            // 3. ALTER MENU
             if (curView === 'alter-menu') {
-                setTopHeader('Alter (Worker / Group)', '← [Esc] Gateway');
+                setTopHeader('Alter (Worker / Group / Firm)', '← [Esc] Gateway');
+                const firm = getFirmProfile();
                 const opts = [
-                    { label: '1. Alter JobWorker (Edit / Delete)', val: `${snap.workers.length} Workers`, action: "menuIdx=0; jwtGo('alter-worker-list')" },
-                    { label: '2. Alter JobWork Group (Rename / Delete)', val: `${snap.groups.length} Groups`, action: "menuIdx=1; jwtGo('alter-group-list')" }
+                    { label: '1. Alter JobWorker (Edit / Delete / GST)', val: `${snap.workers.length} Workers`, action: "menuIdx=0; jwtGo('alter-worker-list')" },
+                    { label: '2. Alter JobWork Group (Rename / Outstation / Delete)', val: `${snap.groups.length} Groups`, action: "menuIdx=1; jwtGo('alter-group-list')" },
+                    { label: '3. Alter Firm Profile (From Name, Address, GST)', val: firm.name, action: "menuIdx=2; jwtGo('firm-profile')" }
                 ];
                 if (menuIdx >= opts.length || menuIdx < 0) menuIdx = 0;
                 body.innerHTML = `<div style="padding:10px 16px;"><div class="jwt-menu-shell">
@@ -1623,7 +1762,7 @@
             if (curView === 'alter-worker-list') {
                 setTopHeader('Alter JobWorker — List', '← [Esc] Alter Menu', '[↑ ↓] Chunein · [Enter] Edit / Delete · [/] Search');
                 const q = (document.getElementById('jwt-aw-search')?.value || '').trim().toLowerCase();
-                const list = snap.workers.filter((w) => !q || `${w.name} ${grpLabel(w.group)} ${w.mobile} ${w.address}`.toLowerCase().includes(q));
+                const list = snap.workers.filter((w) => !q || `${w.name} ${grpLabel(w.group)} ${w.mobile} ${w.address} ${w.gst}`.toLowerCase().includes(q));
                 if (menuIdx >= list.length || menuIdx < 0) menuIdx = Math.max(0, list.length - 1);
 
                 body.innerHTML = `<div style="padding:12px 16px;">
@@ -1633,7 +1772,7 @@
                         <tbody>
                             ${list.length ? list.map((w, i) => `
                                 <tr class="jwt-row ${i === menuIdx ? 'active' : ''}" onclick="menuIdx=${i}; jwtOpenAlterWorkerEdit('${esc(w.id)}')">
-                                    <td><strong>${esc(w.name)}</strong></td>
+                                    <td><strong>${esc(w.name)}</strong>${w.gst ? `<div class="trail-muted">GST: ${esc(w.gst)}</div>` : ''}</td>
                                     <td>${esc(grpLabel(w.group))}</td>
                                     <td>${esc(w.mobile || '-')} &middot; ${esc(w.address || '-')}</td>
                                     <td class="gold-num">${w.pending} Pcs</td>
@@ -1655,14 +1794,15 @@
 
                 body.innerHTML = `<div class="jwt-split">
                     <div class="jwt-pane-l">
-                        <div class="jwt-frow"><label>Worker Name :</label><input type="text" id="jwt-ew-name" class="jwt-inp" value="${esc(w.name)}"></div>
+                        <div class="jwt-frow"><label>Worker / Party Name :</label><input type="text" id="jwt-ew-name" class="jwt-inp" value="${esc(w.name)}"></div>
                         <div class="jwt-frow"><label>Work Group :</label>
                             <select id="jwt-ew-grp" class="jwt-inp">
                                 ${groups.map((g) => `<option value="${esc(g.key)}" ${g.key === w.group ? 'selected' : ''}>${esc(g.label)}</option>`).join('')}
                             </select>
                         </div>
                         <div class="jwt-frow"><label>Mobile No. :</label><input type="tel" id="jwt-ew-mob" maxlength="10" class="jwt-inp" value="${esc(w.mobile)}"></div>
-                        <div class="jwt-frow"><label>Address :</label><input type="text" id="jwt-ew-addr" class="jwt-inp" value="${esc(w.address)}"></div>
+                        <div class="jwt-frow"><label>Address / City :</label><input type="text" id="jwt-ew-addr" class="jwt-inp" value="${esc(w.address)}"></div>
+                        <div class="jwt-frow"><label>GST No. :</label><input type="text" id="jwt-ew-gst" class="jwt-inp" value="${esc(w.gst)}" placeholder="GSTIN"></div>
                         <div class="jwt-frow"><label>Join Date :</label><input type="date" id="jwt-ew-date" class="jwt-inp" value="${esc(toIsoDate(w.date) || getTodayIso())}"></div>
                         <div id="jwt-cr-accept" class="jwt-accept-bar" style="display:none;">
                             <strong style="font-size:12px;">Accept? Worker Update Karein?</strong>
@@ -1701,7 +1841,8 @@
                     ${groups.map((g, i) => {
                         const wc = snap.workers.filter((w) => w.group === g.key).length;
                         return `<button type="button" class="jwt-menu-item ${i === menuIdx ? 'active' : ''}" onclick="menuIdx=${i}; jwtOpenAlterGroupEdit('${esc(g.key)}')">
-                            <span>${esc(g.label)}</span><span class="jwt-menu-val">${wc} Workers</span>
+                            <span>${esc(g.label)} ${g.outstation ? '<small class="trail">[Bill+Slip]</small>' : ''}</span>
+                            <span class="jwt-menu-val">${wc} Workers</span>
                         </button>`;
                     }).join('')}
                     <div class="jwt-footer"><span>[&uarr; &darr;] + [Enter]</span><span>[Esc] Alter Menu</span></div>
@@ -1718,6 +1859,12 @@
 
                 body.innerHTML = `<div style="padding:16px; max-width:540px;">
                     <div class="jwt-frow"><label>Group Name :</label><input type="text" id="jwt-eg-name" class="jwt-inp" value="${esc(g.label)}"></div>
+                    <div style="margin:8px 0 10px; background:#fdfcf7; border:1px solid #e5d5a7; border-radius:5px; padding:8px 10px;">
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12px; font-weight:700;">
+                            <input type="checkbox" id="jwt-eg-outstation" ${g.outstation ? 'checked' : ''}>
+                            Outstation Bill + Packing Slip Chahiye (Transport, JW No., Design)
+                        </label>
+                    </div>
                     <div style="font-size:12px; color:#6b7280; margin:6px 0 12px;">Is group me abhi <strong>${wc} Workers</strong> hain.</div>
                     <div id="jwt-cr-accept" class="jwt-accept-bar" style="display:none;">
                         <strong style="font-size:12px;">Accept? Group Update Karein?</strong>
@@ -1739,6 +1886,7 @@
                 return;
             }
 
+            // 4. JOBWORK REGISTER
             if (curView === 'jw-groups') {
                 setTopHeader('Job Work Register — Select Work Group', '← [Esc] Gateway');
                 const groups = snap.groups;
@@ -1750,7 +1898,7 @@
                         const ws = snap.workers.filter((w) => w.group === g.key);
                         const pend = ws.reduce((s, w) => s + w.pending, 0);
                         return `<button type="button" class="jwt-menu-item ${i === menuIdx ? 'active' : ''}" onclick="menuIdx=${i}; jwtSelectJwGroup('${esc(g.key)}')">
-                            <span>${esc(g.label)} <small style="color:#6b7280;">(${ws.length} Workers)</small></span>
+                            <span>${esc(g.label)} <small style="color:#6b7280;">(${ws.length} Workers${g.outstation ? ' · Bill+Slip' : ''})</small></span>
                             <span class="jwt-menu-val">${pend} Pcs</span>
                         </button>`;
                     }).join('')}
@@ -1813,23 +1961,40 @@
                 return;
             }
 
+            // VOUCHER (OUT / IN — OUTSTATION FIELDS SHOWN ONLY WHEN GROUP HAS outstation: true & vchDir === 'out')
             if (curView === 'jw-voucher') {
                 const w = snap.workers.find((x) => x.id === activeWorkerId);
                 if (!w) return jwtBackTo('jw-workers');
-                const gLbl = grpLabel(w.group);
+                const grpObj = getGroupObj(w.group);
+                const gLbl = grpObj.label;
                 const isOut = (vchDir === 'out');
+                const isOutstationOut = (isOut && grpObj.outstation);
+                const firm = getFirmProfile();
+
+                if (!vchMeta.date) vchMeta.date = getTodayIso();
+                if (isOutstationOut && !vchMeta.jwNo) vchMeta.jwNo = getNextChallanNo();
+
                 setTopHeader(`${w.name} — ${gLbl} ${isOut ? 'Out' : 'In'}`, '← [Esc] Worker Menu', 'Kariger ➔ Stage ➔ Pcs · Khali Kariger Enter = Save', true);
 
-                const sourceBatches = isOut
-                    ? snap.godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0)
-                    : w.pendingItems;
-
+                const sourceBatches = isOut ? snap.godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0) : w.pendingItems;
                 const totBatchPcs = vchBatch.reduce((s, x) => s + x.qty, 0);
                 const defDest = (w.group === 'calender') ? 'finished' : 'godam';
 
                 body.innerHTML = `<div class="jwt-split">
                     <div class="jwt-pane-l">
-                        <div class="jwt-frow"><label>Tarikh :</label><input type="date" id="jwt-vch-date" class="jwt-inp" value="${getTodayIso()}"></div>
+                        <div class="jwt-frow"><label>Tarikh :</label><input type="date" id="jwt-vch-date" class="jwt-inp" value="${esc(vchMeta.date)}"></div>
+                        ${isOutstationOut ? `
+                            <div class="jwt-frow"><label>From (Firm) :</label>
+                                <div style="display:flex; gap:6px; align-items:center;">
+                                    <input type="text" class="jwt-inp" readonly value="${esc(firm.name)}${firm.gst ? ` (GST: ${esc(firm.gst)})` : ''}">
+                                    <button type="button" tabindex="-1" class="jwt-esc" onclick="jwtGo('firm-profile')">Edit</button>
+                                </div>
+                            </div>
+                            <div class="jwt-frow"><label>JobWork No. :</label><input type="text" id="jwt-vch-jwno" class="jwt-inp" value="${esc(vchMeta.jwNo)}"></div>
+                            <div class="jwt-frow"><label>Transport :</label><input type="text" id="jwt-vch-trans" class="jwt-inp" value="${esc(vchMeta.transport)}" placeholder="e.g. Patel / VRL Transport"></div>
+                            <div class="jwt-frow"><label>L.R. / Bale :</label><input type="text" id="jwt-vch-lr" class="jwt-inp" value="${esc(vchMeta.lrNo)}" placeholder="e.g. 4589 / 1 Bale"></div>
+                            <div class="jwt-frow"><label>Design / Work :</label><input type="text" id="jwt-vch-design" class="jwt-inp" value="${esc(vchMeta.designNote)}" placeholder="e.g. Swarovski D.No 402"></div>
+                        ` : ''}
                         <div class="jwt-frow"><label>Kariger :</label><input type="text" id="jwt-vch-kariger" class="jwt-inp" autocomplete="off" placeholder="Name likhein ya ↑↓ (Khali Enter=Save)"></div>
                         <div class="jwt-frow"><label>Stage Batch :</label><input type="text" id="jwt-vch-stage" class="jwt-inp" readonly placeholder="Stage chunein..."></div>
                         ${!isOut ? `<div class="jwt-frow"><label>Wapas Kahan :</label>
@@ -1847,9 +2012,9 @@
                             </div>
                         </div>
 
-                        <div style="margin-top:10px; border:1px solid #e5d5a7; border-radius:5px; overflow:hidden;">
+                        <div style="margin-top:8px; border:1px solid #e5d5a7; border-radius:5px; overflow:hidden;">
                             <div class="jwt-sidebox-head"><span>${isOut ? 'Out' : 'In'} Batch</span><strong>${totBatchPcs} Pcs (${vchBatch.length})</strong></div>
-                            <div style="max-height:175px; overflow-y:auto;">
+                            <div style="max-height:155px; overflow-y:auto;">
                                 <table>
                                     <thead><tr><th>#</th><th>Kariger</th><th>Saree &amp; Trail</th>${!isOut ? '<th>Kahan</th>' : ''}<th class="num">Pcs</th><th></th></tr></thead>
                                     <tbody>
@@ -1867,11 +2032,19 @@
                             </div>
                         </div>
 
+                        ${lastChallanObj && lastChallanObj.isOutstation ? `
+                            <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;">
+                                <button type="button" tabindex="-1" class="jwt-esc" onclick="jwtPrintLastChallan()">Last Challan [Alt+P]</button>
+                                <button type="button" tabindex="-1" class="jwt-esc" onclick="jwtPrintLastPackingSlip()">Last Packing Slip [Alt+L]</button>
+                            </div>
+                        ` : ''}
+
                         <div id="jwt-vch-accept" class="jwt-accept-bar" style="display:${vchAcceptOpen ? 'flex' : 'none'};">
                             <strong style="font-size:12px;">Accept? Batch Save Karein?</strong>
-                            <div style="display:flex; gap:6px;">
-                                <button type="button" class="jwt-save" onclick="jwtCommitVch(true)">Save &amp; Print [P]</button>
-                                <button type="button" id="jwt-vch-yes" class="jwt-save" onclick="jwtCommitVch(false)">Yes [Y / Enter]</button>
+                            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                                <button type="button" class="jwt-save" onclick="jwtCommitVch('challan')">Save &amp; Challan [P]</button>
+                                ${isOutstationOut ? `<button type="button" class="jwt-save" onclick="jwtCommitVch('slip')">Save &amp; Packing Slip [L]</button>` : ''}
+                                <button type="button" id="jwt-vch-yes" class="jwt-save" onclick="jwtCommitVch('')">Yes [Y / Enter]</button>
                                 <button type="button" class="jwt-esc" onclick="jwtCancelVchAccept()">No [N]</button>
                             </div>
                         </div>
@@ -1885,15 +2058,18 @@
                     </div>
                 </div>`;
                 renderVchRightPanel(sourceBatches);
-                bindVchVoucherKeys(sourceBatches);
-                setTimeout(() => document.getElementById('jwt-vch-kariger')?.focus(), 25);
+                bindVchVoucherKeys(sourceBatches, isOutstationOut);
+                const focusTarget = (isOutstationOut && vchBatch.length === 0 && !vchMeta.transport) ? 'jwt-vch-trans' : 'jwt-vch-kariger';
+                setTimeout(() => document.getElementById(focusTarget)?.focus(), 25);
                 return;
             }
 
+            // WORKER REGISTER HISTORY (WITH CHALLAN + PACKING SLIP + EDIT + DEL)
             if (curView === 'jw-worker-hist') {
                 const w = snap.workers.find((x) => x.id === activeWorkerId);
                 if (!w) return jwtBackTo('jw-workers');
-                setTopHeader(`${w.name} — Register (Edit / Print)`, '← [Esc] Worker Menu', '[↑ ↓] Row · [E] Edit · [P] Slip · [Alt+P] Statement', true);
+                const isGroupOutst = getGroupObj(w.group).outstation;
+                setTopHeader(`${w.name} — Register (Edit / Print)`, '← [Esc] Worker Menu', '[↑ ↓] Row · [E] Edit · [P] Challan · [L] Slip · [Alt+P] Statement', true);
                 const sheets = safeArr(getStoreSafe(`jobwork_sheets_${w.id}`));
                 const rows = [];
                 sheets.forEach((sh) => safeArr(sh.rows).forEach((r) => rows.push({ sheetId: sh.id, r })));
@@ -1907,12 +2083,21 @@
                         const r = target.r;
                         const isOut = safeInt(r.gayiQty) > 0;
                         const items = isOut ? safeArr(r.gayiItems) : safeArr(r.aayiItems);
+                        const showOutstEdit = isOut && (r.isOutstation || isGroupOutst);
                         editBoxHtml = `<div style="background:#fdfcf7; border:1.5px solid #d9b86c; border-radius:6px; padding:12px; margin-bottom:12px;">
                             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                                 <strong style="color:#92400e;">Edit Entry (${isOut ? 'OUT' : 'IN'})</strong>
                                 <button type="button" class="jwt-esc" onclick="editWorkerRowInfo=null; renderScreenNow();">Cancel [Esc]</button>
                             </div>
-                            <div class="jwt-frow" style="max-width:340px;"><label>Tarikh :</label><input type="date" id="jwt-eh-date" class="jwt-inp" value="${esc(toIsoDate(r.date) || getTodayIso())}"></div>
+                            <div class="jwt-frow" style="max-width:360px;"><label>Tarikh :</label><input type="date" id="jwt-eh-date" class="jwt-inp" value="${esc(toIsoDate(r.date) || getTodayIso())}"></div>
+                            ${showOutstEdit ? `
+                                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:8px; margin-bottom:8px;">
+                                    <div><label style="font-size:11px; font-weight:700;">JW No.</label><input type="text" id="jwt-eh-jwno" class="jwt-inp" value="${esc(r.jwNo || '')}"></div>
+                                    <div><label style="font-size:11px; font-weight:700;">Transport</label><input type="text" id="jwt-eh-trans" class="jwt-inp" value="${esc(r.transport || '')}"></div>
+                                    <div><label style="font-size:11px; font-weight:700;">L.R. / Bale</label><input type="text" id="jwt-eh-lr" class="jwt-inp" value="${esc(r.lrNo || '')}"></div>
+                                    <div><label style="font-size:11px; font-weight:700;">Design</label><input type="text" id="jwt-eh-design" class="jwt-inp" value="${esc(r.designNote || '')}"></div>
+                                </div>
+                            ` : ''}
                             ${items.map((it, idx) => `
                                 <div style="display:grid; grid-template-columns:1.5fr 100px ${!isOut ? '140px' : ''}; gap:8px; align-items:center; margin-bottom:6px;">
                                     <div style="font-size:12px;"><strong>${esc(it.karigar || '-')}</strong> (${esc(it.saree || 'Saree')}) <span class="trail">[${esc(formatTrail(it.doneStages || [], it.destBucket || 'unfinished'))}]</span></div>
@@ -1940,24 +2125,30 @@
                     </div>
                     ${editBoxHtml}
                     <table>
-                        <thead><tr><th>Tarikh</th><th>Type</th><th>Batch Detail (Kariger &amp; Trail)</th><th class="num">Out</th><th class="num">In / Lott</th><th style="text-align:right;">Actions</th></tr></thead>
+                        <thead><tr><th>Tarikh</th><th>Type</th><th>Batch Detail &amp; Transport / Design</th><th class="num">Out</th><th class="num">In / Lott</th><th style="text-align:right;">Actions</th></tr></thead>
                         <tbody>
                             ${rows.length ? rows.map(({ sheetId, r }, i) => {
                                 const gQ = safeInt(r.gayiQty);
                                 const aQ = safeInt(r.aayiQty) + safeInt(r.damagePcs);
-                                const items = gQ > 0 ? safeArr(r.gayiItems) : safeArr(r.aayiItems);
+                                const isOutRow = gQ > 0;
+                                const isRowOutst = isOutRow && (r.isOutstation || isGroupOutst);
+                                const items = isOutRow ? safeArr(r.gayiItems) : safeArr(r.aayiItems);
                                 const det = items.length
                                     ? items.map((it) => `${esc(it.karigar || '-')} (${esc(it.saree || 'Saree')} &middot; ${esc(formatTrail(it.doneStages || [], it.destBucket || 'unfinished'))}: ${it.qty})`).join('<br>')
                                     : '-';
+                                const metaLine = isRowOutst
+                                    ? `<div class="trail">${esc(r.jwNo || '')} ${r.transport ? `· ${esc(r.transport)}` : ''} ${r.designNote ? `· ${esc(r.designNote)}` : ''}</div>`
+                                    : '';
                                 return `<tr class="jwt-row ${i === menuIdx ? 'active' : ''}" data-shid="${esc(sheetId)}" data-rid="${esc(r.id)}" onclick="menuIdx=${i}; highlightRegRow(${i});">
                                     <td>${esc(fmtDate(r.date))}</td>
-                                    <td><strong>${gQ > 0 ? 'OUT' : (safeInt(r.damagePcs) > 0 && safeInt(r.aayiQty) === 0 ? 'LOTT' : 'IN')}</strong></td>
-                                    <td>${det}</td>
+                                    <td><strong>${isOutRow ? 'OUT' : (safeInt(r.damagePcs) > 0 && safeInt(r.aayiQty) === 0 ? 'LOTT' : 'IN')}</strong></td>
+                                    <td>${det}${metaLine}</td>
                                     <td class="num">${gQ > 0 ? `-${gQ}` : '-'}</td>
                                     <td class="gold-num">${aQ > 0 ? `+${aQ}` : '-'}</td>
                                     <td style="text-align:right; white-space:nowrap;">
                                         <button type="button" class="jwt-esc" onclick="event.stopPropagation(); editWorkerRowInfo={sheetId:'${esc(sheetId)}',rowId:'${esc(r.id)}'}; renderScreenNow();">Edit</button>
-                                        <button type="button" class="jwt-esc" onclick="event.stopPropagation(); jwtPrintWorkerRow('${esc(sheetId)}', '${esc(r.id)}')">Print</button>
+                                        <button type="button" class="jwt-esc" onclick="event.stopPropagation(); jwtPrintWorkerRow('${esc(sheetId)}', '${esc(r.id)}', 'challan')">${isRowOutst ? 'Bill' : 'Print'}</button>
+                                        ${isRowOutst ? `<button type="button" class="jwt-esc" onclick="event.stopPropagation(); jwtPrintWorkerRow('${esc(sheetId)}', '${esc(r.id)}', 'slip')">Slip</button>` : ''}
                                         <button type="button" class="jwt-del" onclick="event.stopPropagation(); jwtDeleteWorkerHistRow('${esc(sheetId)}', '${esc(r.id)}')">Del</button>
                                     </td>
                                 </tr>`;
@@ -1968,6 +2159,7 @@
                 return;
             }
 
+            // 5. OWNER REPORT
             if (curView === 'owner-menu') {
                 setTopHeader('Owner Report', '← [Esc] Gateway');
                 const t = snap.totals;
@@ -2105,6 +2297,7 @@
                 return;
             }
 
+            // 6. SAREE STOCK
             if (curView === 'stock-list') {
                 setTopHeader('Saree Stock', '← [Esc] Gateway', '[↑ ↓] Chunein · [Enter] Trail & Passbook · [Alt+P] Print', true);
                 const tabs = [
@@ -2219,6 +2412,7 @@
                 return;
             }
 
+            // 7. FINAL OUT (DISPATCH)
             if (curView === 'final-out') {
                 setTopHeader('Final Out (Dispatch)', '← [Esc] Gateway', 'Kariger ➔ Stage ➔ Pcs · Khali Kariger Enter = Save', true);
                 const allBatches = snap.godamBatches.filter((b) => b.bucket !== 'lott' && b.pcs > 0);
@@ -2325,6 +2519,7 @@
                 return;
             }
 
+            // 8. BILLS & HISAB
             if (curView === 'bills-menu') {
                 setTopHeader('Bills & Hisab', '← [Esc] Gateway', '[↑ ↓] + [Enter] · [Esc] Gateway');
                 const bills = safeArr(getStoreSafe('jw_bills_list'));
@@ -2581,6 +2776,7 @@
     };
 
     window.jwtAddVchItem = () => {
+        syncVchMetaFromDom();
         const snap = getSnapshot();
         const w = snap.workers.find((x) => x.id === activeWorkerId);
         const sourceBatches = (vchDir === 'out') ? snap.godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0) : (w ? w.pendingItems : []);
@@ -2593,13 +2789,8 @@
 
         const dest = (vchDir === 'in') ? (document.getElementById('jwt-vch-dest')?.value || 'godam') : 'out';
         vchBatch.push({
-            batchKey: batch.key,
-            saree: batch.saree,
-            maker: batch.maker,
-            karkhanaId: batch.karkhanaId,
-            doneStages: [...batch.doneStages],
-            dest,
-            qty
+            batchKey: batch.key, saree: batch.saree, maker: batch.maker,
+            karkhanaId: batch.karkhanaId, doneStages: [...batch.doneStages], dest, qty
         });
 
         vchPickStep = 'kariger';
@@ -2609,8 +2800,8 @@
         renderScreen();
     };
 
-    window.jwtRemoveVchItem = (idx) => { vchBatch.splice(idx, 1); vchRightIdx = vchBatch.length ? -1 : 0; renderScreen(); };
-    window.jwtCommitVch = (doPrint) => commitVchBatch(doPrint);
+    window.jwtRemoveVchItem = (idx) => { syncVchMetaFromDom(); vchBatch.splice(idx, 1); vchRightIdx = vchBatch.length ? -1 : 0; renderScreen(); };
+    window.jwtCommitVch = (printType) => commitVchBatch(printType);
     window.jwtCancelVchAccept = () => {
         vchAcceptOpen = false;
         const bar = document.getElementById('jwt-vch-accept');
@@ -2618,15 +2809,31 @@
         document.getElementById('jwt-vch-kariger')?.focus();
     };
 
-    const bindVchVoucherKeys = (sourceBatches) => {
+    const bindVchVoucherKeys = (sourceBatches, isOutstationOut) => {
         const kInp = document.getElementById('jwt-vch-kariger');
         const sInp = document.getElementById('jwt-vch-stage');
         const dSel = document.getElementById('jwt-vch-dest');
         const qInp = document.getElementById('jwt-vch-qty');
-        const dtInp = document.getElementById('jwt-vch-date');
         const yesBtn = document.getElementById('jwt-vch-yes');
 
-        if (dtInp) dtInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); kInp?.focus(); } });
+        const metaChain = isOutstationOut
+            ? ['jwt-vch-date', 'jwt-vch-jwno', 'jwt-vch-trans', 'jwt-vch-lr', 'jwt-vch-design', 'jwt-vch-kariger']
+            : ['jwt-vch-date', 'jwt-vch-kariger'];
+
+        metaChain.forEach((id, i) => {
+            if (id === 'jwt-vch-kariger') return;
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.addEventListener('input', syncVchMetaFromDom);
+            el.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.ctrlKey) {
+                    e.preventDefault();
+                    syncVchMetaFromDom();
+                    document.getElementById(metaChain[i + 1])?.focus();
+                }
+            });
+        });
+
         if (kInp) {
             kInp.addEventListener('focus', () => {
                 vchPickStep = 'kariger';
@@ -2682,8 +2889,9 @@
         if (qInp) qInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); window.jwtAddVchItem(); } });
         if (yesBtn) {
             yesBtn.addEventListener('keydown', (e) => {
-                if (e.key === 'y' || e.key === 'Y' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); commitVchBatch(false); }
-                else if (e.key === 'p' || e.key === 'P') { e.preventDefault(); e.stopPropagation(); commitVchBatch(true); }
+                if (e.key === 'y' || e.key === 'Y' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); commitVchBatch(''); }
+                else if (e.key === 'p' || e.key === 'P') { e.preventDefault(); e.stopPropagation(); commitVchBatch('challan'); }
+                else if ((e.key === 'l' || e.key === 'L') && isOutstationOut) { e.preventDefault(); e.stopPropagation(); commitVchBatch('slip'); }
                 else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); e.stopPropagation(); window.jwtCancelVchAccept(); }
             });
         }
@@ -2763,13 +2971,8 @@
         if (qty <= 0 || qty > avail) return toast(`Sahi Pcs daalein (Max ${avail} Pcs)!`, true);
 
         foBatch.push({
-            batchKey: batch.key,
-            saree: batch.saree,
-            maker: batch.maker,
-            karkhanaId: batch.karkhanaId,
-            doneStages: [...batch.doneStages],
-            bucket: batch.bucket,
-            qty
+            batchKey: batch.key, saree: batch.saree, maker: batch.maker,
+            karkhanaId: batch.karkhanaId, doneStages: [...batch.doneStages], bucket: batch.bucket, qty
         });
 
         foPickStep = 'kariger';
@@ -2855,13 +3058,24 @@
     };
 
     /* ========================================================================
-       13. CREATE, ALTER, STOCK, BILLS CONTROLLERS
+       13. CREATE, ALTER, FIRM, STOCK, BILLS CONTROLLERS
     ======================================================================== */
     window.jwtOpenCreateWorker = () => {
         selectedCreateGroupKey = getWorkGroups()[0]?.key || 'cutting';
         window.jwtGo('create-worker');
     };
     window.jwtOpenCreateGroup = () => window.jwtGo('create-group');
+
+    window.jwtSaveFirmProfile = () => {
+        const name = normText(document.getElementById('jwt-fm-name')?.value, 'INDIAN FABRICS');
+        const address = String(document.getElementById('jwt-fm-addr')?.value || '').trim();
+        const mobile = String(document.getElementById('jwt-fm-mob')?.value || '').trim();
+        const gst = String(document.getElementById('jwt-fm-gst')?.value || '').trim().toUpperCase();
+        setStoreSafe(FIRM_STORE_KEY, { name, address, mobile, gst });
+        crAcceptOpen = false;
+        toast(`✅ Firm [${name}] save ho gayi!`);
+        window.jwtHandleEsc();
+    };
 
     window.jwtPickCwGroup = (idx) => {
         const groups = getWorkGroups();
@@ -2887,7 +3101,7 @@
     };
 
     const bindCreateWorkerKeys = () => {
-        const order = ['jwt-cw-name', 'jwt-cw-grp', 'jwt-cw-mob', 'jwt-cw-addr', 'jwt-cw-date'];
+        const order = ['jwt-cw-name', 'jwt-cw-grp', 'jwt-cw-mob', 'jwt-cw-addr', 'jwt-cw-gst', 'jwt-cw-date'];
         order.forEach((id, i) => {
             const el = document.getElementById(id);
             if (!el) return;
@@ -2915,11 +3129,12 @@
         const name = normText(document.getElementById('jwt-cw-name')?.value);
         const mobile = String(document.getElementById('jwt-cw-mob')?.value || '').trim();
         const address = String(document.getElementById('jwt-cw-addr')?.value || '').trim();
+        const gst = String(document.getElementById('jwt-cw-gst')?.value || '').trim().toUpperCase();
         const joinDate = toIsoDate(document.getElementById('jwt-cw-date')?.value) || getTodayIso();
         if (!name) return toast('Worker Name zaroori hai!', true);
 
         const list = safeArr(getStoreSafe('jobwork_workers')).slice();
-        list.push({ id: `jw_${Date.now()}`, type: selectedCreateGroupKey, date: joinDate, name, address, mobile });
+        list.push({ id: `jw_${Date.now()}`, type: selectedCreateGroupKey, date: joinDate, name, address, mobile, gst });
         setStoreSafe('jobwork_workers', list);
         invalidateAllCaches();
         toast(`✅ Worker [${name}] (${grpLabel(selectedCreateGroupKey)}) save ho gaya!`);
@@ -2928,13 +3143,14 @@
 
     window.jwtSaveNewGroup = () => {
         const raw = String(document.getElementById('jwt-cg-name')?.value || '').trim();
+        const outstation = Boolean(document.getElementById('jwt-cg-outstation')?.checked);
         if (!raw) return toast('Work Group Name likhein!', true);
         const key = raw.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
         if (!key || key === 'all' || key === 'kariger') return toast('Yeh naam reserve hai!', true);
 
         const groups = getWorkGroups();
         if (groups.some((g) => g.key === key)) return toast('Yeh Work Group pehle se maujood hai!', true);
-        groups.push({ key, label: raw });
+        groups.push({ key, label: raw, outstation });
         setStoreSafe(GROUPS_STORE_KEY, groups);
         selectedCreateGroupKey = key;
         invalidateAllCaches();
@@ -2949,12 +3165,13 @@
         const type = document.getElementById('jwt-ew-grp')?.value || 'cutting';
         const mobile = String(document.getElementById('jwt-ew-mob')?.value || '').trim();
         const address = String(document.getElementById('jwt-ew-addr')?.value || '').trim();
+        const gst = String(document.getElementById('jwt-ew-gst')?.value || '').trim().toUpperCase();
         const date = toIsoDate(document.getElementById('jwt-ew-date')?.value) || getTodayIso();
         if (!name) return toast('Worker Name zaroori hai!', true);
 
         const list = safeArr(getStoreSafe('jobwork_workers')).map((w) => {
             if (String(w.id) !== String(wId)) return w;
-            return { ...w, name, type, mobile, address, date };
+            return { ...w, name, type, mobile, address, gst, date };
         });
         setStoreSafe('jobwork_workers', list);
         invalidateAllCaches(wId);
@@ -2977,8 +3194,9 @@
     window.jwtOpenAlterGroupEdit = (gKey) => { alterEditGroupKey = gKey; window.jwtGo('alter-group-edit'); };
     window.jwtUpdateGroup = (gKey) => {
         const raw = String(document.getElementById('jwt-eg-name')?.value || '').trim();
+        const outstation = Boolean(document.getElementById('jwt-eg-outstation')?.checked);
         if (!raw) return toast('Group Name likhein!', true);
-        const groups = getWorkGroups().map((g) => (g.key === gKey ? { ...g, label: raw } : g));
+        const groups = getWorkGroups().map((g) => (g.key === gKey ? { ...g, label: raw, outstation } : g));
         setStoreSafe(GROUPS_STORE_KEY, groups);
         invalidateAllCaches();
         syncTallyMasterGroups();
@@ -3009,6 +3227,9 @@
         vchSelectedMaker = null;
         vchSelectedBatchKey = null;
         vchRightIdx = 0;
+        const w = getSnapshot().workers.find((x) => x.id === activeWorkerId);
+        const isOutst = (dir === 'out' && w && getGroupObj(w.group).outstation);
+        vchMeta = { date: getTodayIso(), jwNo: isOutst ? getNextChallanNo() : '', transport: '', lrNo: '', designNote: '' };
         window.jwtGo('jw-voucher');
     };
 
@@ -3038,22 +3259,10 @@
 
         const sH = safeArr(getStoreSafe('saree_history')).slice();
         sH.push({
-            id: genId('saree_man'),
-            date: dDate,
-            sareeName: saree,
-            karigerName: maker,
-            kariger: maker,
-            partyName: maker,
-            karkhanaId: kid,
-            type: stage,
+            id: genId('saree_man'), date: dDate, sareeName: saree, karigerName: maker, kariger: maker,
+            partyName: maker, karkhanaId: kid, type: stage,
             typeLabel: `Direct Godown Inward (${formatTrail(doneStages, bucket)})`,
-            aai: pcs,
-            gai: 0,
-            isOut: false,
-            doneStages,
-            stageBucket: bucket,
-            note: 'Direct Inward',
-            timestamp: Date.now()
+            aai: pcs, gai: 0, isOut: false, doneStages, stageBucket: bucket, note: 'Direct Inward', timestamp: Date.now()
         });
         setStoreSafe('saree_history', sH);
         stockInwardOpen = false;
@@ -3063,25 +3272,13 @@
     };
 
     window.jwtOpenFinalOut = () => {
-        foBatch = [];
-        foAcceptOpen = false;
-        foPickStep = 'kariger';
-        foSelectedMaker = null;
-        foSelectedBatchKey = null;
-        foRightIdx = 0;
-        editFoId = null;
+        foBatch = []; foAcceptOpen = false; foPickStep = 'kariger';
+        foSelectedMaker = null; foSelectedBatchKey = null; foRightIdx = 0; editFoId = null;
         window.jwtGo('final-out');
     };
 
-    window.jwtOpenBillNew = () => {
-        billSelectedWorkerId = null;
-        billWorkerIdx = 0;
-        window.jwtGo('bills-new');
-    };
-    window.jwtOpenBillDetail = (bId) => {
-        activeBillId = bId;
-        window.jwtGo('bill-detail');
-    };
+    window.jwtOpenBillNew = () => { billSelectedWorkerId = null; billWorkerIdx = 0; window.jwtGo('bills-new'); };
+    window.jwtOpenBillDetail = (bId) => { activeBillId = bId; window.jwtGo('bill-detail'); };
 
     const renderBillWorkerList = (q) => {
         const box = document.getElementById('jwt-b-wlist');
@@ -3133,10 +3330,7 @@
                     }
                     return;
                 }
-                if (e.key === 'Enter' && billWorkerItems[billWorkerIdx]) {
-                    e.preventDefault();
-                    window.jwtPickBillWorker(billWorkerIdx);
-                }
+                if (e.key === 'Enter' && billWorkerItems[billWorkerIdx]) { e.preventDefault(); window.jwtPickBillWorker(billWorkerIdx); }
             });
         }
         order.forEach((id, i) => {
@@ -3146,13 +3340,8 @@
             el.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault();
-                    if (i < order.length - 1) {
-                        const nxt = document.getElementById(order[i + 1]);
-                        nxt?.focus();
-                        if (nxt?.select) nxt.select();
-                    } else {
-                        window.jwtAskBillAccept();
-                    }
+                    if (i < order.length - 1) { const nxt = document.getElementById(order[i + 1]); nxt?.focus(); if (nxt?.select) nxt.select(); }
+                    else window.jwtAskBillAccept();
                 }
             });
         });
@@ -3173,32 +3362,12 @@
 
         const billId = `bill_${Date.now()}`;
         const bills = safeArr(getStoreSafe('jw_bills_list')).slice();
-        bills.push({
-            id: billId,
-            billNo,
-            date: dDate,
-            workerId: worker.id,
-            workerName: worker.name,
-            workType: worker.group,
-            pcs,
-            billAmt: amt,
-            paidAmt: paidNow,
-            note
-        });
+        bills.push({ id: billId, billNo, date: dDate, workerId: worker.id, workerName: worker.name, workType: worker.group, pcs, billAmt: amt, paidAmt: paidNow, note });
         setStoreSafe('jw_bills_list', bills);
 
         if (paidNow > 0) {
             const pays = safeArr(getStoreSafe('jw_payments_list')).slice();
-            pays.push({
-                id: `pay_${Date.now()}`,
-                billId,
-                billNo,
-                date: dDate,
-                workerName: worker.name,
-                amount: paidNow,
-                mode,
-                note: note || `Bill #${billNo} Payment`
-            });
+            pays.push({ id: `pay_${Date.now()}`, billId, billNo, date: dDate, workerName: worker.name, amount: paidNow, mode, note: note || `Bill #${billNo} Payment` });
             setStoreSafe('jw_payments_list', pays);
         }
 
@@ -3229,13 +3398,8 @@
             el.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault();
-                    if (i < order.length - 1) {
-                        const nxt = document.getElementById(order[i + 1]);
-                        nxt?.focus();
-                        if (nxt?.select) nxt.select();
-                    } else {
-                        window.jwtAskBpAccept();
-                    }
+                    if (i < order.length - 1) { const nxt = document.getElementById(order[i + 1]); nxt?.focus(); if (nxt?.select) nxt.select(); }
+                    else window.jwtAskBpAccept();
                 }
             });
         });
@@ -3257,16 +3421,7 @@
         if (!targetBill) return;
 
         const pays = safeArr(getStoreSafe('jw_payments_list')).slice();
-        pays.push({
-            id: `pay_${Date.now()}`,
-            billId,
-            billNo: targetBill.billNo || '-',
-            date: dDate,
-            workerName: targetBill.workerName,
-            amount: amt,
-            mode,
-            note
-        });
+        pays.push({ id: `pay_${Date.now()}`, billId, billNo: targetBill.billNo || '-', date: dDate, workerName: targetBill.workerName, amount: amt, mode, note });
         setStoreSafe('jw_bills_list', bills);
         setStoreSafe('jw_payments_list', pays);
         invalidateAllCaches();
@@ -3329,7 +3484,7 @@
     };
 
     /* ========================================================================
-       14. STRICT HIERARCHICAL ESC (RESTORES EXACT CURSOR!) & KEYBOARD ENGINE
+       14. STRICT HIERARCHICAL ESC & TALLY KEYBOARD ENGINE
     ======================================================================== */
     window.jwtHandleEsc = () => {
         if (curView === 'jw-voucher') {
@@ -3383,6 +3538,11 @@
         if (curView === 'bills-list') { jwtBackTo('bills-menu'); return; }
         if (curView === 'bills-menu') { jwtBackTo('gateway'); return; }
 
+        if (curView === 'firm-profile') {
+            if (crAcceptOpen) { window.jwtCancelCrAccept(); return; }
+            jwtBackTo('create-menu');
+            return;
+        }
         if (curView === 'create-worker' || curView === 'create-group') {
             if (crAcceptOpen) { window.jwtCancelCrAccept(); return; }
             jwtBackTo('create-menu');
@@ -3440,13 +3600,17 @@
         }
 
         if (e.altKey && (e.key === 'p' || e.key === 'P')) {
-            e.preventDefault();
-            e.stopImmediatePropagation();
+            e.preventDefault(); e.stopImmediatePropagation();
             window.jwtPrintCurrentScreen();
             return;
         }
+        if (e.altKey && (e.key === 'l' || e.key === 'L')) {
+            e.preventDefault(); e.stopImmediatePropagation();
+            window.jwtPrintLastPackingSlip();
+            return;
+        }
 
-        if (crAcceptOpen && ['create-worker', 'create-group', 'alter-worker-edit', 'alter-group-edit'].includes(curView)) {
+        if (crAcceptOpen && ['create-worker', 'create-group', 'alter-worker-edit', 'alter-group-edit', 'firm-profile'].includes(curView)) {
             if (e.key.toLowerCase() === 'y' || e.key === 'Enter') {
                 e.preventDefault(); e.stopImmediatePropagation();
                 document.getElementById('jwt-cr-yes')?.click();
@@ -3468,8 +3632,8 @@
         }
 
         if (e.ctrlKey && e.key === 'Enter') {
-            if (['create-worker', 'alter-worker-edit'].includes(curView)) { e.preventDefault(); window.jwtAskCrAccept(); return; }
-            if (curView === 'jw-voucher' && vchBatch.length) { e.preventDefault(); commitVchBatch(false); return; }
+            if (['create-worker', 'alter-worker-edit', 'firm-profile'].includes(curView)) { e.preventDefault(); window.jwtAskCrAccept(); return; }
+            if (curView === 'jw-voucher' && vchBatch.length) { e.preventDefault(); commitVchBatch(''); return; }
             if (curView === 'final-out' && foBatch.length) { e.preventDefault(); commitFinalOutBatch(false); return; }
             if (curView === 'bills-new') { e.preventDefault(); window.jwtAskBillAccept(); return; }
             if (curView === 'bill-detail') { e.preventDefault(); window.jwtAskBpAccept(); return; }
@@ -3495,7 +3659,12 @@
                 }
                 if (e.key === 'p' || e.key === 'P') {
                     e.preventDefault();
-                    window.jwtPrintWorkerRow(activeRow.dataset.shid, activeRow.dataset.rid);
+                    window.jwtPrintWorkerRow(activeRow.dataset.shid, activeRow.dataset.rid, 'challan');
+                    return;
+                }
+                if (e.key === 'l' || e.key === 'L') {
+                    e.preventDefault();
+                    window.jwtPrintWorkerRow(activeRow.dataset.shid, activeRow.dataset.rid, 'slip');
                     return;
                 }
             }
@@ -3512,8 +3681,7 @@
             const rows = Array.from(sec.querySelectorAll('.jwt-menu-item, tbody tr.jwt-row'));
             if (rows.length > 0) {
                 if (e.key === 'ArrowDown') {
-                    e.preventDefault();
-                    e.stopImmediatePropagation();
+                    e.preventDefault(); e.stopImmediatePropagation();
                     rows[menuIdx]?.classList.remove('active');
                     menuIdx = (menuIdx + 1) % rows.length;
                     rows[menuIdx]?.classList.add('active');
@@ -3521,8 +3689,7 @@
                     return;
                 }
                 if (e.key === 'ArrowUp') {
-                    e.preventDefault();
-                    e.stopImmediatePropagation();
+                    e.preventDefault(); e.stopImmediatePropagation();
                     rows[menuIdx]?.classList.remove('active');
                     menuIdx = (menuIdx - 1 + rows.length) % rows.length;
                     rows[menuIdx]?.classList.add('active');
@@ -3530,8 +3697,7 @@
                     return;
                 }
                 if (e.key === 'Enter' && !isNavGuarded() && curView !== 'jw-worker-hist') {
-                    e.preventDefault();
-                    e.stopImmediatePropagation();
+                    e.preventDefault(); e.stopImmediatePropagation();
                     rows[menuIdx]?.click();
                     return;
                 }
@@ -3540,11 +3706,7 @@
             if (curView === 'gateway' && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
                 const k = e.key.toLowerCase();
                 const match = Array.from(sec.querySelectorAll('.jwt-menu-item')).find((b) => b.dataset.key === k);
-                if (match) {
-                    e.preventDefault();
-                    e.stopImmediatePropagation();
-                    match.click();
-                }
+                if (match) { e.preventDefault(); e.stopImmediatePropagation(); match.click(); }
             }
         }
     };
