@@ -1,6 +1,6 @@
 /* ============================================================================
    SIMPLICITY ERP - JOBWORK EXPRESS VOUCHER (UNIFIED TRAIL & DYNAMIC GROUPS)
-   File: jobwork-express/jobwork-express.js
+   File: jobwork-express/jobwork-express.js (v3.1)
    100% Synced with: jobwork-trail/jobwork-trail.js, saree_history,
    jobwork_workers, jobwork_groups, jobwork_sheets_*, dukan_transfer_history
 ============================================================================ */
@@ -15,13 +15,12 @@
         { key: 'calender', label: 'Calender' }
     ];
 
-    let activeCategory = 'cutting';     // dynamic work group key OR 'dukan'
-    let movementType = 'gayi';          // 'gayi' | 'aayi'
+    let activeCategory = 'cutting';
+    let movementType = 'gayi';
     let expressBatchItems = [];
     let lastSavedExpressBatch = null;
 
-    // Right-Pane Tally Picker State
-    let jwPickerMode = 'process';       // 'process' | 'movement' | 'worker' | 'kariger' | 'stage' | 'summary'
+    let jwPickerMode = 'process';
     let jwPickerItems = [];
     let jwPickerActiveIdx = 0;
     let selectedMaker = null;
@@ -29,9 +28,6 @@
     let jwMakerArrowUsed = false;
     let isSubmitting = false;
 
-    /* ========================================================================
-       1. SAFE HELPERS & STORES
-    ======================================================================== */
     const safeArr = (v) => {
         if (Array.isArray(v)) return v.filter(Boolean);
         if (typeof window.safeArray === 'function') return window.safeArray(v).filter(Boolean);
@@ -117,9 +113,6 @@
 
     const genId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-    /* ========================================================================
-       2. DYNAMIC WORK GROUPS & TRAIL HELPERS
-    ======================================================================== */
     const getWorkGroups = () => {
         const stored = safeArr(getFromStore(GROUPS_STORE_KEY));
         const workers = safeArr(getFromStore('jobwork_workers'));
@@ -188,9 +181,6 @@
         return arr.map(grpLabel).join(' → ');
     };
 
-    /* ========================================================================
-       3. LIVE GODAM & WORKER PENDING RESOLVER (EXACT TRAIL BATCHES)
-    ======================================================================== */
     const getGodamAvailableBatches = (includeFinished = false) => {
         const activeFilter = getEffectiveGodown();
         const sareeHist = safeArr(getFromStore('saree_history'));
@@ -395,9 +385,6 @@
         return getWorkerPendingBatches(wId);
     };
 
-    /* ========================================================================
-       4. SCOPED STYLES (COMPACT LEFT + BIG RIGHT LIST)
-    ======================================================================== */
     const ensureTallyJobWorkStyles = () => {
         const old = document.getElementById('jw-tally-styles');
         if (old) old.remove();
@@ -514,9 +501,6 @@
         document.head.appendChild(style);
     };
 
-    /* ========================================================================
-       5. OPEN MODAL
-    ======================================================================== */
     window.openJobWorkExpressModal = () => {
         ensureTallyJobWorkStyles();
         const existing = document.getElementById('master-jobwork-express-modal');
@@ -681,9 +665,6 @@
         showJwRightPicker('process', '');
     };
 
-    /* ========================================================================
-       6. RIGHT-PANE DYNAMIC PICKER (PROCESS / MOVEMENT / WORKER / KARIGER / STAGE)
-    ======================================================================== */
     const getWorkerPickerList = (queryText = '') => {
         const q = String(queryText || '').trim().toLowerCase();
         if (activeCategory === 'dukan') {
@@ -750,9 +731,11 @@
                 .filter((k) => !q || `${k.maker} ${Array.from(k.sarees).join(' ')}`.toLowerCase().includes(q))
                 .sort((a, b) => a.maker.localeCompare(b.maker))
                 .map((k) => ({ label: k.maker, sub: `${k.pcs} Pc (${k.stages} Stage)`, data: k.maker }));
-            if (titleEl) titleEl.textContent = '1. List of Karigers (Makers)';
+            if (jwPickerActiveIdx >= jwPickerItems.length) jwPickerActiveIdx = jwPickerItems.length ? 0 : -1;
+            if (titleEl) titleEl.textContent = (expressBatchItems.length && jwPickerActiveIdx < 0)
+                ? '1. [↓] Kariger Chunein · [↵] Save'
+                : '1. List of Karigers (Makers)';
             if (hintEl) hintEl.textContent = expressBatchItems.length > 0 ? 'Khali Enter = Save' : '↑↓ + Enter';
-            if (jwPickerActiveIdx >= jwPickerItems.length) jwPickerActiveIdx = 0;
         } else if (mode === 'stage') {
             const batches = getActiveSourceBatches().filter((b) => b.maker === selectedMaker);
             jwPickerItems = batches
@@ -765,7 +748,7 @@
                 }));
             if (titleEl) titleEl.textContent = `2. ${selectedMaker || ''} ke Stages`;
             if (hintEl) hintEl.textContent = '↑↓ + Enter';
-            if (jwPickerActiveIdx >= jwPickerItems.length) jwPickerActiveIdx = 0;
+            if (jwPickerActiveIdx >= jwPickerItems.length || jwPickerActiveIdx < 0) jwPickerActiveIdx = 0;
         } else if (mode === 'summary') {
             if (titleEl) titleEl.textContent = 'Active Context';
             if (hintEl) hintEl.textContent = 'Live';
@@ -844,9 +827,6 @@
         }
     };
 
-    /* ========================================================================
-       7. KEYBOARD ENGINE (TALLY FOCUS TRAP + ENTER CHAINING + ACCEPT)
-    ======================================================================== */
     const getOrderedInputs = () => {
         const ids = [
             'jw-exp-cat-input',
@@ -938,7 +918,7 @@
         if (makerInp) {
             makerInp.addEventListener('focus', () => {
                 jwMakerArrowUsed = false;
-                jwPickerActiveIdx = 0;
+                jwPickerActiveIdx = (expressBatchItems.length > 0 && !makerInp.value.trim()) ? -1 : 0;
                 showJwRightPicker('kariger', makerInp.value);
             });
             makerInp.addEventListener('input', () => {
@@ -951,18 +931,19 @@
                     if (jwPickerItems.length) {
                         e.preventDefault();
                         jwMakerArrowUsed = true;
-                        jwPickerActiveIdx = e.key === 'ArrowDown' ? (jwPickerActiveIdx + 1) % jwPickerItems.length : (jwPickerActiveIdx - 1 + jwPickerItems.length) % jwPickerItems.length;
+                        if (jwPickerActiveIdx < 0) jwPickerActiveIdx = (e.key === 'ArrowDown') ? 0 : (jwPickerItems.length - 1);
+                        else jwPickerActiveIdx = e.key === 'ArrowDown' ? (jwPickerActiveIdx + 1) % jwPickerItems.length : (jwPickerActiveIdx - 1 + jwPickerItems.length) % jwPickerItems.length;
                         renderJwRightPickerList();
                     }
                     return;
                 }
                 if (e.key === 'Enter' && !e.ctrlKey) {
                     e.preventDefault();
-                    if (!makerInp.value.trim() && expressBatchItems.length > 0 && !jwMakerArrowUsed) {
+                    if (!makerInp.value.trim() && expressBatchItems.length > 0 && jwPickerActiveIdx < 0) {
                         showJwAcceptPrompt(true);
                         return;
                     }
-                    if (jwPickerItems[jwPickerActiveIdx]) window.__jwPickItem(jwPickerActiveIdx);
+                    if (jwPickerActiveIdx >= 0 && jwPickerItems[jwPickerActiveIdx]) window.__jwPickItem(jwPickerActiveIdx);
                 }
             });
         }
@@ -1051,9 +1032,6 @@
         expressBatchItems = [];
     };
 
-    /* ========================================================================
-       8. CATEGORY & MOVEMENT SWITCHES
-    ======================================================================== */
     const confirmClearBatchIfNeeded = (lbl) => {
         if (!expressBatchItems.length) return true;
         const ok = confirm(`Batch list me ${expressBatchItems.length} item hain. ${lbl} badalne par list clear hogi. Aage badhein?`);
@@ -1144,9 +1122,6 @@
         }
     };
 
-    /* ========================================================================
-       9. BATCH ROW BUILDER & ATOMIC COMMIT
-    ======================================================================== */
     window.addExpressBatchRow = () => {
         const batch = getActiveSourceBatches().find((b) => b.key === selectedBatchKey);
         if (!batch) {
@@ -1179,6 +1154,8 @@
 
         selectedMaker = null;
         selectedBatchKey = null;
+        jwPickerActiveIdx = -1;
+        jwMakerArrowUsed = false;
         const mInp = document.getElementById('jw-exp-maker-input');
         const sInp = document.getElementById('jw-exp-stage-input');
         const qInp = document.getElementById('jw-exp-qty-input');
@@ -1192,6 +1169,7 @@
 
     window.removeExpressBatchItem = (idx) => {
         expressBatchItems.splice(idx, 1);
+        jwPickerActiveIdx = expressBatchItems.length ? -1 : 0;
         renderExpressBatchGrid();
     };
 
@@ -1437,6 +1415,7 @@
             expressBatchItems = [];
             selectedMaker = null;
             selectedBatchKey = null;
+            jwPickerActiveIdx = 0;
             renderExpressBatchGrid();
 
             const statusEl = document.getElementById('jw-exp-status-msg');
