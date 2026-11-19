@@ -22,6 +22,7 @@
     const BANA_STOCK_PAGE_SIZE = 15;
     let currentBanaFilteredRowsCache = [];
     let banaListActiveIdx = 0;
+    let banaOpenedAt = 0;
 
     const esc = (s) => {
         if (typeof window.sanitizeHTML === 'function') return window.sanitizeHTML(s);
@@ -370,6 +371,7 @@
        3. NAVIGATION & TABS
        ======================================================================== */
     const openBanaModule = () => {
+        banaOpenedAt = performance.now();
         ensureBanaTallyStyles();
         setDisplay('dashboard-view', 'none');
         setDisplay('bana-section', 'block');
@@ -1366,6 +1368,11 @@
                 const sEl = document.getElementById('pass-search-input');
                 if (sEl) { sEl.focus(); sEl.select(); }
             }
+            return;
+        }
+
+        // Guard: Prevent Enter bleed-through from Stock Summary / Gateway right after opening
+        if (e.key === 'Enter' && (performance.now() - banaOpenedAt) < 200) {
             return;
         }
 
