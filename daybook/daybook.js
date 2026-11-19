@@ -1,7 +1,11 @@
 /* ============================================================================
-   SIMPLICITY ERP - HIGH-PERFORMANCE ROZANA DAY-BOOK & DASHBOARD ENGINE
+   SIMPLICITY ERP - TALLYPRIME ROZANA DAY-BOOK & DASHBOARD ENGINE
    File: daybook/daybook.js • Developed by Farhan Jawed
-   (Dynamic Store Aggregation + 15-Item Pagination + Zero Extra Tables + A6 Print)
+   Tally Drill-Down Flow:
+   - Main Menu: Bana | Zari | Sancha ▸ | Saree ▸ | Payment
+   - Sancha ▸ : Tani | Chukka
+   - Saree  ▸ : Fresh | Cutting | Embroidery | Calender | Lott
+   (100% Compatible with existing Stores, Supabase Sync, Pagination & A6 Print)
 ============================================================================ */
 
 (() => {
@@ -11,7 +15,11 @@
     window.currentDashboardKarkhanaFilter = 'all';
     window.badgeCalculationTimer = null;
 
-    // 📱 PAGINATION STATE (15 Entries / Page)
+    // Tally Drill-Down State: 'menu' | 'sancha-menu' | 'saree-menu' | 'report'
+    let daybookViewMode = 'menu';
+    let daybookMenuActiveIdx = 0;
+
+    // Pagination State (15 Entries / Page)
     let daybookCurrentPage = 1;
     const DAYBOOK_PAGE_SIZE = 15;
     let currentDaybookFilteredRowsCache = [];
@@ -19,7 +27,9 @@
 
     const esc = (s) => {
         if (typeof window.sanitizeHTML === 'function') return window.sanitizeHTML(s);
-        return String(s || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+        return String(s || '').replace(/[&<>"']/g, (m) => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[m]));
     };
 
     const safeNum = (val, fallback = 0) => {
@@ -91,8 +101,47 @@
     };
 
     /* ========================================================================
-       NAVIGATION & TABS
-       ======================================================================== */
+       1. TALLY DRILL-DOWN NAVIGATION HELPERS
+    ======================================================================== */
+    const getParentViewForTab = (tab) => {
+        if (tab === 'sancha_tani' || tab === 'sancha_chukka') return 'sancha-menu';
+        if (String(tab || '').startsWith('saree_')) return 'saree-menu';
+        return 'menu';
+    };
+
+    const goDayBookBack = () => {
+        if (daybookViewMode === 'report') {
+            daybookViewMode = getParentViewForTab(window.currentDayBookTab);
+            daybookMenuActiveIdx = 0;
+            renderDashboardDayBook();
+            return;
+        }
+        if (daybookViewMode === 'sancha-menu' || daybookViewMode === 'saree-menu') {
+            daybookViewMode = 'menu';
+            daybookMenuActiveIdx = 0;
+            renderDashboardDayBook();
+            return;
+        }
+        if (typeof window.backToDashboard === 'function') {
+            window.backToDashboard();
+        }
+    };
+
+    const openDayBookSubMenu = (mode) => {
+        daybookViewMode = mode;
+        daybookMenuActiveIdx = 0;
+        renderDashboardDayBook();
+    };
+
+    const openDayBookReport = (tabKey) => {
+        window.currentDayBookTab = tabKey;
+        daybookViewMode = 'report';
+        daybookCurrentPage = 1;
+        const searchInp = document.getElementById('dash-daybook-search');
+        if (searchInp) searchInp.value = '';
+        renderDashboardDayBook();
+    };
+
     const setDashboardToday = () => {
         const dateInput = document.getElementById('dash-day-date');
         if (dateInput) dateInput.value = getToday();
@@ -101,16 +150,8 @@
     };
 
     const switchDayBookTab = (tab) => {
-        window.currentDayBookTab = tab;
-        daybookCurrentPage = 1;
-        ['bana', 'zari', 'saree', 'payment', 'sancha'].forEach((t) => {
-            const el = document.getElementById(`btn-tab-${t}`);
-            if (el) {
-                if (t === tab) el.classList.add('active');
-                else el.classList.remove('active');
-            }
-        });
-        renderDashboardDayBook();
+        const mapped = tab === 'sancha' ? 'sancha_tani' : (tab === 'saree' ? 'saree_fresh' : tab);
+        openDayBookReport(mapped);
     };
 
     const renderDashboardKarkhanaTabs = () => {
@@ -129,7 +170,7 @@
 
         const isAllActive = (window.currentDashboardKarkhanaFilter === 'all') ? ' active' : '';
         let html = `
-            <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
+            <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
                 <button type="button" class="sheet-tab${isAllActive}" onclick="switchDashboardKarkhanaTab('all')">👥 Sabhi Karkhane</button>`;
 
         karkhanas.forEach((k) => {
@@ -160,444 +201,562 @@
     };
 
     /* ========================================================================
-       DAY-BOOK RENDER ENGINE (DYNAMIC READ FROM SOURCE STORES)
-       ======================================================================== */
-    const renderDashboardDayBook = () => {
-        const rawD = document.getElementById('dash-day-date')?.value || getToday();
-        const d = toIsoDate(rawD) || getToday();
-        const thead = document.getElementById('dash-daybook-thead');
-        const tbody = document.getElementById('dash-daybook-tbody');
-        const tfoot = document.getElementById('dash-daybook-tfoot');
-        if (!thead || !tbody || !tfoot) return;
-
-        const targetKid = window.currentDashboardKarkhanaFilter;
+       2. AGGREGATION HELPER (READS ALL STORES FOR DATE d)
+    ======================================================================== */
+    const collectDayBookData = (d, targetKid) => {
         const isAll = (targetKid === 'all');
 
-        const tableEl = thead.closest('table');
-        if (tableEl && tableEl.parentElement && !document.getElementById('dash-daybook-controls-bar')) {
-            const ctrlBar = document.createElement('div');
-            ctrlBar.id = 'dash-daybook-controls-bar';
-            ctrlBar.style.cssText = 'display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin:10px 0 12px 0;';
-            ctrlBar.innerHTML = `
-                <div style="flex:1; min-width:220px;">
-                    <input type="text" id="dash-daybook-search" class="search-box" placeholder="🔍 Search Kariger, Vivran, Item, In/Out..." style="width:100%; padding:8px 12px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; box-sizing:border-box;" oninput="onDaybookSearchInput()">
-                </div>
-                <div>
-                    <button type="button" id="dash-daybook-print-btn" class="sheet-btn" style="background:#1e3a8a; color:#ffffff; padding:7px 14px; font-weight:bold; border-radius:6px; border:none; cursor:pointer; display:inline-flex; align-items:center; gap:5px;" onclick="printDaybookReport()">
-                        🖨️ A6 Print
-                    </button>
-                </div>`;
-            tableEl.parentElement.insertBefore(ctrlBar, tableEl);
-        }
-
-        const searchInp = document.getElementById('dash-daybook-search') || document.getElementById('search-daybook-input');
-        const searchTxt = searchInp ? searchInp.value.toLowerCase().trim() : '';
-
-        // 1. BANA & ZARI STOCK INWARD
-        let bIn = 0, bOut = 0, zIn = 0, zOut = 0, pIn = 0, pOut = 0;
         const bStock = window.safeArray ? window.safeArray(window.getStore('bana_stock')) : [];
         const zStock = window.safeArray ? window.safeArray(window.getStore('zari_stock')) : [];
-
-        bStock.forEach((b) => {
-            if (isSameDay(b?.date, d) && matchesGodown(b.karkhanaId, targetKid)) {
-                bIn += safeNum(b.aaya);
-            }
-        });
-
-        zStock.forEach((z) => {
-            if (isSameDay(z?.date, d) && matchesGodown(z.karkhanaId, targetKid)) {
-                zIn += safeNum(z.aaya);
-            }
-        });
-
-        // 2. WEAVER CONSUMPTION & WAGE PAYMENTS (Tani Sheets)
         const karList = (typeof window.sanitizeKarigerList === 'function')
             ? window.sanitizeKarigerList()
             : (window.safeArray ? window.safeArray(window.getStore('kariger_list')) : []);
+        const transfers = (window.safeArray ? window.safeArray(window.getStore('material_transfers')) : [])
+            .filter((t) => isSameDay(t?.date, d));
+        const payRecords = (window.safeArray ? window.safeArray(window.getStore('payment_records')) : [])
+            .filter((x) => isSameDay(x?.date, d));
+        const rawSareeHistory = window.safeArray ? window.safeArray(window.getStore('saree_history')) : [];
+        const sanchaHist = (window.safeArray ? window.safeArray(window.getStore('sancha_history')) : [])
+            .filter((h) => isSameDay(h?.date, d) && matchesGodown(h.karkhanaId, targetKid));
+        const jobWorkers = (typeof window.getJobWorkers === 'function')
+            ? window.getJobWorkers()
+            : (window.safeArray ? window.safeArray(window.getStore('jobwork_workers')) : []);
 
+        // 1. BANA ROWS
+        const banaRows = [];
+        let bIn = 0, bOut = 0;
+        bStock.forEach((b) => {
+            if (isSameDay(b?.date, d) && matchesGodown(b.karkhanaId, targetKid) && safeNum(b.aaya) > 0) {
+                const q = safeNum(b.aaya);
+                bIn += q;
+                banaRows.push({ name: b.name, desc: b.isOpening ? '📦 Opening Stock' : 'Godam Purchase', inQty: q, outQty: 0 });
+            }
+        });
+
+        // 2. ZARI ROWS
+        const zariRows = [];
+        let zIn = 0, zOut = 0;
+        zStock.forEach((z) => {
+            if (isSameDay(z?.date, d) && matchesGodown(z.karkhanaId, targetKid) && safeNum(z.aaya) > 0) {
+                const q = safeNum(z.aaya);
+                zIn += q;
+                zariRows.push({ name: z.name, desc: z.isOpening ? '📦 Opening Stock' : 'Godam Purchase', inQty: q, outQty: 0 });
+            }
+        });
+
+        // 3. KARIGER TANI SHEETS (BANA / ZARI / PAYMENT)
+        const payRows = [];
+        let pIn = 0, pOut = 0;
         karList.forEach((k) => {
             if (!matchesGodown(k.karkhanaId, targetKid)) return;
-
             const sheets = (typeof window.getKarigerSheets === 'function') ? window.getKarigerSheets(k.id) : [];
             sheets.forEach((sh) => {
                 const rows = window.safeArray ? window.safeArray(sh?.rows) : [];
                 rows.forEach((r) => {
-                    if (isSameDay(r?.date, d)) {
-                        const netB = safeNum(r.netBana);
-                        const retB = safeNum(r.retBana);
-                        const netZ = safeNum(r.netZari);
-                        const retZ = safeNum(r.retZari);
-                        const paid = safeNum(r.paid);
+                    if (!isSameDay(r?.date, d)) return;
+                    const netB = safeNum(r.netBana), retB = safeNum(r.retBana);
+                    const netZ = safeNum(r.netZari), retZ = safeNum(r.retZari);
+                    const paid = safeNum(r.paid);
 
-                        if (netB > 0) bOut += netB;
-                        if (retB > 0) bIn += retB;
-                        if (netZ > 0) zOut += netZ;
-                        if (retZ > 0) zIn += retZ;
-                        if (paid > 0) pOut += paid;
-                    }
+                    const bName = r.banaItemName || r.banaItem || sh.banaItem || 'Bana';
+                    const zName = r.zariItemName || r.zariItem || sh.zariItem || 'Zari';
+
+                    if (netB > 0) { bOut += netB; banaRows.push({ name: bName, desc: `${k.name} (${sh.title})`, inQty: 0, outQty: netB }); }
+                    if (retB > 0) { bIn += retB; banaRows.push({ name: bName, desc: `${k.name} (${sh.title}) Return`, inQty: retB, outQty: 0 }); }
+                    if (netZ > 0) { zOut += netZ; zariRows.push({ name: zName, desc: `${k.name} (${sh.title})`, inQty: 0, outQty: netZ }); }
+                    if (retZ > 0) { zIn += retZ; zariRows.push({ name: zName, desc: `${k.name} (${sh.title}) Return`, inQty: retZ, outQty: 0 }); }
+                    if (paid > 0) { pOut += paid; payRows.push({ party: k.name, desc: `Mazdoori (${sh.title})`, inAmt: 0, outAmt: paid }); }
                 });
             });
         });
 
-        // 3. MATERIAL TRANSFERS
-        const transfers = (window.safeArray ? window.safeArray(window.getStore('material_transfers')) : [])
-            .filter((t) => isSameDay(t?.date, d));
-
+        // 4. TRANSFERS (BANA & ZARI)
         transfers.forEach((t) => {
-            const qty = safeNum(t.qty || t.quantity);
-            const isFrom = matchesGodown(t.fromKarkhanaId, targetKid);
-            const isTo = matchesGodown(t.toKarkhanaId, targetKid);
+            const q = safeNum(t.qty || t.quantity);
+            const fName = (typeof window.getKarkhanaNameById === 'function') ? window.getKarkhanaNameById(t.fromKarkhanaId) : t.fromKarkhanaId;
+            const tName = (typeof window.getKarkhanaNameById === 'function') ? window.getKarkhanaNameById(t.toKarkhanaId) : t.toKarkhanaId;
 
             if (t.type === 'bana') {
-                if (!isAll && isFrom) bOut += qty;
-                if (!isAll && isTo) bIn += qty;
+                if (isAll) {
+                    banaRows.push({ name: t.itemName, desc: `Transfer: ${fName} ➔ ${tName}`, inQty: q, outQty: q });
+                } else {
+                    if (matchesGodown(t.fromKarkhanaId, targetKid)) { bOut += q; banaRows.push({ name: t.itemName, desc: `Transfer Out ➔ ${tName}`, inQty: 0, outQty: q }); }
+                    if (matchesGodown(t.toKarkhanaId, targetKid)) { bIn += q; banaRows.push({ name: t.itemName, desc: `Transfer In ⬅ ${fName}`, inQty: q, outQty: 0 }); }
+                }
             } else if (t.type === 'zari') {
-                if (!isAll && isFrom) zOut += qty;
-                if (!isAll && isTo) zIn += qty;
+                if (isAll) {
+                    zariRows.push({ name: t.itemName, desc: `Transfer: ${fName} ➔ ${tName}`, inQty: q, outQty: q });
+                } else {
+                    if (matchesGodown(t.fromKarkhanaId, targetKid)) { zOut += q; zariRows.push({ name: t.itemName, desc: `Transfer Out ➔ ${tName}`, inQty: 0, outQty: q }); }
+                    if (matchesGodown(t.toKarkhanaId, targetKid)) { zIn += q; zariRows.push({ name: t.itemName, desc: `Transfer In ⬅ ${fName}`, inQty: q, outQty: 0 }); }
+                }
             }
         });
 
-        // 4. ⭐ DEDICATED PAYMENTS STORE READ (Separated from Daybook)
-        const payRecords = (window.safeArray ? window.safeArray(window.getStore('payment_records')) : [])
-            .filter((x) => isSameDay(x?.date, d));
-
+        // 5. PAYMENT RECORDS
         payRecords.forEach((e) => {
             if (!matchesGodown(e.karkhanaId, targetKid)) return;
+            if (e.karigerId) return;
             const amt = safeNum(e.amount);
-
             if (e.type === 'cash_transfer_in' || e.type === 'receipt') {
                 pIn += amt;
-            } else if ((e.type === 'cash_transfer_out' || e.type === 'payment') && !e.karigerId) {
+                payRows.push({ party: e.party || 'Cash Inward', desc: e.remarks || e.category || 'Cash Transfer', inAmt: amt, outAmt: 0 });
+            } else {
                 pOut += amt;
+                payRows.push({ party: e.party || 'Cash Outward', desc: e.remarks || e.category || 'Cash Transfer', inAmt: 0, outAmt: amt });
             }
         });
 
-        // 5. SAREE MOVEMENTS
-        const rawSareeHistory = window.safeArray ? window.safeArray(window.getStore('saree_history')) : [];
-        const sH = [];
+        // 6. SANCHA SUB-CATEGORIES: TANI & CHUKKA
+        const taniRows = [];
+        const chukkaRows = [];
+        let taniIn = 0, taniOut = 0, chukkaIn = 0, chukkaOut = 0;
+
+        sanchaHist.forEach((h) => {
+            const inQ = safeNum(h.aaya || h.qty);
+            const outQ = safeNum(h.gaya);
+            if (String(h.category || 'tani').toLowerCase() === 'chukka') {
+                chukkaIn += inQ;
+                chukkaOut += outQ;
+                chukkaRows.push(h);
+            } else {
+                taniIn += inQ;
+                taniOut += outQ;
+                taniRows.push(h);
+            }
+        });
+
+        // 7. SAREE SUB-CATEGORIES: FRESH, CUTTING, EMBROIDERY, CALENDER, LOTT
+        const sareeFreshRows = [];
+        const sareeLottRows = [];
+        let sfIn = 0, sfOut = 0, slIn = 0, slOut = 0;
 
         rawSareeHistory.forEach((h) => {
             if (!h || !isSameDay(h.date, d)) return;
             if (!matchesGodown(h.karkhanaId, targetKid)) return;
 
             const ref = String(h.refId || '');
-            const isJobWork = ref.startsWith('jwb_');
-            const isDukan = ref.startsWith('duk_');
+            if (ref.startsWith('duk_')) return;
+
+            const hType = String(h.type || 'fresh').toLowerCase();
             const inQ = safeInt(h.aai !== undefined ? h.aai : h.pcs);
             const outQ = safeInt(h.gai);
 
-            if (isDukan) return;
-            if (isJobWork && inQ > 0) return;
-
-            if (isJobWork && outQ > 0) {
-                const workerLabel = h.note || h.typeLabel || 'Job Work';
-                const isCal = String(h.typeLabel || '').toLowerCase().includes('calender');
-                const cleanLabel = isCal
-                    ? `Calender me hai (${workerLabel.replace(' ko bheja', '')})`
-                    : `Cutting me hai (${workerLabel.replace(' ko bheja', '')})`;
-
-                sH.push({
-                    sareeName: h.sareeName || 'Saree',
-                    karigerName: h.karigerName || h.kariger || '-',
-                    aai: 0,
-                    gai: outQ,
-                    detail: cleanLabel
-                });
-                return;
-            }
-
-            if (inQ > 0 || outQ > 0) {
-                sH.push({
+            if (hType === 'fresh' && (inQ > 0 || outQ > 0)) {
+                sfIn += inQ;
+                sfOut += outQ;
+                sareeFreshRows.push({
                     sareeName: h.sareeName || h.name || 'Saree',
                     karigerName: h.karigerName || h.kariger || '-',
                     aai: inQ,
                     gai: outQ,
-                    detail: h.typeLabel || h.note || 'Fresh Saree Movement'
+                    detail: h.typeLabel || h.note || 'Fresh Saree'
+                });
+            } else if (hType === 'lott' && (inQ > 0 || outQ > 0)) {
+                slIn += inQ;
+                slOut += outQ;
+                sareeLottRows.push({
+                    sareeName: h.sareeName || h.name || 'Lott Saree',
+                    karigerName: h.karigerName || h.kariger || '-',
+                    aai: inQ,
+                    gai: outQ,
+                    detail: h.typeLabel || h.note || 'Lott / Damage'
                 });
             }
         });
 
-        let sIn = 0, sOut = 0;
-        sH.forEach((h) => {
-            sIn += safeInt(h.aai);
-            sOut += safeInt(h.gai);
-        });
-
-        // 6. SANCHA MOVEMENTS
-        const sanchaHist = (window.safeArray ? window.safeArray(window.getStore('sancha_history')) : [])
-            .filter((h) => isSameDay(h?.date, d) && matchesGodown(h.karkhanaId, targetKid));
-
-        let sanchaIn = 0, sanchaOut = 0;
-        sanchaHist.forEach((h) => {
-            sanchaIn += safeNum(h.aaya);
-            sanchaOut += safeNum(h.gaya);
-        });
-
-        // Subtitle badges update
-        setElementText('sub-day-bana', `In: +${bIn.toFixed(1)} | Out: -${bOut.toFixed(1)}`);
-        setElementText('sub-day-zari', `In: +${zIn.toFixed(1)} | Out: -${zOut.toFixed(1)}`);
-        setElementText('sub-day-saree', `In: +${sIn} | Out: -${sOut}`);
-        setElementText('sub-day-payment', `${pIn > 0 ? `In: +₹${pIn.toFixed(0)} | ` : ''}Diya: ₹${pOut.toFixed(0)}`);
-        setElementText('sub-day-sancha', `In: +${sanchaIn.toFixed(1)} | Out: -${sanchaOut.toFixed(1)}`);
-
-        let pager = document.getElementById('dash-daybook-pagination-controls');
-        if (!pager && tableEl && tableEl.parentElement) {
-            pager = document.createElement('div');
-            pager.id = 'dash-daybook-pagination-controls';
-            pager.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding:8px 4px; border-top:1px solid #e2e8f0; flex-wrap:wrap; gap:8px;';
-            tableEl.parentElement.appendChild(pager);
-        }
-
-        // ================= TAB 1: BANA =================
-        if (window.currentDayBookTab === 'bana') {
-            thead.innerHTML = "<tr style='background:#059669; color:white;'><th>Bana Ka Naam</th><th>Kariger / Godam Vivran</th><th>📥 Aaya (In)</th><th>📤 Gaya (Out)</th></tr>";
-            let bRows = [];
-
-            bStock.forEach((b) => {
-                if (isSameDay(b?.date, d) && matchesGodown(b.karkhanaId, targetKid) && safeNum(b.aaya) > 0) {
-                    bRows.push({
-                        name: b.name,
-                        desc: b.isOpening ? '📦 Opening Stock' : 'Godam Purchase',
-                        inQty: safeNum(b.aaya),
-                        outQty: 0
-                    });
-                }
-            });
-
-            karList.forEach((k) => {
-                if (!matchesGodown(k.karkhanaId, targetKid)) return;
-
-                const sheets = (typeof window.getKarigerSheets === 'function') ? window.getKarigerSheets(k.id) : [];
+        const buildJobWorkRows = (wType) => {
+            const rows = [];
+            let gTot = 0, aTot = 0, dTot = 0;
+            jobWorkers.forEach((w) => {
+                if (!w || String(w.type || '').toLowerCase() !== wType) return;
+                const sheets = (typeof window.getJobWorkerSheets === 'function')
+                    ? window.getJobWorkerSheets(w.id)
+                    : (window.safeArray ? window.safeArray(window.getStore(`jobwork_sheets_${w.id}`)) : []);
                 sheets.forEach((sh) => {
-                    const rows = window.safeArray ? window.safeArray(sh?.rows) : [];
-                    rows.forEach((r) => {
-                        if (isSameDay(r?.date, d)) {
-                            const itName = r.banaItemName || r.banaItem || sh.banaItem || 'Bana';
-                            const netB = safeNum(r.netBana);
-                            const retB = safeNum(r.retBana);
-
-                            if (netB > 0) bRows.push({ name: itName, desc: `${k.name} (${sh.title})`, inQty: 0, outQty: netB });
-                            if (retB > 0) bRows.push({ name: itName, desc: `${k.name} (${sh.title}) Return`, inQty: retB, outQty: 0 });
-                        }
-                    });
-                });
-            });
-
-            transfers.filter((t) => t?.type === 'bana').forEach((t) => {
-                const q = safeNum(t.qty || t.quantity);
-                const fName = (typeof window.getKarkhanaNameById === 'function') ? window.getKarkhanaNameById(t.fromKarkhanaId) : t.fromKarkhanaId;
-                const tName = (typeof window.getKarkhanaNameById === 'function') ? window.getKarkhanaNameById(t.toKarkhanaId) : t.toKarkhanaId;
-
-                if (isAll) {
-                    bRows.push({ name: t.itemName, desc: `Transfer: ${fName} ➔ ${tName}`, inQty: q, outQty: q });
-                } else {
-                    if (matchesGodown(t.fromKarkhanaId, targetKid)) {
-                        bRows.push({ name: t.itemName, desc: `Transfer Out ➔ ${tName}`, inQty: 0, outQty: q });
-                    }
-                    if (matchesGodown(t.toKarkhanaId, targetKid)) {
-                        bRows.push({ name: t.itemName, desc: `Transfer In ⬅ ${fName}`, inQty: q, outQty: 0 });
-                    }
-                }
-            });
-
-            if (searchTxt) {
-                bRows = bRows.filter((r) => `${r.name || ''} ${r.desc || ''} ${r.inQty} ${r.outQty} In Out Aaya Gaya`.toLowerCase().includes(searchTxt));
-            }
-
-            currentDaybookFilteredRowsCache = bRows;
-            renderPaginatedDaybookRows(bRows, tbody, pager, '#059669', (r) => `
-                <tr>
-                    <td><strong>${esc(r.name)}</strong></td>
-                    <td>${esc(r.desc)}</td>
-                    <td style='color:#059669; font-weight:700;'>${r.inQty > 0 ? `+${r.inQty.toFixed(2)}` : '-'}</td>
-                    <td style='color:#dc2626; font-weight:700;'>${r.outQty > 0 ? `-${r.outQty.toFixed(2)}` : '-'}</td>
-                </tr>
-            `, 'Is tarikh / filter me Bana ki koi entry nahi hai.', 4);
-
-            let curIn = 0, curOut = 0;
-            bRows.forEach(r => { curIn += r.inQty; curOut += r.outQty; });
-            tfoot.innerHTML = `<tr><td colspan='2'><strong>Total Rozana Bana:</strong></td><td><strong style='color:#059669;'>+${curIn.toFixed(2)}</strong></td><td><strong style='color:#dc2626;'>-${curOut.toFixed(2)}</strong></td></tr>`;
-
-        // ================= TAB 2: ZARI =================
-        } else if (window.currentDayBookTab === 'zari') {
-            thead.innerHTML = "<tr style='background:#ea580c; color:white;'><th>Zari Ka Naam</th><th>Kariger / Godam Vivran</th><th>📥 Aayi (In)</th><th>📤 Gayi (Out)</th></tr>";
-            let zRows = [];
-
-            zStock.forEach((z) => {
-                if (isSameDay(z?.date, d) && matchesGodown(z.karkhanaId, targetKid) && safeNum(z.aaya) > 0) {
-                    zRows.push({
-                        name: z.name,
-                        desc: z.isOpening ? '📦 Opening Stock' : 'Godam Purchase',
-                        inQty: safeNum(z.aaya),
-                        outQty: 0
-                    });
-                }
-            });
-
-            karList.forEach((k) => {
-                if (!matchesGodown(k.karkhanaId, targetKid)) return;
-
-                const sheets = (typeof window.getKarigerSheets === 'function') ? window.getKarigerSheets(k.id) : [];
-                sheets.forEach((sh) => {
-                    const rows = window.safeArray ? window.safeArray(sh?.rows) : [];
-                    rows.forEach((r) => {
-                        if (isSameDay(r?.date, d)) {
-                            const itName = r.zariItemName || r.zariItem || sh.zariItem || 'Zari';
-                            const netZ = safeNum(r.netZari);
-                            const retZ = safeNum(r.retZari);
-
-                            if (netZ > 0) zRows.push({ name: itName, desc: `${k.name} (${sh.title})`, inQty: 0, outQty: netZ });
-                            if (retZ > 0) zRows.push({ name: itName, desc: `${k.name} (${sh.title}) Return`, inQty: retZ, outQty: 0 });
-                        }
-                    });
-                });
-            });
-
-            transfers.filter((t) => t?.type === 'zari').forEach((t) => {
-                const q = safeNum(t.qty || t.quantity);
-                const fName = (typeof window.getKarkhanaNameById === 'function') ? window.getKarkhanaNameById(t.fromKarkhanaId) : t.fromKarkhanaId;
-                const tName = (typeof window.getKarkhanaNameById === 'function') ? window.getKarkhanaNameById(t.toKarkhanaId) : t.toKarkhanaId;
-
-                if (isAll) {
-                    zRows.push({ name: t.itemName, desc: `Transfer: ${fName} ➔ ${tName}`, inQty: q, outQty: q });
-                } else {
-                    if (matchesGodown(t.fromKarkhanaId, targetKid)) {
-                        zRows.push({ name: t.itemName, desc: `Transfer Out ➔ ${tName}`, inQty: 0, outQty: q });
-                    }
-                    if (matchesGodown(t.toKarkhanaId, targetKid)) {
-                        zRows.push({ name: t.itemName, desc: `Transfer In ⬅ ${fName}`, inQty: q, outQty: 0 });
-                    }
-                }
-            });
-
-            if (searchTxt) {
-                zRows = zRows.filter((r) => `${r.name || ''} ${r.desc || ''} ${r.inQty} ${r.outQty} In Out Aayi Gayi`.toLowerCase().includes(searchTxt));
-            }
-
-            currentDaybookFilteredRowsCache = zRows;
-            renderPaginatedDaybookRows(zRows, tbody, pager, '#ea580c', (r) => `
-                <tr>
-                    <td><strong>${esc(r.name)}</strong></td>
-                    <td>${esc(r.desc)}</td>
-                    <td style='color:#059669; font-weight:700;'>${r.inQty > 0 ? `+${r.inQty.toFixed(2)}` : '-'}</td>
-                    <td style='color:#dc2626; font-weight:700;'>${r.outQty > 0 ? `-${r.outQty.toFixed(2)}` : '-'}</td>
-                </tr>
-            `, 'Is tarikh / filter me Zari ki koi entry nahi hai.', 4);
-
-            let curIn = 0, curOut = 0;
-            zRows.forEach(r => { curIn += r.inQty; curOut += r.outQty; });
-            tfoot.innerHTML = `<tr><td colspan='2'><strong>Total Rozana Zari:</strong></td><td><strong style='color:#059669;'>+${curIn.toFixed(2)}</strong></td><td><strong style='color:#dc2626;'>-${curOut.toFixed(2)}</strong></td></tr>`;
-
-        // ================= TAB 3: SAREE =================
-        } else if (window.currentDayBookTab === 'saree') {
-            thead.innerHTML = "<tr style='background:#2563eb; color:white;'><th>Saree Ka Naam</th><th>Kariger / Vivran</th><th>📥 Aayi (In)</th><th>📤 Gayi (Out)</th><th>Detail</th></tr>";
-            let sRows = sH;
-
-            if (searchTxt) {
-                sRows = sRows.filter((h) => `${h.sareeName || ''} ${h.karigerName || ''} ${h.detail || ''} ${h.aai} ${h.gai} In Out Aai Gai`.toLowerCase().includes(searchTxt));
-            }
-
-            currentDaybookFilteredRowsCache = sRows;
-            renderPaginatedDaybookRows(sRows, tbody, pager, '#2563eb', (h) => {
-                const inQ = safeInt(h.aai);
-                const outQ = safeInt(h.gai);
-                return `<tr>
-                    <td><strong>${esc(h.sareeName)}</strong></td>
-                    <td>👤 ${esc(h.karigerName)}</td>
-                    <td style='color:#059669; font-weight:700;'>${inQ > 0 ? `+${inQ}` : '-'}</td>
-                    <td style='color:#dc2626; font-weight:700;'>${outQ > 0 ? `-${outQ}` : '-'}</td>
-                    <td>${outQ > 0 ? `<span style='color:#dc2626; font-weight:bold;'>${esc(h.detail)}</span>` : esc(h.detail)}</td>
-                </tr>`;
-            }, 'Is tarikh / filter me Saree ki koi entry nahi hai.', 5);
-
-            let curIn = 0, curOut = 0;
-            sRows.forEach(h => { curIn += safeInt(h.aai); curOut += safeInt(h.gai); });
-            tfoot.innerHTML = `<tr><td colspan='2'><strong>Kul Saree:</strong></td><td><strong style='color:#059669;'>+${curIn} Pcs</strong></td><td><strong style='color:#dc2626;'>-${curOut} Pcs</strong></td><td>-</td></tr>`;
-
-        // ================= TAB 4: PAYMENT (DIRECT FROM PAYMENT_RECORDS & TANI SHEETS) =================
-        } else if (window.currentDayBookTab === 'payment') {
-            thead.innerHTML = "<tr style='background:#7c3aed; color:white;'><th>Party / Kariger</th><th>Vivran / Khata</th><th>📥 Aamad (In)</th><th>📤 Diya (Out)</th></tr>";
-            let pRows = [];
-
-            // 1. Kariger Tani Sheets Wages
-            karList.forEach((k) => {
-                if (!matchesGodown(k.karkhanaId, targetKid)) return;
-
-                const sheets = (typeof window.getKarigerSheets === 'function') ? window.getKarigerSheets(k.id) : [];
-                sheets.forEach((sh) => {
-                    const rows = window.safeArray ? window.safeArray(sh?.rows) : [];
-                    rows.forEach((r) => {
-                        if (isSameDay(r?.date, d) && safeNum(r.paid) > 0) {
-                            pRows.push({
-                                party: k.name,
-                                desc: `Mazdoori (${sh.title})`,
-                                inAmt: 0,
-                                outAmt: safeNum(r.paid)
+                    const sRows = window.safeArray ? window.safeArray(sh?.rows) : [];
+                    sRows.forEach((r) => {
+                        if (!r || !isSameDay(r.date, d)) return;
+                        const gQ = safeInt(r.gayiQty);
+                        const aQ = safeInt(r.aayiQty);
+                        const dQ = safeInt(r.damagePcs);
+                        if (gQ > 0 || aQ > 0 || dQ > 0) {
+                            gTot += gQ;
+                            aTot += aQ;
+                            dTot += dQ;
+                            const gKars = Array.isArray(r.gayiItems) && r.gayiItems.length
+                                ? r.gayiItems.map((x) => `${x.karigar}(${x.qty})`).join(', ')
+                                : '';
+                            const aKars = Array.isArray(r.aayiItems) && r.aayiItems.length
+                                ? r.aayiItems.map((x) => `${x.karigar}(${x.qty})`).join(', ')
+                                : '';
+                            const detailParts = [];
+                            if (gKars) detailParts.push(`Gayi: ${gKars}`);
+                            if (aKars) detailParts.push(`Aayi: ${aKars}`);
+                            rows.push({
+                                worker: w.name,
+                                sheet: sh.title || '-',
+                                gayi: gQ,
+                                aayi: aQ,
+                                damagePcs: dQ,
+                                detail: detailParts.join(' | ') || '-'
                             });
                         }
                     });
                 });
             });
+            return { rows, gayi: gTot, aayi: aTot, damage: dTot };
+        };
 
-            // 2. Dedicated Payments Store (Cash Transfers & Standalone Receipts/Payments)
-            payRecords.forEach((e) => {
-                if (!matchesGodown(e.karkhanaId, targetKid)) return;
-                if (e.karigerId) return; // Skip duplicate if already in sheet rows
+        const cuttingData = buildJobWorkRows('cutting');
+        const embroideryData = buildJobWorkRows('embroidery');
+        const calenderData = buildJobWorkRows('calender');
 
-                const amt = safeNum(e.amount);
-                if (e.type === 'cash_transfer_in' || e.type === 'receipt') {
-                    pRows.push({ party: e.party || 'Cash Inward', desc: e.remarks || e.category || 'Cash Transfer', inAmt: amt, outAmt: 0 });
-                } else {
-                    pRows.push({ party: e.party || 'Cash Outward', desc: e.remarks || e.category || 'Cash Transfer', inAmt: 0, outAmt: amt });
-                }
-            });
+        const sInAll = sfIn + cuttingData.aayi + embroideryData.aayi + calenderData.aayi + slIn;
+        const sOutAll = sfOut + cuttingData.gayi + embroideryData.gayi + calenderData.gayi + slOut;
+
+        return {
+            bana: { rows: banaRows, inTot: bIn, outTot: bOut },
+            zari: { rows: zariRows, inTot: zIn, outTot: zOut },
+            sancha_tani: { rows: taniRows, inTot: taniIn, outTot: taniOut },
+            sancha_chukka: { rows: chukkaRows, inTot: chukkaIn, outTot: chukkaOut },
+            saree_fresh: { rows: sareeFreshRows, inTot: sfIn, outTot: sfOut },
+            saree_cutting: cuttingData,
+            saree_embroidery: embroideryData,
+            saree_calender: calenderData,
+            saree_lott: { rows: sareeLottRows, inTot: slIn, outTot: slOut },
+            payment: { rows: payRows, inTot: pIn, outTot: pOut },
+            totals: {
+                bIn, bOut, zIn, zOut,
+                sIn: sInAll, sOut: sOutAll,
+                pIn, pOut,
+                sanchaIn: taniIn + chukkaIn, sanchaOut: taniOut + chukkaOut
+            }
+        };
+    };
+
+    /* ========================================================================
+       3. TALLY MENU + REPORT RENDER ENGINE
+    ======================================================================== */
+    const ensureDaybookTallyShell = () => {
+        const container = document.querySelector('#daybook-section .daybook-container');
+        if (!container) return null;
+
+        // Hide old 5-tab strip cleanly (IDs stay intact for compatibility)
+        const oldGrid = container.querySelector('.daybook-btn-grid');
+        if (oldGrid) oldGrid.style.display = 'none';
+
+        let menuWrap = document.getElementById('tally-daybook-menu-wrap');
+        if (!menuWrap) {
+            menuWrap = document.createElement('div');
+            menuWrap.id = 'tally-daybook-menu-wrap';
+            container.insertBefore(menuWrap, container.firstChild);
+        }
+
+        let reportHeader = document.getElementById('tally-daybook-report-bar');
+        if (!reportHeader) {
+            reportHeader = document.createElement('div');
+            reportHeader.id = 'tally-daybook-report-bar';
+            container.insertBefore(reportHeader, menuWrap.nextSibling);
+        }
+
+        return {
+            menuWrap,
+            reportHeader,
+            tableWrap: container.querySelector('.table-responsive')
+        };
+    };
+
+    const renderTallyMenuCard = (menuWrap, title, items, showBackToMain) => {
+        let html = `
+            <div style="max-width:520px; margin:14px auto 18px; background:#ffffff; border:1px solid #eef0f4; border-radius:10px; box-shadow:0 20px 45px rgba(133, 92, 0, 0.12), 0 4px 12px rgba(0,0,0,0.04); overflow:hidden;">
+                <div style="background:#fdf6e2; border-bottom:1.5px solid #f2b71d; padding:12px 16px; display:flex; justify-content:space-between; align-items:center;">
+                    <strong style="font-size:14.5px; color:#1f2937;">${esc(title)}</strong>
+                    ${showBackToMain
+                        ? `<button type="button" onclick="goDayBookBack()" style="background:#ffffff; color:#374151; border:1px solid #e5e7eb; padding:4px 10px; border-radius:6px; font-size:11.5px; font-weight:700; cursor:pointer;">← [Esc] Day-Book List</button>`
+                        : `<span style="font-size:11px; color:#92400e; font-weight:700;">Select Register</span>`
+                    }
+                </div>
+                <div style="padding:8px 0;">`;
+
+        items.forEach((it, idx) => {
+            const isAct = (idx === daybookMenuActiveIdx);
+            const bg = isAct ? '#f2b71d' : 'transparent';
+            const fg = isAct ? '#ffffff' : '#1f2937';
+            const subFg = isAct ? '#ffffff' : '#b47d00';
+            const keyFg = isAct ? '#ffffff' : '#e0a60d';
+
+            html += `
+                <button type="button" class="tally-db-menu-item${isAct ? ' active' : ''}" data-idx="${idx}" data-key="${esc(it.key)}"
+                    onclick="${it.onclick}"
+                    style="width:100%; background:${bg}; color:${fg}; border:none; padding:10px 18px; display:flex; justify-content:space-between; align-items:center; gap:10px; cursor:pointer; font-size:13.5px; font-weight:${isAct ? '700' : '600'}; text-align:left; border-bottom:1px solid #f9fafb;">
+                    <span>${it.labelHtml.replace('class="k"', `style="color:${keyFg}; font-weight:800;"`)}</span>
+                    <span style="font-size:11.5px; font-weight:600; color:${subFg};">${esc(it.summary)}</span>
+                </button>`;
+        });
+
+        html += `
+                </div>
+                <div style="background:#fbfbfc; border-top:1px solid #eef0f4; padding:8px 14px; font-size:11px; color:#9ca3af; text-align:center;">
+                    ↑ ↓ Arrow Keys · [Enter] Kholein · [Esc] Wapas
+                </div>
+            </div>`;
+
+        menuWrap.innerHTML = html;
+    };
+
+    const renderDashboardDayBook = () => {
+        const dateEl = document.getElementById('dash-day-date');
+        if (dateEl && !dateEl.value) dateEl.value = getToday();
+        const rawD = dateEl?.value || getToday();
+        const d = toIsoDate(rawD) || getToday();
+
+        const thead = document.getElementById('dash-daybook-thead');
+        const tbody = document.getElementById('dash-daybook-tbody');
+        const tfoot = document.getElementById('dash-daybook-tfoot');
+        if (!thead || !tbody || !tfoot) return;
+
+        const targetKid = window.currentDashboardKarkhanaFilter;
+        const data = collectDayBookData(d, targetKid);
+        const tot = data.totals;
+
+        // Keep legacy subtitle badges updated safely
+        setElementText('sub-day-bana', `In: +${tot.bIn.toFixed(1)} | Out: -${tot.bOut.toFixed(1)}`);
+        setElementText('sub-day-zari', `In: +${tot.zIn.toFixed(1)} | Out: -${tot.zOut.toFixed(1)}`);
+        setElementText('sub-day-saree', `In: +${tot.sIn} | Out: -${tot.sOut}`);
+        setElementText('sub-day-payment', `${tot.pIn > 0 ? `In: +₹${tot.pIn.toFixed(0)} | ` : ''}Diya: ₹${tot.pOut.toFixed(0)}`);
+        setElementText('sub-day-sancha', `In: +${tot.sanchaIn.toFixed(1)} | Out: -${tot.sanchaOut.toFixed(1)}`);
+
+        const shell = ensureDaybookTallyShell();
+        if (!shell) return;
+        const { menuWrap, reportHeader, tableWrap } = shell;
+
+        // MENU VIEWS
+        if (daybookViewMode === 'menu') {
+            menuWrap.style.display = 'block';
+            reportHeader.style.display = 'none';
+            if (tableWrap) tableWrap.style.display = 'none';
+
+            renderTallyMenuCard(menuWrap, `Day-Book List (${d})`, [
+                { key: 'b', labelHtml: '<span class="k">B</span>ana', summary: `In: +${tot.bIn.toFixed(1)} | Out: -${tot.bOut.toFixed(1)} Kg`, onclick: "openDayBookReport('bana')" },
+                { key: 'z', labelHtml: '<span class="k">Z</span>ari', summary: `In: +${tot.zIn.toFixed(1)} | Out: -${tot.zOut.toFixed(1)} Kg`, onclick: "openDayBookReport('zari')" },
+                { key: 's', labelHtml: '<span class="k">S</span>ancha ▸', summary: `Tani & Chukka (In: +${tot.sanchaIn.toFixed(1)} | Out: -${tot.sanchaOut.toFixed(1)})`, onclick: "openDayBookSubMenu('sancha-menu')" },
+                { key: 'e', labelHtml: 'Sare<span class="k">e</span> ▸', summary: `Fresh, Cutting, Emb, Cal, Lott`, onclick: "openDayBookSubMenu('saree-menu')" },
+                { key: 'p', labelHtml: '<span class="k">P</span>ayment', summary: `${tot.pIn > 0 ? `In: +₹${tot.pIn.toFixed(0)} | ` : ''}Diya: ₹${tot.pOut.toFixed(0)}`, onclick: "openDayBookReport('payment')" }
+            ], false);
+            return;
+        }
+
+        if (daybookViewMode === 'sancha-menu') {
+            menuWrap.style.display = 'block';
+            reportHeader.style.display = 'none';
+            if (tableWrap) tableWrap.style.display = 'none';
+
+            renderTallyMenuCard(menuWrap, `Sancha Day-Book (${d})`, [
+                { key: 't', labelHtml: '🧵 <span class="k">T</span>ani', summary: `In: +${data.sancha_tani.inTot.toFixed(2)} | Out: -${data.sancha_tani.outTot.toFixed(2)} Kg`, onclick: "openDayBookReport('sancha_tani')" },
+                { key: 'c', labelHtml: '⚙️ <span class="k">C</span>hukka', summary: `In: +${data.sancha_chukka.inTot.toFixed(2)} | Out: -${data.sancha_chukka.outTot.toFixed(2)} Kg`, onclick: "openDayBookReport('sancha_chukka')" }
+            ], true);
+            return;
+        }
+
+        if (daybookViewMode === 'saree-menu') {
+            menuWrap.style.display = 'block';
+            reportHeader.style.display = 'none';
+            if (tableWrap) tableWrap.style.display = 'none';
+
+            renderTallyMenuCard(menuWrap, `Saree Day-Book (${d})`, [
+                { key: 'f', labelHtml: '🟢 <span class="k">F</span>resh', summary: `In: +${data.saree_fresh.inTot} | Out: -${data.saree_fresh.outTot} Pcs`, onclick: "openDayBookReport('saree_fresh')" },
+                { key: 'c', labelHtml: '✂️ <span class="k">C</span>utting', summary: `Gayi: -${data.saree_cutting.gayi} | Aayi: +${data.saree_cutting.aayi} Pcs`, onclick: "openDayBookReport('saree_cutting')" },
+                { key: 'e', labelHtml: '🪡 <span class="k">E</span>mbroidery', summary: `Gayi: -${data.saree_embroidery.gayi} | Aayi: +${data.saree_embroidery.aayi} Pcs`, onclick: "openDayBookReport('saree_embroidery')" },
+                { key: 'l', labelHtml: '🎛️ Ca<span class="k">l</span>ender', summary: `Gayi: -${data.saree_calender.gayi} | Aayi: +${data.saree_calender.aayi} Pcs`, onclick: "openDayBookReport('saree_calender')" },
+                { key: 'o', labelHtml: '🔴 L<span class="k">o</span>tt', summary: `In: +${data.saree_lott.inTot} | Out: -${data.saree_lott.outTot} Pcs`, onclick: "openDayBookReport('saree_lott')" }
+            ], true);
+            return;
+        }
+
+        // REPORT VIEW
+        menuWrap.style.display = 'none';
+        reportHeader.style.display = 'flex';
+        if (tableWrap) tableWrap.style.display = 'block';
+
+        const tabBreadcrumbs = {
+            bana: 'Day-Book › Bana',
+            zari: 'Day-Book › Zari',
+            sancha_tani: 'Day-Book › Sancha › Tani',
+            sancha_chukka: 'Day-Book › Sancha › Chukka',
+            saree_fresh: 'Day-Book › Saree › Fresh',
+            saree_cutting: 'Day-Book › Saree › Cutting',
+            saree_embroidery: 'Day-Book › Saree › Embroidery',
+            saree_calender: 'Day-Book › Saree › Calender',
+            saree_lott: 'Day-Book › Saree › Lott',
+            payment: 'Day-Book › Payment'
+        };
+
+        const curTab = window.currentDayBookTab || 'bana';
+        reportHeader.style.cssText = 'display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; background:#fdf6e2; border:1px solid #fde68a; border-radius:8px; padding:9px 14px; margin-bottom:10px;';
+        reportHeader.innerHTML = `
+            <div style="display:flex; align-items:center; gap:10px;">
+                <button type="button" onclick="goDayBookBack()" style="background:#ffffff; color:#1f2937; border:1px solid #e5e7eb; padding:5px 11px; border-radius:6px; font-size:12px; font-weight:700; cursor:pointer;">← [Esc] Wapas</button>
+                <strong style="font-size:14px; color:#1f2937;">${esc(tabBreadcrumbs[curTab] || 'Day-Book')}</strong>
+            </div>
+            <span style="font-size:12px; font-weight:700; color:#92400e;">Tarikh: ${esc(d)}</span>
+        `;
+
+        const tableEl = thead.closest('table');
+        if (tableEl && tableEl.parentElement && !document.getElementById('dash-daybook-controls-bar')) {
+            const ctrlBar = document.createElement('div');
+            ctrlBar.id = 'dash-daybook-controls-bar';
+            ctrlBar.style.cssText = 'display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin:6px 0 12px 0;';
+            ctrlBar.innerHTML = `
+                <div style="flex:1; min-width:220px;">
+                    <input type="text" id="dash-daybook-search" class="search-box" placeholder="🔍 Search Kariger, Vivran, Item..." style="width:100%; padding:8px 12px; border:1px solid #e2e8f0; border-radius:6px; font-size:13px; box-sizing:border-box;" oninput="onDaybookSearchInput()">
+                </div>
+                <div>
+                    <button type="button" id="dash-daybook-print-btn" class="add-btn" onclick="printDaybookReport()">🖨️ A6 Print</button>
+                </div>`;
+            tableEl.parentElement.insertBefore(ctrlBar, tableEl);
+        }
+
+        let pager = document.getElementById('dash-daybook-pagination-controls');
+        if (!pager && tableEl && tableEl.parentElement) {
+            pager = document.createElement('div');
+            pager.id = 'dash-daybook-pagination-controls';
+            pager.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding:8px 4px; border-top:1px solid #eef0f4; flex-wrap:wrap; gap:8px;';
+            tableEl.parentElement.appendChild(pager);
+        }
+
+        const searchInp = document.getElementById('dash-daybook-search') || document.getElementById('search-daybook-input');
+        const searchTxt = searchInp ? searchInp.value.toLowerCase().trim() : '';
+
+        if (curTab === 'bana' || curTab === 'zari') {
+            let rows = [...(curTab === 'bana' ? data.bana.rows : data.zari.rows)];
+            const label = curTab === 'bana' ? 'Bana' : 'Zari';
+            thead.innerHTML = `<tr><th>${label} Ka Naam</th><th>Kariger / Godam Vivran</th><th>📥 Aaya (In)</th><th>📤 Gaya (Out)</th></tr>`;
 
             if (searchTxt) {
-                pRows = pRows.filter((dp) => `${dp.party || ''} ${dp.desc || ''} ${dp.inAmt} ${dp.outAmt} In Out Aamad Diya`.toLowerCase().includes(searchTxt));
+                rows = rows.filter((r) => `${r.name || ''} ${r.desc || ''} ${r.inQty} ${r.outQty}`.toLowerCase().includes(searchTxt));
             }
+            currentDaybookFilteredRowsCache = rows;
 
-            currentDaybookFilteredRowsCache = pRows;
-            renderPaginatedDaybookRows(pRows, tbody, pager, '#7c3aed', (dp) => `
+            renderPaginatedDaybookRows(rows, tbody, pager, '#f2b71d', (r) => `
+                <tr>
+                    <td><strong>${esc(r.name)}</strong></td>
+                    <td>${esc(r.desc)}</td>
+                    <td style="color:#92400e; font-weight:700;">${r.inQty > 0 ? `+${r.inQty.toFixed(2)} Kg` : '-'}</td>
+                    <td style="color:#1f2937; font-weight:700;">${r.outQty > 0 ? `-${r.outQty.toFixed(2)} Kg` : '-'}</td>
+                </tr>
+            `, `Is tarikh me ${label} ki koi entry nahi hai.`, 4);
+
+            let curIn = 0, curOut = 0;
+            rows.forEach((r) => { curIn += r.inQty; curOut += r.outQty; });
+            tfoot.innerHTML = `<tr><td colspan="2"><strong>Total Rozana ${label}:</strong></td><td><strong>+${curIn.toFixed(2)} Kg</strong></td><td><strong>-${curOut.toFixed(2)} Kg</strong></td></tr>`;
+
+        } else if (curTab === 'sancha_tani' || curTab === 'sancha_chukka') {
+            const isChukka = (curTab === 'sancha_chukka');
+            const label = isChukka ? 'Chukka' : 'Tani';
+            let rows = [...(isChukka ? data.sancha_chukka.rows : data.sancha_tani.rows)];
+            thead.innerHTML = `<tr><th>${label} Item</th><th>Kariger / Vivran</th><th>📥 Aaya (In)</th><th>📤 Gaya (Out)</th></tr>`;
+
+            if (searchTxt) {
+                rows = rows.filter((h) => `${h.name || ''} ${h.kariger || ''} ${h.type || ''}`.toLowerCase().includes(searchTxt));
+            }
+            currentDaybookFilteredRowsCache = rows;
+
+            renderPaginatedDaybookRows(rows, tbody, pager, '#f2b71d', (h) => {
+                const inQ = safeNum(h.aaya || h.qty);
+                const outQ = safeNum(h.gaya);
+                return `
+                    <tr>
+                        <td><strong>${esc(h.name || label)}</strong></td>
+                        <td>${h.kariger ? `👤 ${esc(h.kariger)}` : esc(h.type || 'Godam Purchase')}</td>
+                        <td style="color:#92400e; font-weight:700;">${inQ > 0 ? `+${inQ.toFixed(2)} Kg` : '-'}</td>
+                        <td style="color:#1f2937; font-weight:700;">${outQ > 0 ? `-${outQ.toFixed(2)} Kg` : '-'}</td>
+                    </tr>`;
+            }, `Is tarikh me ${label} ki koi entry nahi hai.`, 4);
+
+            let curIn = 0, curOut = 0;
+            rows.forEach((h) => { curIn += safeNum(h.aaya || h.qty); curOut += safeNum(h.gaya); });
+            tfoot.innerHTML = `<tr><td colspan="2"><strong>Total Rozana ${label}:</strong></td><td><strong>+${curIn.toFixed(2)} Kg</strong></td><td><strong>-${curOut.toFixed(2)} Kg</strong></td></tr>`;
+
+        } else if (curTab === 'saree_fresh' || curTab === 'saree_lott') {
+            const isLott = (curTab === 'saree_lott');
+            const label = isLott ? 'Lott Saree' : 'Fresh Saree';
+            let rows = [...(isLott ? data.saree_lott.rows : data.saree_fresh.rows)];
+            thead.innerHTML = `<tr><th>Saree Ka Naam</th><th>Kariger / Party</th><th>📥 Aayi (In)</th><th>📤 Gayi (Out)</th><th>Detail</th></tr>`;
+
+            if (searchTxt) {
+                rows = rows.filter((h) => `${h.sareeName || ''} ${h.karigerName || ''} ${h.detail || ''}`.toLowerCase().includes(searchTxt));
+            }
+            currentDaybookFilteredRowsCache = rows;
+
+            renderPaginatedDaybookRows(rows, tbody, pager, '#f2b71d', (h) => {
+                const inQ = safeInt(h.aai);
+                const outQ = safeInt(h.gai);
+                return `
+                    <tr>
+                        <td><strong>${esc(h.sareeName)}</strong></td>
+                        <td>${esc(h.karigerName)}</td>
+                        <td style="color:#92400e; font-weight:700;">${inQ > 0 ? `+${inQ} Pcs` : '-'}</td>
+                        <td style="color:#1f2937; font-weight:700;">${outQ > 0 ? `-${outQ} Pcs` : '-'}</td>
+                        <td>${esc(h.detail)}</td>
+                    </tr>`;
+            }, `Is tarikh me ${label} ki koi entry nahi hai.`, 5);
+
+            let curIn = 0, curOut = 0;
+            rows.forEach((h) => { curIn += safeInt(h.aai); curOut += safeInt(h.gai); });
+            tfoot.innerHTML = `<tr><td colspan="2"><strong>Total ${label}:</strong></td><td><strong>+${curIn} Pcs</strong></td><td><strong>-${curOut} Pcs</strong></td><td>-</td></tr>`;
+
+        } else if (curTab === 'saree_cutting' || curTab === 'saree_embroidery' || curTab === 'saree_calender') {
+            const map = {
+                saree_cutting: { label: 'Cutting', data: data.saree_cutting },
+                saree_embroidery: { label: 'Embroidery', data: data.saree_embroidery },
+                saree_calender: { label: 'Calender', data: data.saree_calender }
+            };
+            const cfg = map[curTab];
+            let rows = [...cfg.data.rows];
+            thead.innerHTML = `<tr><th>${cfg.label} Worker</th><th>Sheet</th><th>📤 Gayi (Out)</th><th>📥 Wapas Aayi (In)</th><th>⚠️ Damage</th><th>Kariger Detail</th></tr>`;
+
+            if (searchTxt) {
+                rows = rows.filter((r) => `${r.worker || ''} ${r.sheet || ''} ${r.detail || ''}`.toLowerCase().includes(searchTxt));
+            }
+            currentDaybookFilteredRowsCache = rows;
+
+            renderPaginatedDaybookRows(rows, tbody, pager, '#f2b71d', (r) => `
+                <tr>
+                    <td><strong>${esc(r.worker)}</strong></td>
+                    <td>${esc(r.sheet)}</td>
+                    <td style="color:#1f2937; font-weight:700;">${r.gayi > 0 ? `-${r.gayi} Pcs` : '-'}</td>
+                    <td style="color:#92400e; font-weight:700;">${r.aayi > 0 ? `+${r.aayi} Pcs` : '-'}</td>
+                    <td>${r.damagePcs > 0 ? `⚠️ ${r.damagePcs} Pcs` : '-'}</td>
+                    <td style="font-size:11.5px; color:#4b5563;">${esc(r.detail)}</td>
+                </tr>
+            `, `Is tarikh me ${cfg.label} ki koi entry nahi hai.`, 6);
+
+            let curG = 0, curA = 0, curD = 0;
+            rows.forEach((r) => { curG += r.gayi; curA += r.aayi; curD += r.damagePcs; });
+            tfoot.innerHTML = `<tr><td colspan="2"><strong>Total ${cfg.label}:</strong></td><td><strong>-${curG} Pcs</strong></td><td><strong>+${curA} Pcs</strong></td><td><strong>${curD > 0 ? curD + ' Pcs' : '-'}</strong></td><td>-</td></tr>`;
+
+        } else if (curTab === 'payment') {
+            let rows = [...data.payment.rows];
+            thead.innerHTML = `<tr><th>Party / Kariger</th><th>Vivran / Khata</th><th>📥 Aamad (In)</th><th>📤 Diya (Out)</th></tr>`;
+
+            if (searchTxt) {
+                rows = rows.filter((dp) => `${dp.party || ''} ${dp.desc || ''} ${dp.inAmt} ${dp.outAmt}`.toLowerCase().includes(searchTxt));
+            }
+            currentDaybookFilteredRowsCache = rows;
+
+            renderPaginatedDaybookRows(rows, tbody, pager, '#f2b71d', (dp) => `
                 <tr>
                     <td><strong>${esc(dp.party)}</strong></td>
                     <td>${esc(dp.desc)}</td>
-                    <td style='color:#059669; font-weight:700;'>${dp.inAmt > 0 ? `+ ₹ ${dp.inAmt.toFixed(2)}` : '-'}</td>
-                    <td style='color:#dc2626; font-weight:700;'>${dp.outAmt > 0 ? `- ₹ ${dp.outAmt.toFixed(2)}` : '-'}</td>
+                    <td style="color:#92400e; font-weight:700;">${dp.inAmt > 0 ? `+ ₹ ${dp.inAmt.toFixed(2)}` : '-'}</td>
+                    <td style="color:#1f2937; font-weight:700;">${dp.outAmt > 0 ? `- ₹ ${dp.outAmt.toFixed(2)}` : '-'}</td>
                 </tr>
-            `, 'Is tarikh / filter me koi payment ya cash transfer nahi mila.', 4);
+            `, 'Is tarikh me koi payment ya cash transfer nahi mila.', 4);
 
             let curIn = 0, curOut = 0;
-            pRows.forEach(dp => { curIn += dp.inAmt; curOut += dp.outAmt; });
-            tfoot.innerHTML = `<tr><td colspan='2'><strong>Total Rozana Cash Movement:</strong></td><td><strong style='color:#059669;'>+ ₹ ${curIn.toFixed(2)}</strong></td><td><strong style='color:#dc2626;'>- ₹ ${curOut.toFixed(2)}</strong></td></tr>`;
-
-        // ================= TAB 5: SANCHA =================
-        } else if (window.currentDayBookTab === 'sancha') {
-            thead.innerHTML = "<tr style='background:#0284c7; color:white;'><th>Item (Category)</th><th>Kariger / Vivran</th><th>📥 Aaya (In)</th><th>📤 Gaya (Out)</th></tr>";
-            let sRows = sanchaHist;
-
-            if (searchTxt) {
-                sRows = sRows.filter((h) => `${h.name || ''} ${h.category || ''} ${h.kariger || ''} ${h.type || ''} ${h.aaya || h.qty || ''} ${h.gaya || ''} Tani Chukka In Out`.toLowerCase().includes(searchTxt));
-            }
-
-            currentDaybookFilteredRowsCache = sRows;
-            renderPaginatedDaybookRows(sRows, tbody, pager, '#0284c7', (h) => {
-                const catBadge = (h.category === 'chukka')
-                    ? "<span class='badge-blue' style='background:#ede9fe; color:#6d28d9; font-size:10px;'>⚙️ Chukka</span>"
-                    : "<span class='badge-blue' style='font-size:10px;'>🧵 Tani</span>";
-                const inQ = safeNum(h.aaya || h.qty);
-                const outQ = safeNum(h.gaya);
-
-                return `<tr>
-                    <td><strong>${esc(h.name || 'Sancha')}</strong> ${catBadge}</td>
-                    <td>${h.kariger ? `👤 ${esc(h.kariger)}` : esc(h.type || 'Godam Purchase')}</td>
-                    <td style='color:#059669; font-weight:700;'>${inQ > 0 ? `+${inQ.toFixed(2)} Kg` : '-'}</td>
-                    <td style='color:#dc2626; font-weight:700;'>${outQ > 0 ? `-${outQ.toFixed(2)} Kg` : '-'}</td>
-                </tr>`;
-            }, 'Is tarikh / filter me Sancha (Tani / Chukka) ki koi entry nahi hai.', 4);
-
-            let curIn = 0, curOut = 0;
-            sRows.forEach(h => { curIn += safeNum(h.aaya || h.qty); curOut += safeNum(h.gaya); });
-            tfoot.innerHTML = `<tr><td colspan='2'><strong>Total Rozana Sancha:</strong></td><td><strong style='color:#059669;'>+${curIn.toFixed(2)} Kg</strong></td><td><strong style='color:#dc2626;'>-${curOut.toFixed(2)} Kg</strong></td></tr>`;
+            rows.forEach((dp) => { curIn += dp.inAmt; curOut += dp.outAmt; });
+            tfoot.innerHTML = `<tr><td colspan="2"><strong>Total Rozana Cash Movement:</strong></td><td><strong>+ ₹ ${curIn.toFixed(2)}</strong></td><td><strong>- ₹ ${curOut.toFixed(2)}</strong></td></tr>`;
         }
     };
 
@@ -605,7 +764,7 @@
         const totalEntries = rows.length;
 
         if (!totalEntries) {
-            tbody.innerHTML = `<tr><td colspan='${colSpan}' style='text-align:center; padding:15px; color:#888;'>${emptyMsg}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan='${colSpan}' style='text-align:center; padding:18px; color:#6b7280;'>${emptyMsg}</td></tr>`;
             if (pager) pager.innerHTML = '';
             return;
         }
@@ -625,13 +784,13 @@
 
         if (pager) {
             pager.innerHTML = `
-                <div style="font-size:12px; color:#475569; font-weight:600;">
+                <div style="font-size:12px; color:#4b5563; font-weight:600;">
                     Showing <strong>${startIndex + 1}</strong> - <strong>${Math.min(startIndex + DAYBOOK_PAGE_SIZE, totalEntries)}</strong> of <strong>${totalEntries}</strong> entries
                 </div>
-                <div style="display:flex; gap:6px;">
-                    <button type="button" class="sheet-btn" style="background:${daybookCurrentPage <= 1 ? '#cbd5e1' : themeColor}; color:white; padding:4px 10px; border-radius:4px; border:none; cursor:${daybookCurrentPage <= 1 ? 'not-allowed' : 'pointer'};" ${daybookCurrentPage <= 1 ? 'disabled' : ''} onclick="changeDaybookPage(-1)">◀ Prev</button>
-                    <span style="font-size:12px; font-weight:bold; padding:4px 8px; background:#f1f5f9; border-radius:4px;">${daybookCurrentPage} / ${totalPages}</span>
-                    <button type="button" class="sheet-btn" style="background:${daybookCurrentPage >= totalPages ? '#cbd5e1' : themeColor}; color:white; padding:4px 10px; border-radius:4px; border:none; cursor:${daybookCurrentPage >= totalPages ? 'not-allowed' : 'pointer'};" ${daybookCurrentPage >= totalPages ? 'disabled' : ''} onclick="changeDaybookPage(1)">Next ▶</button>
+                <div style="display:flex; gap:6px; align-items:center;">
+                    <button type="button" class="quick-btn btn-out" ${daybookCurrentPage <= 1 ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : ''} onclick="changeDaybookPage(-1)">◀ Prev</button>
+                    <span style="font-size:12px; font-weight:700; padding:4px 10px; background:#fdf6e2; border:1px solid #fde68a; border-radius:6px; color:#92400e;">${daybookCurrentPage} / ${totalPages}</span>
+                    <button type="button" class="quick-btn btn-in" ${daybookCurrentPage >= totalPages ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : ''} onclick="changeDaybookPage(1)">Next ▶</button>
                 </div>`;
         }
     };
@@ -642,13 +801,76 @@
     };
 
     /* ========================================================================
-       PRINT ENGINE
-       ======================================================================== */
+       4. TALLY KEYBOARD NAVIGATION INSIDE DAY-BOOK (↑ ↓ ENTER ESC + LETTERS)
+    ======================================================================== */
+    document.addEventListener('keydown', (e) => {
+        const dbSec = document.getElementById('daybook-section');
+        if (!dbSec || dbSec.style.display === 'none') return;
+
+        const anyModalOpen = Array.from(document.querySelectorAll('.modal-overlay')).some((m) => m.style.display && m.style.display !== 'none');
+        if (anyModalOpen) return;
+
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            goDayBookBack();
+            return;
+        }
+
+        const tag = (document.activeElement && document.activeElement.tagName) || '';
+        if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+
+        if (daybookViewMode === 'menu' || daybookViewMode === 'sancha-menu' || daybookViewMode === 'saree-menu') {
+            const btns = Array.from(document.querySelectorAll('#tally-daybook-menu-wrap .tally-db-menu-item'));
+            if (!btns.length) return;
+
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                daybookMenuActiveIdx = (daybookMenuActiveIdx + 1) % btns.length;
+                renderDashboardDayBook();
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                daybookMenuActiveIdx = (daybookMenuActiveIdx - 1 + btns.length) % btns.length;
+                renderDashboardDayBook();
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                btns[daybookMenuActiveIdx]?.click();
+            } else if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
+                const k = e.key.toLowerCase();
+                const hit = btns.find((b) => b.dataset.key === k);
+                if (hit) {
+                    e.preventDefault();
+                    hit.click();
+                }
+            }
+        }
+    });
+
+    // Reset to Main DayBook Menu automatically whenever #daybook-section opens
+    const initDaybookVisibilityObserver = () => {
+        const dbSec = document.getElementById('daybook-section');
+        if (!dbSec || dbSec.dataset.dbObsBound === '1') return;
+        dbSec.dataset.dbObsBound = '1';
+        let wasVisible = dbSec.style.display !== 'none';
+
+        const obs = new MutationObserver(() => {
+            const isNowVisible = dbSec.style.display !== 'none';
+            if (isNowVisible && !wasVisible) {
+                daybookViewMode = 'menu';
+                daybookMenuActiveIdx = 0;
+                daybookCurrentPage = 1;
+                renderDashboardDayBook();
+            }
+            wasVisible = isNowVisible;
+        });
+        obs.observe(dbSec, { attributes: true, attributeFilter: ['style'] });
+    };
+
+    /* ========================================================================
+       5. A6 THERMAL PRINT ENGINE (ALL 10 SUB-REGISTERS SUPPORTED)
+    ======================================================================== */
     const getDashboardKarkhanaPrintName = (kId) => {
         if (!kId || kId === 'all') return 'Sabhi Karkhane (All Units)';
-        if (typeof window.getKarkhanaNameById === 'function') {
-            return window.getKarkhanaNameById(kId);
-        }
+        if (typeof window.getKarkhanaNameById === 'function') return window.getKarkhanaNameById(kId);
         return kId;
     };
 
@@ -667,38 +889,42 @@
         const tabTitles = {
             bana: 'BANA ROZANA DAYBOOK',
             zari: 'ZARI ROZANA DAYBOOK',
-            saree: 'SAREE ROZANA DAYBOOK',
-            payment: 'PAYMENT & CASH MOVEMENT DAYBOOK',
-            sancha: 'SANCHA (TANI & CHUKKA) DAYBOOK'
+            sancha_tani: 'SANCHA (TANI) DAYBOOK',
+            sancha_chukka: 'SANCHA (CHUKKA) DAYBOOK',
+            saree_fresh: 'SAREE (FRESH) DAYBOOK',
+            saree_cutting: 'SAREE (CUTTING) DAYBOOK',
+            saree_embroidery: 'SAREE (EMBROIDERY) DAYBOOK',
+            saree_calender: 'SAREE (CALENDER) DAYBOOK',
+            saree_lott: 'SAREE (LOTT) DAYBOOK',
+            payment: 'PAYMENT & CASH MOVEMENT DAYBOOK'
         };
 
         const title = tabTitles[tab] || 'ROZANA DAYBOOK';
-
         let thHtml = '';
         let rowsHtml = '';
         let totHtml = '';
 
         if (tab === 'bana' || tab === 'zari') {
-            thHtml = `<tr><th>ITEM</th><th>KARIGER / VIVRAN</th><th style="text-align:right;">AAYA (IN)</th><th style="text-align:right;">GAYA (OUT)</th></tr>`;
+            thHtml = `<tr><th>ITEM</th><th>KARIGER / VIVRAN</th><th style="text-align:right;">AAYA</th><th style="text-align:right;">GAYA</th></tr>`;
             let tIn = 0, tOut = 0;
             rows.forEach((r) => {
                 tIn += safeNum(r.inQty);
                 tOut += safeNum(r.outQty);
-                rowsHtml += `
-                    <tr style="border-bottom:1px dashed #ccc;">
-                        <td style="padding:4px 2px; font-weight:bold;">${esc(r.name)}</td>
-                        <td style="padding:4px 2px;">${esc(r.desc)}</td>
-                        <td style="padding:4px 2px; text-align:right;">${r.inQty > 0 ? `+${r.inQty.toFixed(2)}` : '-'}</td>
-                        <td style="padding:4px 2px; text-align:right;">${r.outQty > 0 ? `-${r.outQty.toFixed(2)}` : '-'}</td>
-                    </tr>`;
+                rowsHtml += `<tr style="border-bottom:1px dashed #ccc;"><td style="padding:4px 2px; font-weight:bold;">${esc(r.name)}</td><td style="padding:4px 2px;">${esc(r.desc)}</td><td style="padding:4px 2px; text-align:right;">${r.inQty > 0 ? `+${r.inQty.toFixed(2)}` : '-'}</td><td style="padding:4px 2px; text-align:right;">${r.outQty > 0 ? `-${r.outQty.toFixed(2)}` : '-'}</td></tr>`;
             });
-            totHtml = `
-                <div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>Kul Aaya:</span> <span>+${tIn.toFixed(2)} Kg</span></div>
-                <div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>Kul Gaya:</span> <span>-${tOut.toFixed(2)} Kg</span></div>
-                <div style="display:flex; justify-content:space-between; font-size:12px; border-top:1px dashed #000; padding-top:3px;">
-                    <span>NET BALANCE:</span> <span>${(tIn - tOut).toFixed(2)} Kg</span>
-                </div>`;
-        } else if (tab === 'saree') {
+            totHtml = `<div style="display:flex; justify-content:space-between;"><span>Kul Aaya:</span><span>+${tIn.toFixed(2)} Kg</span></div><div style="display:flex; justify-content:space-between;"><span>Kul Gaya:</span><span>-${tOut.toFixed(2)} Kg</span></div>`;
+        } else if (tab === 'sancha_tani' || tab === 'sancha_chukka') {
+            thHtml = `<tr><th>ITEM</th><th>KARIGER / VIVRAN</th><th style="text-align:right;">AAYA</th><th style="text-align:right;">GAYA</th></tr>`;
+            let tIn = 0, tOut = 0;
+            rows.forEach((h) => {
+                const inQ = safeNum(h.aaya || h.qty);
+                const outQ = safeNum(h.gaya);
+                tIn += inQ;
+                tOut += outQ;
+                rowsHtml += `<tr style="border-bottom:1px dashed #ccc;"><td style="padding:4px 2px; font-weight:bold;">${esc(h.name)}</td><td style="padding:4px 2px;">${esc(h.kariger || h.type || '-')}</td><td style="padding:4px 2px; text-align:right;">${inQ > 0 ? `+${inQ.toFixed(2)}` : '-'}</td><td style="padding:4px 2px; text-align:right;">${outQ > 0 ? `-${outQ.toFixed(2)}` : '-'}</td></tr>`;
+            });
+            totHtml = `<div style="display:flex; justify-content:space-between;"><span>Kul Aaya:</span><span>+${tIn.toFixed(2)} Kg</span></div><div style="display:flex; justify-content:space-between;"><span>Kul Gaya:</span><span>-${tOut.toFixed(2)} Kg</span></div>`;
+        } else if (tab === 'saree_fresh' || tab === 'saree_lott') {
             thHtml = `<tr><th>SAREE</th><th>MAKER</th><th style="text-align:right;">AAI</th><th style="text-align:right;">GAI</th><th>DETAIL</th></tr>`;
             let tIn = 0, tOut = 0;
             rows.forEach((h) => {
@@ -706,64 +932,28 @@
                 const outQ = safeInt(h.gai);
                 tIn += inQ;
                 tOut += outQ;
-                rowsHtml += `
-                    <tr style="border-bottom:1px dashed #ccc;">
-                        <td style="padding:4px 2px; font-weight:bold;">${esc(h.sareeName)}</td>
-                        <td style="padding:4px 2px;">${esc(h.karigerName)}</td>
-                        <td style="padding:4px 2px; text-align:right;">${inQ > 0 ? `+${inQ}` : '-'}</td>
-                        <td style="padding:4px 2px; text-align:right;">${outQ > 0 ? `-${outQ}` : '-'}</td>
-                        <td style="padding:4px 2px; font-size:9px;">${esc(h.detail)}</td>
-                    </tr>`;
+                rowsHtml += `<tr style="border-bottom:1px dashed #ccc;"><td style="padding:4px 2px; font-weight:bold;">${esc(h.sareeName)}</td><td style="padding:4px 2px;">${esc(h.karigerName)}</td><td style="padding:4px 2px; text-align:right;">${inQ > 0 ? `+${inQ}` : '-'}</td><td style="padding:4px 2px; text-align:right;">${outQ > 0 ? `-${outQ}` : '-'}</td><td style="padding:4px 2px; font-size:9px;">${esc(h.detail)}</td></tr>`;
             });
-            totHtml = `
-                <div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>Kul Aai Saree:</span> <span>+${tIn} Pcs</span></div>
-                <div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>Kul Gai Saree:</span> <span>-${tOut} Pcs</span></div>
-                <div style="display:flex; justify-content:space-between; font-size:12px; border-top:1px dashed #000; padding-top:3px;">
-                    <span>NET SAREE:</span> <span>${tIn - tOut} Pcs</span>
-                </div>`;
+            totHtml = `<div style="display:flex; justify-content:space-between;"><span>Kul Aai:</span><span>+${tIn} Pcs</span></div><div style="display:flex; justify-content:space-between;"><span>Kul Gai:</span><span>-${tOut} Pcs</span></div>`;
+        } else if (tab === 'saree_cutting' || tab === 'saree_embroidery' || tab === 'saree_calender') {
+            thHtml = `<tr><th>WORKER</th><th>SHEET</th><th style="text-align:right;">GAYI</th><th style="text-align:right;">AAYI</th><th style="text-align:right;">DMG</th></tr>`;
+            let tG = 0, tA = 0, tD = 0;
+            rows.forEach((r) => {
+                tG += r.gayi;
+                tA += r.aayi;
+                tD += r.damagePcs;
+                rowsHtml += `<tr style="border-bottom:1px dashed #ccc;"><td style="padding:4px 2px; font-weight:bold;">${esc(r.worker)}</td><td style="padding:4px 2px;">${esc(r.sheet)}</td><td style="padding:4px 2px; text-align:right;">${r.gayi > 0 ? `-${r.gayi}` : '-'}</td><td style="padding:4px 2px; text-align:right;">${r.aayi > 0 ? `+${r.aayi}` : '-'}</td><td style="padding:4px 2px; text-align:right;">${r.damagePcs > 0 ? r.damagePcs : '-'}</td></tr>`;
+            });
+            totHtml = `<div style="display:flex; justify-content:space-between;"><span>Kul Gayi:</span><span>-${tG} Pcs</span></div><div style="display:flex; justify-content:space-between;"><span>Kul Aayi:</span><span>+${tA} Pcs</span></div><div style="display:flex; justify-content:space-between;"><span>Damage:</span><span>${tD} Pcs</span></div>`;
         } else if (tab === 'payment') {
-            thHtml = `<tr><th>PARTY / KARIGER</th><th>KHATA / NOTE</th><th style="text-align:right;">AAMAD (₹)</th><th style="text-align:right;">DIYA (₹)</th></tr>`;
+            thHtml = `<tr><th>PARTY / KARIGER</th><th>KHATA / NOTE</th><th style="text-align:right;">AAMAD</th><th style="text-align:right;">DIYA</th></tr>`;
             let tIn = 0, tOut = 0;
             rows.forEach((dp) => {
                 tIn += safeNum(dp.inAmt);
                 tOut += safeNum(dp.outAmt);
-                rowsHtml += `
-                    <tr style="border-bottom:1px dashed #ccc;">
-                        <td style="padding:4px 2px; font-weight:bold;">${esc(dp.party)}</td>
-                        <td style="padding:4px 2px;">${esc(dp.desc)}</td>
-                        <td style="padding:4px 2px; text-align:right;">${dp.inAmt > 0 ? `+₹${dp.inAmt.toFixed(2)}` : '-'}</td>
-                        <td style="padding:4px 2px; text-align:right;">${dp.outAmt > 0 ? `-₹${dp.outAmt.toFixed(2)}` : '-'}</td>
-                    </tr>`;
+                rowsHtml += `<tr style="border-bottom:1px dashed #ccc;"><td style="padding:4px 2px; font-weight:bold;">${esc(dp.party)}</td><td style="padding:4px 2px;">${esc(dp.desc)}</td><td style="padding:4px 2px; text-align:right;">${dp.inAmt > 0 ? `+₹${dp.inAmt.toFixed(2)}` : '-'}</td><td style="padding:4px 2px; text-align:right;">${dp.outAmt > 0 ? `-₹${dp.outAmt.toFixed(2)}` : '-'}</td></tr>`;
             });
-            totHtml = `
-                <div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>Kul Cash Aamad:</span> <span>+₹ ${tIn.toFixed(2)}</span></div>
-                <div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>Kul Cash Diya:</span> <span>-₹ ${tOut.toFixed(2)}</span></div>
-                <div style="display:flex; justify-content:space-between; font-size:12px; border-top:1px dashed #000; padding-top:3px;">
-                    <span>NET CASH FLOW:</span> <span>₹ ${(tIn - tOut).toFixed(2)}</span>
-                </div>`;
-        } else if (tab === 'sancha') {
-            thHtml = `<tr><th>ITEM</th><th>KARIGER / VIVRAN</th><th style="text-align:right;">AAYA (IN)</th><th style="text-align:right;">GAYA (OUT)</th></tr>`;
-            let tIn = 0, tOut = 0;
-            rows.forEach((h) => {
-                const inQ = safeNum(h.aaya || h.qty);
-                const outQ = safeNum(h.gaya);
-                tIn += inQ;
-                tOut += outQ;
-                const catStr = h.category === 'chukka' ? '(Chukka)' : '(Tani)';
-                rowsHtml += `
-                    <tr style="border-bottom:1px dashed #ccc;">
-                        <td style="padding:4px 2px; font-weight:bold;">${esc(h.name)} ${catStr}</td>
-                        <td style="padding:4px 2px;">${esc(h.kariger || h.type || '-')}</td>
-                        <td style="padding:4px 2px; text-align:right;">${inQ > 0 ? `+${inQ.toFixed(2)}` : '-'}</td>
-                        <td style="padding:4px 2px; text-align:right;">${outQ > 0 ? `-${outQ.toFixed(2)}` : '-'}</td>
-                    </tr>`;
-            });
-            totHtml = `
-                <div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>Kul Aaya:</span> <span>+${tIn.toFixed(2)} Kg</span></div>
-                <div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>Kul Gaya:</span> <span>-${tOut.toFixed(2)} Kg</span></div>
-                <div style="display:flex; justify-content:space-between; font-size:12px; border-top:1px dashed #000; padding-top:3px;">
-                    <span>NET SANCHA:</span> <span>${(tIn - tOut).toFixed(2)} Kg</span>
-                </div>`;
+            totHtml = `<div style="display:flex; justify-content:space-between;"><span>Kul Aamad:</span><span>+₹ ${tIn.toFixed(2)}</span></div><div style="display:flex; justify-content:space-between;"><span>Kul Diya:</span><span>-₹ ${tOut.toFixed(2)}</span></div>`;
         }
 
         const printWindow = window.open('', '', 'width=450,height=650');
@@ -789,32 +979,18 @@
             </head>
             <body>
                 <div class="ticket">
-                    <div class="header">
-                        <h2>SIMPLICITY ERP</h2>
-                        <p><strong>${title}</strong></p>
-                    </div>
+                    <div class="header"><h2>SIMPLICITY ERP</h2><p><strong>${title}</strong></p></div>
                     <div class="meta">
                         <div><strong>Karkhana:</strong> ${esc(kName)}</div>
                         <div><strong>Tarikh:</strong> ${esc(d)}</div>
                         ${sTxt ? `<div><strong>Search Filter:</strong> "${esc(sTxt)}"</div>` : ''}
                         <div><strong>Total Entries:</strong> ${rows.length}</div>
                     </div>
-                    <table>
-                        <thead>${thHtml}</thead>
-                        <tbody>${rowsHtml}</tbody>
-                    </table>
+                    <table><thead>${thHtml}</thead><tbody>${rowsHtml}</tbody></table>
                     <div class="total-box">${totHtml}</div>
-                    <div class="footer">
-                        <p>हस्ताक्षर / मुंशी: ____________________</p>
-                    </div>
+                    <div class="footer"><p>हस्ताक्षर / मुंशी: ____________________</p></div>
                 </div>
-                <script>
-                    window.onload = function() {
-                        window.focus();
-                        window.print();
-                        setTimeout(() => window.close(), 600);
-                    };
-                <\/script>
+                <script>window.onload = function() { window.focus(); window.print(); setTimeout(() => window.close(), 600); };<\/script>
             </body>
             </html>
         `);
@@ -822,8 +998,8 @@
     };
 
     /* ========================================================================
-       DASHBOARD BADGES ENGINE
-       ======================================================================== */
+       6. DASHBOARD BADGES ENGINE (UNTOUCHED LOGIC)
+    ======================================================================== */
     const updateDashboardBadgeTotals = () => {
         const targetKid = window.currentDashboardKarkhanaFilter;
         const isAll = (targetKid === 'all');
@@ -932,8 +1108,8 @@
     };
 
     /* ========================================================================
-       SPA VIEW TOGGLING
-       ======================================================================== */
+       7. SPA VIEW TOGGLING & BOOTSTRAP
+    ======================================================================== */
     const hideAllSections = () => {
         document.querySelectorAll('.module-section').forEach((el) => {
             el.style.display = 'none';
@@ -944,7 +1120,7 @@
 
     const backToDashboard = () => {
         hideAllSections();
-        setDisplay('dashboard-view', 'block');
+        setDisplay('dashboard-view', window.innerWidth <= 860 ? 'block' : 'flex');
         setDisplay('daybook-section', 'none');
 
         renderDashboardKarkhanaTabs();
@@ -957,20 +1133,22 @@
 
     const openDayBookModule = () => {
         hideAllSections();
+        daybookViewMode = 'menu';
+        daybookMenuActiveIdx = 0;
         setDisplay('daybook-section', 'block');
         renderDashboardDayBook();
     };
 
     const getCurrentActiveSection = () => {
         const sections = [
-            'dashboard-view', 'admin-section', 'info-section',
+            'dashboard-view', 'tally-master-section', 'admin-section', 'info-section',
             'kariger-section', 'kariger-sheet-section', 'bana-section',
             'zari-section', 'saree-section', 'payment-section', 'sancha-section',
             'jobwork-section', 'daybook-section'
         ];
         for (let i = 0; i < sections.length; i++) {
             const el = document.getElementById(sections[i]);
-            if (el && el.style.display === 'block') return sections[i];
+            if (el && el.style.display !== 'none') return sections[i];
         }
         return 'dashboard-view';
     };
@@ -998,10 +1176,8 @@
         }
     };
 
-    /* ========================================================================
-       BOOTSTRAP & EXPORTS
-       ======================================================================== */
     const initApp = () => {
+        initDaybookVisibilityObserver();
         const dEl = document.getElementById('dash-day-date');
         if (dEl) {
             dEl.value = getToday();
@@ -1020,6 +1196,7 @@
     };
 
     const bootstrapAppStartup = () => {
+        initDaybookVisibilityObserver();
         const idInp = document.getElementById('login-id');
         const passInp = document.getElementById('login-pass');
 
@@ -1051,6 +1228,9 @@
         setT: setElementText,
         setDashboardToday,
         switchDayBookTab,
+        openDayBookSubMenu,
+        openDayBookReport,
+        goDayBookBack,
         renderDashboardKarkhanaTabs,
         switchDashboardKarkhanaTab,
         onDaybookSearchInput,
