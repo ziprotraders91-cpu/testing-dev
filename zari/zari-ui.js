@@ -22,6 +22,7 @@
     const ZARI_STOCK_PAGE_SIZE = 15;
     let currentZariFilteredRowsCache = [];
     let zariListActiveIdx = 0;
+    let zariOpenedAt = 0;
 
     const esc = (s) => {
         if (typeof window.sanitizeHTML === 'function') return window.sanitizeHTML(s);
@@ -370,6 +371,7 @@
        3. NAVIGATION & TABS
        ======================================================================== */
     const openZariModule = () => {
+        zariOpenedAt = performance.now();
         ensureZariTallyStyles();
         setDisplay('dashboard-view', 'none');
         setDisplay('zari-section', 'block');
@@ -1371,6 +1373,11 @@
                 const sEl = document.getElementById('zari-pass-search-input');
                 if (sEl) { sEl.focus(); sEl.select(); }
             }
+            return;
+        }
+
+        // Guard: Prevent Enter bleed-through from Stock Summary / Gateway right after opening
+        if (e.key === 'Enter' && (performance.now() - zariOpenedAt) < 200) {
             return;
         }
 
