@@ -67,6 +67,10 @@
         return uid;
     };
 
+    const getSupabase = () => {
+        return window.supabaseClient || window.CloudEngine?.supabase || window.supabase || null;
+    };
+
     const getUniqueItemNamesCaseInsensitive = (list) => {
         const map = new Map();
         (list || []).forEach((it) => {
@@ -530,7 +534,7 @@
         updateProgressUI(5, '⏳ Local IndexedDB me Save ho raha hai...', 10, 82);
 
         const tid = getSafeTenantId(uId);
-        const sb = window.supabaseClient || window.supabase || window.CloudEngine?.supabase || null;
+        const sb = getSupabase();
 
         // Naye session ke stale cursors saaf karein; curSess ko abhi bilkul touch na karein
         clearSessionDeltaCursors(uId, newSess);
@@ -665,7 +669,7 @@
         if (navigator.onLine && sb && typeof sb.from === 'function') {
             const nowIso = new Date().toISOString();
             try {
-                await sb.from('app_store').upsert([
+                const { error } = await sb.from('app_store').upsert([
                     {
                         id: `${uId}_app_sessions_list`,
                         user_id: uId,
@@ -687,6 +691,9 @@
                         updated_at: nowIso
                     }
                 ], { onConflict: 'id' });
+                if (error) {
+                    console.error('[SessionClosing app_store upsert error]:', error.message);
+                }
             } catch (cErr) {
                 console.warn('[SessionClosing app_store upsert]:', cErr);
             }
@@ -746,21 +753,11 @@
         safeSetLocalStorage(`${uId}_app_sessions_list`, curSessions);
         if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[`${uId}_app_sessions_list`] = curSessions;
 
-        const sb = window.supabaseClient || window.supabase || window.CloudEngine?.supabase || null;
+        const sb = getSupabase();
         if (navigator.onLine && sb && typeof sb.from === 'function') {
             const now = new Date().toISOString();
             try {
-                await sb.from('app_store').upsert([
-                    {
-                        id: `${uId}_app_active_session`,
-                        user_id: uId,
-                        tenant_id: tid,
-                        session: s,
-                        data: s,
-                        key: `${uId}_app_active_session`,
-                        value: s,
-                        updated_at: now
-                    },
+                const { error } = await sb.from('app_store').upsert([
                     {
                         id: `${uId}_app_sessions_list`,
                         user_id: uId,
@@ -770,8 +767,21 @@
                         key: `${uId}_app_sessions_list`,
                         value: curSessions,
                         updated_at: now
+                    },
+                    {
+                        id: `${uId}_app_active_session`,
+                        user_id: uId,
+                        tenant_id: tid,
+                        session: s,
+                        data: s,
+                        key: `${uId}_app_active_session`,
+                        value: s,
+                        updated_at: now
                     }
                 ], { onConflict: 'id' });
+                if (error) {
+                    console.error('[SessionClosing startup app_store error]:', error.message);
+                }
             } catch (cErr) {
                 console.error('[SessionClosing app_store write]:', cErr);
             }
