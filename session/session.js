@@ -9,6 +9,21 @@
 
     const DEFAULT_BOOTSTRAP_SESSION = '2026-2027';
 
+    const hasLoggedInUser = () => {
+        try {
+            if (window.currentUserId && String(window.currentUserId).trim() && window.currentUserId !== 'app') {
+                return true;
+            }
+            if (localStorage.getItem('app_active_session_auth')) return true;
+            const stored = localStorage.getItem('app_current_user_id') ||
+                           localStorage.getItem('currentUserId') ||
+                           sessionStorage.getItem('currentUserId');
+            return Boolean(stored && String(stored).trim() && String(stored).trim() !== 'app');
+        } catch (_) {
+            return false;
+        }
+    };
+
     const resolveUserId = () => {
         try {
             if (window.StorageEngine && typeof window.StorageEngine.getEffectiveUserId === 'function') {
@@ -48,6 +63,10 @@
             if (stored) return String(stored).trim();
         } catch (_) {}
         return uid;
+    };
+
+    const getSupabase = () => {
+        return window.supabaseClient || window.CloudEngine?.supabase || window.supabase || null;
     };
 
     const ensureSessionModals = () => {
@@ -201,8 +220,8 @@
     };
 
     const saveToAppStoreSafe = async (key, value, sessOverride = null) => {
-        const sb = window.supabaseClient || window.supabase;
-        if (!sb || typeof sb.from !== 'function' || !navigator.onLine) return;
+        const sb = getSupabase();
+        if (!sb || typeof sb.from !== 'function' || !navigator.onLine) return false;
 
         const uId = getEffectiveUserId();
         const tid = getSafeTenantId(uId);
@@ -210,7 +229,7 @@
         const now = new Date().toISOString();
 
         try {
-            await sb.from('app_store').upsert({
+            const { error } = await sb.from('app_store').upsert({
                 id: key,
                 user_id: uId,
                 tenant_id: tid,
@@ -220,26 +239,37 @@
                 value: value,
                 updated_at: now
             }, { onConflict: 'id' });
+
+            if (error) {
+                console.error('[app_store upsert error]:', error.message);
+                return false;
+            }
+            return true;
         } catch (err) {
             console.warn('[app_store safe write]:', err);
+            return false;
         }
     };
 
     const initCloudSessionSync = async () => {
         if (window.isBackupPreviewMode) return;
+        if (!hasLoggedInUser()) return;
+
         const uId = getEffectiveUserId();
         const sessionsKey = `${uId}_app_sessions_list`;
         const activeKey = `${uId}_app_active_session`;
 
         try {
-            const sb = window.supabaseClient || window.supabase;
+            const sb = getSupabase();
             if (sb && typeof sb.from === 'function' && navigator.onLine) {
-                const { data } = await sb
+                const { data, error } = await sb
                     .from('app_store')
                     .select('id, key, data, value')
                     .in('id', [sessionsKey, activeKey]);
 
-                if (data && Array.isArray(data)) {
+                if (error) {
+                    console.warn('[SessionSync] app_store read error:', error.message);
+                } else if (data && Array.isArray(data)) {
                     let updatedSessions = null;
                     let cloudActive = null;
 
@@ -271,8 +301,14 @@
 
                     if (cloudActive) {
                         const validList = getAppSessions();
+                        if (!validList.includes(cloudActive)) {
+                            validList.push(cloudActive);
+                            validList.sort();
+                            localStorage.setItem(sessionsKey, JSON.stringify(validList));
+                            if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[sessionsKey] = validList;
+                        }
                         const curActive = getActiveFinancialSession();
-                        if (validList.includes(cloudActive) && cloudActive !== curActive) {
+                        if (cloudActive !== curActive) {
                             localStorage.setItem(activeKey, cloudActive);
                             if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[activeKey] = cloudActive;
                             if (typeof window.clearMemoryCache === 'function') window.clearMemoryCache();
@@ -310,8 +346,8 @@
                 window.APP_MEMORY_CACHE[`${uId}_app_active_session`] = cleanTarget;
             }
 
-            await saveToAppStoreSafe(`${uId}_app_active_session`, cleanTarget, cleanTarget);
             await saveToAppStoreSafe(`${uId}_app_sessions_list`, getAppSessions(), cleanTarget);
+            await saveToAppStoreSafe(`${uId}_app_active_session`, cleanTarget, cleanTarget);
 
             if (typeof window.clearMemoryCache === 'function') {
                 window.clearMemoryCache();
@@ -486,7 +522,7 @@
 
             localStorage.removeItem(`${uId}_app_deleted_sessions`);
 
-            const sb = window.supabaseClient || window.supabase;
+            const sb = getSupabase();
             if (sb && typeof sb.rpc === 'function' && navigator.onLine) {
                 const { data: rpcRes, error: rpcErr } = await sb.rpc('delete_user_session_data', {
                     p_user_id: uId,
