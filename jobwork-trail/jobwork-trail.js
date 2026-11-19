@@ -1,8 +1,8 @@
 /* ============================================================================
-   SIMPLICITY ERP - UNIFIED JOBWORK, DYNAMIC GROUPS & SAREE PROCESS TRAIL
+   SIMPLICITY ERP - TALLYPRIME UNIFIED JOBWORK, SAREE TRAIL, DISPATCH & BILLS
    File: jobwork-trail/jobwork-trail.js
    100% Compatible with: core/storage.js, core/database.js (Supabase Row-Delta),
-   core/karkhana.js, saree_history, jobwork_workers, jobwork_sheets_*, dukan, bills
+   core/karkhana.js, core/tally-master.js, saree_history, jobwork_workers
 ============================================================================ */
 
 (() => {
@@ -16,27 +16,73 @@
     ];
 
     /* ========================================================================
-       1. MODULE & UI STATE
+       1. MODULE NAVIGATION & VOUCHER STATE
     ======================================================================== */
-    let curScreen = 'gateway'; // 'gateway' | 'malik' | 'stock' | 'jobwork' | 'create'
-    let gwIdx = 0;
-    let stockFilter = 'all'; // 'all' | 'unfinished' | 'finished' | 'lott'
-    let jwFilterGroup = 'all';
-    let jwSubMode = 'list'; // 'list' | 'voucher'
+    let curView = 'gateway';
+    // Views:
+    // 'gateway' | 'create-menu' | 'create-worker' | 'create-group'
+    // 'alter-menu' | 'alter-worker-list' | 'alter-worker-edit' | 'alter-group-list' | 'alter-group-edit'
+    // 'jw-groups' | 'jw-workers' | 'jw-worker-menu' | 'jw-voucher' | 'jw-worker-hist'
+    // 'owner-menu' | 'owner-workers' | 'owner-worker-detail' | 'owner-godam' | 'owner-godam-detail'
+    // 'stock-list' | 'stock-detail'
+    // 'final-out'
+    // 'bills'
+
+    let menuIdx = 0;           // Active cursor in Tally menus & lists
+    let activeGroupKey = 'cutting';
     let activeWorkerId = null;
-    let vchMode = 'issue'; // 'issue' | 'return' | 'history'
-    let selectedGodamKey = null;
-    let selectedPendingKey = null;
-    let selectedPassbookKey = null;
-    let createMode = 'worker'; // 'worker' | 'group'
-    let selectedCreateGroupKey = 'cutting';
-    let isSubmitting = false;
+    let vchDir = 'out';        // 'out' | 'in'
+    let vchPickStep = 'kariger'; // 'kariger' | 'stage'
+    let vchSelectedMaker = null;
+    let vchSelectedBatchKey = null;
+    let vchRightItems = [];
+    let vchRightIdx = 0;
+    let vchBatch = [];
+    let vchAcceptOpen = false;
+    let lastChallanObj = null;
+
+    // Owner Report drill-down
+    let ownerWorkerId = null;
+    let ownerGodamSummaryKey = null;
+
+    // Stock screen state
+    let stockBucketFilter = 'all';
+    let stockDetailKey = null;
     let stockInwardOpen = false;
-    let lastChallanData = null;
+
+    // Create / Alter state
+    let createSideIdx = 0;
+    let selectedCreateGroupKey = 'cutting';
+    let alterEditWorkerId = null;
+    let alterEditGroupKey = null;
+    let crAcceptOpen = false;
+
+    // Final Out (Dispatch) state
+    let foPickStep = 'kariger'; // 'kariger' | 'stage'
+    let foSelectedMaker = null;
+    let foSelectedBatchKey = null;
+    let foRightItems = [];
+    let foRightIdx = 0;
+    let foBatch = [];
+    let foAcceptOpen = false;
+
+    // Bills & Hisab state
+    let billsTab = 'pending'; // 'new' | 'pending' | 'paid'
+    let billSelectedWorkerId = null;
+    let billWorkerItems = [];
+    let billWorkerIdx = 0;
+    let activeBillId = null;
+    let billAcceptOpen = false;
+
+    let isSaving = false;
+    let navGuardTs = 0;
     let cachedSnapshot = null;
 
+    const armNavGuard = () => { navGuardTs = performance.now(); };
+    const isNavGuarded = () => (performance.now() - navGuardTs) < 130;
+
     /* ========================================================================
-       2. BULLETPROOF SAFE HELPERS
+       2. SAFE HELPERS & STORAGE WRAPPERS
     ======================================================================== */
     const esc = (s) => {
         if (typeof window.sanitizeHTML === 'function') return window.sanitizeHTML(s);
@@ -51,18 +97,17 @@
         return [];
     };
 
-    const safeInt = (v, fallback = 0) => {
+    const safeInt = (v, fb = 0) => {
         const n = parseInt(String(v == null ? '' : v).replace(/,/g, '').trim(), 10);
-        return Number.isFinite(n) ? n : fallback;
+        return Number.isFinite(n) ? n : fb;
     };
 
-    const safeNum = (v, fallback = 0) => {
+    const safeNum = (v, fb = 0) => {
         const n = parseFloat(String(v == null ? '' : v).replace(/,/g, '').trim());
-        return Number.isFinite(n) ? n : fallback;
+        return Number.isFinite(n) ? n : fb;
     };
 
     const normText = (s, fb = '') => String(s == null ? fb : s).trim().toUpperCase() || fb;
-    const normKeyPart = (s, fb = '') => normText(s, fb);
 
     const toIsoDate = (val) => {
         if (!val) return '';
@@ -89,10 +134,7 @@
         return d;
     };
 
-    const genId = (prefix) => {
-        const rand = Math.random().toString(36).slice(2, 7);
-        return `${prefix}_${Date.now()}_${rand}`;
-    };
+    const genId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
     const getStoreSafe = (key) => {
         try {
@@ -106,11 +148,8 @@
     };
 
     const setStoreSafe = (key, val) => {
-        if (typeof window.setStore === 'function') {
-            window.setStore(key, val);
-        } else {
-            localStorage.setItem(key, JSON.stringify(val));
-        }
+        if (typeof window.setStore === 'function') window.setStore(key, val);
+        else localStorage.setItem(key, JSON.stringify(val));
     };
 
     const getActiveGodam = () => {
@@ -123,10 +162,10 @@
     };
 
     const normGodam = (kid) => {
-        const clean = String(kid || '').trim();
-        if (!clean || clean === 'k_main') return 'k_main';
-        if (clean === 'all') return 'all';
-        return clean;
+        const c = String(kid || '').trim();
+        if (!c || c === 'k_main') return 'k_main';
+        if (c === 'all') return 'all';
+        return c;
     };
 
     const getGodamLabel = (kid) => {
@@ -155,7 +194,7 @@
         el.style.color = isErr ? '#ffffff' : '#fde68a';
         el.style.display = 'block';
         clearTimeout(el._t);
-        el._t = setTimeout(() => { el.style.display = 'none'; }, 2800);
+        el._t = setTimeout(() => { el.style.display = 'none'; }, 2600);
     };
 
     const invalidateAllCaches = (workerId = null) => {
@@ -166,9 +205,7 @@
             if (typeof window.updateJobWorkHubBadges === 'function') window.updateJobWorkHubBadges();
             if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
             if (typeof window.slSyncDashboardCharts === 'function') window.slSyncDashboardCharts();
-        } catch (err) {
-            console.warn('[JW-Trail] Cache invalidation warning:', err);
-        }
+        } catch (_) {}
     };
 
     /* ========================================================================
@@ -179,15 +216,17 @@
         const workers = safeArr(getStoreSafe('jobwork_workers'));
         const map = new Map();
 
-        DEFAULT_GROUPS.forEach((g) => map.set(g.key, { key: g.key, label: g.label }));
+        if (stored.length) {
+            stored.forEach((g) => {
+                if (!g || !g.key) return;
+                const k = String(g.key).trim().toLowerCase();
+                if (k) map.set(k, { key: k, label: String(g.label || k).trim() });
+            });
+        } else {
+            DEFAULT_GROUPS.forEach((g) => map.set(g.key, { key: g.key, label: g.label }));
+        }
 
-        stored.forEach((g) => {
-            if (!g || !g.key) return;
-            const k = String(g.key).trim().toLowerCase();
-            if (!k) return;
-            map.set(k, { key: k, label: String(g.label || k).trim() });
-        });
-
+        // Ensure any existing worker's group always exists
         workers.forEach((w) => {
             if (!w || !w.type) return;
             const k = String(w.type).trim().toLowerCase();
@@ -201,17 +240,17 @@
 
     const grpLabel = (key) => {
         const k = String(key || '').trim().toLowerCase();
-        const found = getWorkGroups().find((g) => g.key === k);
-        return found ? found.label : (k ? k.charAt(0).toUpperCase() + k.slice(1) : 'JobWork');
+        const f = getWorkGroups().find((g) => g.key === k);
+        return f ? f.label : (k ? k.charAt(0).toUpperCase() + k.slice(1) : 'JobWork');
     };
 
     /* ========================================================================
-       4. STAGE & TRAIL HELPERS (COMPATIBLE WITH LEGACY saree_history)
+       4. STAGE & TRAIL HELPERS
     ======================================================================== */
     const inferBucketFromLegacyType = (t) => {
-        const clean = String(t || 'fresh').trim().toLowerCase();
-        if (clean === 'finished' || clean === 'finish') return 'finished';
-        if (clean === 'lott' || clean === 'lot' || clean === 'damage') return 'lott';
+        const c = String(t || 'fresh').trim().toLowerCase();
+        if (c === 'finished' || c === 'finish') return 'finished';
+        if (c === 'lott' || c === 'lot' || c === 'damage') return 'lott';
         return 'unfinished';
     };
 
@@ -238,17 +277,17 @@
     const formatTrail = (doneStages, bucket = 'unfinished') => {
         const arr = Array.isArray(doneStages) ? doneStages : [];
         if (bucket === 'finished') {
-            return arr.length ? `Finished (${arr.map(grpLabel).join(' → ')})` : 'Finished Ready';
+            return arr.length ? `Finished (${arr.map(grpLabel).join(' → ')})` : 'Finished (Calender)';
         }
         if (bucket === 'lott') {
             return arr.length ? `Lott (${arr.map(grpLabel).join(' → ')})` : 'Lott (Fresh)';
         }
-        if (!arr.length) return 'Fresh (Kora — Koi Kaam Nahi Hua)';
-        return arr.map(grpLabel).join(' → ') + ' Complete';
+        if (!arr.length) return 'Fresh (Kora)';
+        return arr.map(grpLabel).join(' → ');
     };
 
     /* ========================================================================
-       5. UNIFIED RECONCILIATION ENGINE (100% STOCK MATCH ACROSS APP)
+       5. UNIFIED RECONCILIATION ENGINE (100% STOCK MATCH)
     ======================================================================== */
     const computeLiveState = (godamFilter = 'all') => {
         const groups = getWorkGroups();
@@ -256,7 +295,7 @@
         const karigerMeta = new Map();
         safeArr(getStoreSafe('kariger_list')).forEach((k) => {
             if (k && k.name) {
-                karigerMeta.set(normKeyPart(k.name), {
+                karigerMeta.set(normText(k.name), {
                     saree: normText(k.saree, 'GENERAL SAREE'),
                     karkhanaId: normGodam(k.karkhanaId || 'k_main')
                 });
@@ -266,7 +305,7 @@
         const sareeHist = safeArr(getStoreSafe('saree_history'));
         const activeFilter = godamFilter || 'all';
 
-        // --- A. GODAM STOCK (WITH EXACT STAGE TRAIL) ---
+        // A. GODAM STOCK (EXACT STAGE TRAIL BATCHES)
         const godamMap = new Map();
         const untrailedOuts = [];
 
@@ -290,10 +329,7 @@
             const trailKey = doneStages.join('|');
 
             const isOut = (h.isOut === true) || (safeNum(h.gai) > 0);
-            const qty = isOut
-                ? safeInt(h.gai != null ? h.gai : h.pcs)
-                : safeInt(h.aai != null ? h.aai : h.pcs);
-
+            const qty = isOut ? safeInt(h.gai != null ? h.gai : h.pcs) : safeInt(h.aai != null ? h.aai : h.pcs);
             if (qty <= 0) return;
 
             const bKey = `${sName}|||${kName}|||${kid}|||${bucket}|||${trailKey}`;
@@ -303,6 +339,7 @@
                 if (!b) {
                     b = {
                         key: bKey,
+                        summaryKey: `${sName}|||${kName}|||${kid}|||${bucket}`,
                         saree: sName,
                         maker: kName,
                         karkhanaId: kid,
@@ -324,12 +361,11 @@
                 } else if (hasExplicitTrail && exact) {
                     exact.pcs = Math.max(0, exact.pcs - qty);
                 } else {
-                    untrailedOuts.push({ sName, kName, kid, bucket, trailKey, qty });
+                    untrailedOuts.push({ sName, kName, kid, bucket, qty });
                 }
             }
         });
 
-        // Reconcile legacy/external untrailed outs (e.g. Dukan Challan) FIFO on matching saree+maker+godam+bucket
         untrailedOuts.forEach((out) => {
             let rem = out.qty;
             for (const b of godamMap.values()) {
@@ -354,7 +390,29 @@
 
         const godamBatches = Array.from(godamMap.values()).filter((b) => b.pcs > 0);
 
-        // --- B. WORKERS & EXACT PENDING SAREES ---
+        // Grouped summary for clean Owner Report & Stock List (Total Pcs outside, Stage breakdown on Enter)
+        const godamSummaryMap = new Map();
+        godamBatches.forEach((b) => {
+            let sg = godamSummaryMap.get(b.summaryKey);
+            if (!sg) {
+                sg = {
+                    summaryKey: b.summaryKey,
+                    saree: b.saree,
+                    maker: b.maker,
+                    karkhanaId: b.karkhanaId,
+                    godamName: b.godamName,
+                    bucket: b.bucket,
+                    pcs: 0,
+                    batches: []
+                };
+                godamSummaryMap.set(b.summaryKey, sg);
+            }
+            sg.pcs += b.pcs;
+            sg.batches.push(b);
+        });
+        const godamSummaries = Array.from(godamSummaryMap.values());
+
+        // B. WORKERS & EXACT PENDING SAREES
         const workers = [];
         const pendingBatches = [];
 
@@ -403,7 +461,6 @@
                 const mN = maker ? normText(maker) : null;
                 const kId = kid ? normGodam(kid) : null;
 
-                // 1. Exact match if prevStages is provided
                 if (Array.isArray(prevStages) && sN && mN && kId) {
                     const exactKey = `${w.id}|||${sN}|||${mN}|||${kId}|||${prevStages.join('|')}`;
                     const ex = pMap.get(exactKey);
@@ -413,7 +470,6 @@
                         rem -= take;
                     }
                 }
-                // 2. Fallback: match maker + saree
                 if (rem > 0 && mN) {
                     for (const ex of pMap.values()) {
                         if (rem <= 0) break;
@@ -424,7 +480,6 @@
                         }
                     }
                 }
-                // 3. Fallback: FIFO across worker's pending
                 if (rem > 0) {
                     for (const ex of pMap.values()) {
                         if (rem <= 0) break;
@@ -488,19 +543,12 @@
                     } else {
                         const aq = safeInt(r.aayiQty);
                         const dq = safeInt(r.damagePcs);
-                        if (aq > 0) {
-                            aai += aq;
-                            deductPending(null, null, null, null, aq);
-                        }
-                        if (dq > 0) {
-                            aai += dq;
-                            deductPending(null, null, null, null, dq);
-                        }
+                        if (aq > 0) { aai += aq; deductPending(null, null, null, null, aq); }
+                        if (dq > 0) { aai += dq; deductPending(null, null, null, null, dq); }
                     }
                 });
             });
 
-            // Reconcile opening pending balance if any
             if (openingPend > 0) {
                 diya += openingPend;
                 const curMapSum = Array.from(pMap.values()).reduce((s, x) => s + x.pcs, 0);
@@ -513,7 +561,6 @@
             const workerPendList = Array.from(pMap.values()).filter((p) => p.pcs > 0);
             workerPendList.forEach((p) => pendingBatches.push(p));
 
-            const totWorkerPend = workerPendList.reduce((s, p) => s + p.pcs, 0);
             workers.push({
                 id: String(w.id),
                 name: w.name,
@@ -523,7 +570,7 @@
                 date: w.date || '',
                 diya,
                 aai,
-                pending: totWorkerPend,
+                pending: workerPendList.reduce((s, p) => s + p.pcs, 0),
                 pendingItems: workerPendList
             });
         });
@@ -538,6 +585,7 @@
             groups,
             workers,
             godamBatches,
+            godamSummaries,
             pendingBatches,
             totals: {
                 raw: rawPcs,
@@ -551,13 +599,49 @@
     };
 
     const getSnapshot = () => {
-        const gFilter = getActiveGodam();
-        if (cachedSnapshot && cachedSnapshot.godamFilter === gFilter) return cachedSnapshot;
-        return computeLiveState(gFilter);
+        const gF = getActiveGodam();
+        if (cachedSnapshot && cachedSnapshot.godamFilter === gF) return cachedSnapshot;
+        return computeLiveState(gF);
     };
 
     /* ========================================================================
-       6. ATOMIC ISSUE, RETURN, UNDO & MASTER ACTIONS
+       6. SHARED 2-STEP KARIGER -> STAGE BATCH PICKER HELPER
+    ======================================================================== */
+    const getBatchUsedQty = (batchArr, batchKey) => {
+        return batchArr.filter((x) => x.batchKey === batchKey).reduce((s, x) => s + safeInt(x.qty), 0);
+    };
+
+    const buildKarigerPickerList = (batches, usedBatchArr, query = '') => {
+        const q = String(query || '').trim().toLowerCase();
+        const kMap = new Map();
+        batches.forEach((b) => {
+            const avail = b.pcs - getBatchUsedQty(usedBatchArr, b.key);
+            if (avail <= 0) return;
+            let ex = kMap.get(b.maker);
+            if (!ex) {
+                ex = { maker: b.maker, totalPcs: 0, stagesCount: 0, sarees: new Set() };
+                kMap.set(b.maker, ex);
+            }
+            ex.totalPcs += avail;
+            ex.stagesCount += 1;
+            ex.sarees.add(b.saree);
+        });
+        return Array.from(kMap.values())
+            .filter((k) => !q || `${k.maker} ${Array.from(k.sarees).join(' ')}`.toLowerCase().includes(q))
+            .sort((a, b) => a.maker.localeCompare(b.maker));
+    };
+
+    const buildStagePickerList = (batches, makerName, usedBatchArr, query = '') => {
+        const q = String(query || '').trim().toLowerCase();
+        return batches
+            .filter((b) => b.maker === makerName)
+            .map((b) => ({ ...b, availPcs: b.pcs - getBatchUsedQty(usedBatchArr, b.key) }))
+            .filter((b) => b.availPcs > 0)
+            .filter((b) => !q || `${b.saree} ${formatTrail(b.doneStages, b.bucket)} ${b.godamName}`.toLowerCase().includes(q));
+    };
+
+    /* ========================================================================
+       7. DATA MUTATIONS (ATOMIC & SUPABASE SAFE)
     ======================================================================== */
     const ensureWorkerSheet = (workerId) => {
         const sheets = safeArr(getStoreSafe(`jobwork_sheets_${workerId}`)).slice();
@@ -570,230 +654,280 @@
                 rows: []
             });
         }
-        const last = sheets[sheets.length - 1];
+        const last = { ...sheets[sheets.length - 1] };
         last.rows = safeArr(last.rows).slice();
+        sheets[sheets.length - 1] = last;
         return { sheets, lastSheet: last };
     };
 
-    window.jwtSubmitIssue = () => {
-        if (isSubmitting) return;
+    const commitVchBatch = (doPrint = false) => {
+        if (isSaving) return;
+        if (!vchBatch.length) return toast('Batch khali hai! Pehle kam se kam 1 saree add karein.', true);
+
         const snap = getSnapshot();
         const worker = snap.workers.find((w) => w.id === activeWorkerId);
-        const batch = snap.godamBatches.find((b) => b.key === selectedGodamKey);
-
         if (!worker) return toast('Worker nahi mila!', true);
-        if (!batch) return toast('Right side list se Saree batch chunein!', true);
 
-        const qty = safeInt(document.getElementById('jwt-issue-qty')?.value);
-        const dDate = toIsoDate(document.getElementById('jwt-issue-date')?.value) || getTodayIso();
+        const dDate = toIsoDate(document.getElementById('jwt-vch-date')?.value) || getTodayIso();
+        const gLabel = grpLabel(worker.group);
+        const targetLabel = `${worker.name} (${gLabel})`;
 
-        if (qty <= 0 || qty > batch.pcs) {
-            return toast(`Sahi Pcs daalein (Max ${batch.pcs} Pcs available)!`, true);
-        }
-
-        isSubmitting = true;
+        isSaving = true;
         try {
             const txnId = genId('jwt');
             const now = Date.now();
-            const gLabel = grpLabel(worker.group);
-            const targetLabel = `${worker.name} (${gLabel})`;
-            const lType = legacyTypeFromTrail(batch.doneStages, 'unfinished');
-
-            // 1. Update saree_history (Outward from Godam)
             const sH = safeArr(getStoreSafe('saree_history')).slice();
-            sH.push({
-                id: `sh_jw_out_${txnId}`,
-                refId: txnId,
-                date: dDate,
-                sareeName: batch.saree,
-                karigerName: batch.maker,
-                kariger: batch.maker,
-                partyName: targetLabel,
-                targetWorker: targetLabel,
-                karkhanaId: batch.karkhanaId,
-                type: lType,
-                typeLabel: `📤 ${targetLabel} ko bheja [${formatTrail(batch.doneStages, 'unfinished')}]`,
-                aai: 0,
-                gai: qty,
-                isOut: true,
-                doneStages: [...batch.doneStages],
-                stageBucket: 'unfinished',
-                workerId: worker.id,
-                note: `${targetLabel} Issue`,
-                timestamp: now
-            });
-
-            // 2. Update jobwork_sheets_<workerId>
             const { sheets, lastSheet } = ensureWorkerSheet(worker.id);
-            lastSheet.rows.push({
-                id: txnId,
-                date: dDate,
-                gayiQty: qty,
-                gayiItems: [{
-                    id: `it_${txnId}`,
-                    karigar: batch.maker,
-                    saree: batch.saree,
-                    karkhanaId: batch.karkhanaId,
-                    doneStages: [...batch.doneStages],
-                    bucket: 'unfinished',
-                    qty
-                }],
-                stockSource: lType,
-                aayiQty: 0,
-                aayiItems: [],
-                damagePcs: 0,
-                damageAmt: 0,
-                isTrailV2: true
-            });
 
-            setStoreSafe('saree_history', sH);
-            setStoreSafe(`jobwork_sheets_${worker.id}`, sheets);
+            let totQty = 0;
+            let totDmg = 0;
+            const sheetItems = [];
 
-            lastChallanData = {
-                mode: 'ISSUE (GAYI)',
-                workerName: worker.name,
-                groupLabel: gLabel,
-                date: dDate,
-                saree: batch.saree,
-                maker: batch.maker,
-                trail: formatTrail(batch.doneStages, 'unfinished'),
-                pcs: qty
-            };
+            if (vchDir === 'out') {
+                vchBatch.forEach((it, idx) => {
+                    totQty += it.qty;
+                    const lType = legacyTypeFromTrail(it.doneStages, 'unfinished');
+                    sH.push({
+                        id: `sh_jw_out_${txnId}_${idx}`,
+                        refId: txnId,
+                        date: dDate,
+                        sareeName: it.saree,
+                        karigerName: it.maker,
+                        kariger: it.maker,
+                        partyName: targetLabel,
+                        targetWorker: targetLabel,
+                        karkhanaId: it.karkhanaId,
+                        type: lType,
+                        typeLabel: `📤 ${targetLabel} Out [${formatTrail(it.doneStages, 'unfinished')}]`,
+                        aai: 0,
+                        gai: it.qty,
+                        isOut: true,
+                        doneStages: [...it.doneStages],
+                        stageBucket: 'unfinished',
+                        workerId: worker.id,
+                        note: `${gLabel} Out`,
+                        timestamp: now + idx
+                    });
+                    sheetItems.push({
+                        id: `it_${txnId}_${idx}`,
+                        karigar: it.maker,
+                        saree: it.saree,
+                        karkhanaId: it.karkhanaId,
+                        doneStages: [...it.doneStages],
+                        bucket: 'unfinished',
+                        qty: it.qty
+                    });
+                });
 
-            selectedGodamKey = null;
-            const bInp = document.getElementById('jwt-issue-batch');
-            const qInp = document.getElementById('jwt-issue-qty');
-            if (bInp) bInp.value = '';
-            if (qInp) qInp.value = '';
+                lastSheet.rows.push({
+                    id: txnId,
+                    date: dDate,
+                    gayiQty: totQty,
+                    gayiItems: sheetItems,
+                    stockSource: 'fresh',
+                    aayiQty: 0,
+                    aayiItems: [],
+                    damagePcs: 0,
+                    damageAmt: 0,
+                    isTrailV2: true
+                });
+            } else {
+                vchBatch.forEach((it, idx) => {
+                    const nextTrail = [...it.doneStages];
+                    if (worker.group && !nextTrail.includes(worker.group)) nextTrail.push(worker.group);
+                    const targetBucket = it.dest === 'finished' ? 'finished' : (it.dest === 'lott' ? 'lott' : 'unfinished');
+                    const isDmg = (targetBucket === 'lott');
+                    if (isDmg) totDmg += it.qty;
+                    else totQty += it.qty;
 
-            invalidateAllCaches(worker.id);
-            renderCurrent();
-            toast(`✅ ${qty} Pcs ${worker.name} ko Issue ho gayi!`);
-        } catch (err) {
-            console.error('[JW-Trail] Issue Error:', err);
-            toast('Issue save karne me dikkat aayi!', true);
-        } finally {
-            isSubmitting = false;
-        }
-    };
+                    const lType = legacyTypeFromTrail(nextTrail, targetBucket);
+                    const icon = targetBucket === 'finished' ? '✨' : (isDmg ? '⚠️' : '✅');
 
-    window.jwtSubmitReturn = () => {
-        if (isSubmitting) return;
-        const snap = getSnapshot();
-        const worker = snap.workers.find((w) => w.id === activeWorkerId);
-        const pend = snap.pendingBatches.find((p) => p.key === selectedPendingKey);
+                    sH.push({
+                        id: `sh_jw_in_${txnId}_${idx}`,
+                        refId: txnId,
+                        date: dDate,
+                        sareeName: it.saree,
+                        karigerName: it.maker,
+                        kariger: it.maker,
+                        partyName: targetLabel,
+                        targetWorker: targetLabel,
+                        karkhanaId: it.karkhanaId,
+                        type: lType,
+                        typeLabel: `${icon} ${targetLabel} In [${formatTrail(nextTrail, targetBucket)}]`,
+                        aai: it.qty,
+                        gai: 0,
+                        isOut: false,
+                        doneStages: nextTrail,
+                        stageBucket: targetBucket,
+                        workerId: worker.id,
+                        note: `${gLabel} In`,
+                        timestamp: now + idx
+                    });
+                    sheetItems.push({
+                        id: `it_${txnId}_${idx}`,
+                        karigar: it.maker,
+                        saree: it.saree,
+                        karkhanaId: it.karkhanaId,
+                        prevStages: [...it.doneStages],
+                        doneStages: nextTrail,
+                        destBucket: targetBucket,
+                        isDamage: isDmg,
+                        qty: it.qty
+                    });
+                });
 
-        if (!worker) return toast('Worker nahi mila!', true);
-        if (!pend) return toast('Right side list se Pending Saree chunein!', true);
-
-        const qty = safeInt(document.getElementById('jwt-ret-qty')?.value);
-        const dest = document.getElementById('jwt-ret-dest')?.value || 'godam';
-        const fineAmt = safeNum(document.getElementById('jwt-ret-fine')?.value, 0);
-        const dDate = toIsoDate(document.getElementById('jwt-ret-date')?.value) || getTodayIso();
-
-        if (qty <= 0 || qty > pend.pcs) {
-            return toast(`Sahi Pcs daalein (Max ${pend.pcs} Pcs pending)!`, true);
-        }
-
-        isSubmitting = true;
-        try {
-            const txnId = genId('jwt');
-            const now = Date.now();
-            const gLabel = grpLabel(worker.group);
-            const targetLabel = `${worker.name} (${gLabel})`;
-            const targetBucket = dest === 'finished' ? 'finished' : (dest === 'lott' ? 'lott' : 'unfinished');
-
-            const nextTrail = [...pend.doneStages];
-            if (worker.group && !nextTrail.includes(worker.group)) {
-                nextTrail.push(worker.group);
+                lastSheet.rows.push({
+                    id: txnId,
+                    date: dDate,
+                    gayiQty: 0,
+                    gayiItems: [],
+                    stockSource: 'fresh',
+                    aayiQty: totQty,
+                    aayiItems: sheetItems,
+                    damagePcs: totDmg,
+                    damageAmt: 0,
+                    isTrailV2: true
+                });
             }
-            const targetLegacyType = legacyTypeFromTrail(nextTrail, targetBucket);
-            const icon = targetBucket === 'finished' ? '✨' : (targetBucket === 'lott' ? '⚠️' : '✅');
-
-            // 1. Update saree_history (Inward back to Godam/Finished/Lott)
-            const sH = safeArr(getStoreSafe('saree_history')).slice();
-            sH.push({
-                id: `sh_jw_in_${txnId}`,
-                refId: txnId,
-                date: dDate,
-                sareeName: pend.saree,
-                karigerName: pend.maker,
-                kariger: pend.maker,
-                partyName: targetLabel,
-                targetWorker: targetLabel,
-                karkhanaId: pend.karkhanaId,
-                type: targetLegacyType,
-                typeLabel: `${icon} ${targetLabel} se Aayi [${formatTrail(nextTrail, targetBucket)}]`,
-                aai: qty,
-                gai: 0,
-                isOut: false,
-                doneStages: nextTrail,
-                stageBucket: targetBucket,
-                workerId: worker.id,
-                note: targetBucket === 'lott' && fineAmt > 0 ? `Lott Fine: ₹${fineAmt}` : `${gLabel} Return`,
-                timestamp: now
-            });
-
-            // 2. Update jobwork_sheets_<workerId>
-            const { sheets, lastSheet } = ensureWorkerSheet(worker.id);
-            const isDmg = (targetBucket === 'lott');
-            lastSheet.rows.push({
-                id: txnId,
-                date: dDate,
-                gayiQty: 0,
-                gayiItems: [],
-                stockSource: 'fresh',
-                aayiQty: isDmg ? 0 : qty,
-                aayiItems: [{
-                    id: `it_${txnId}`,
-                    karigar: pend.maker,
-                    saree: pend.saree,
-                    karkhanaId: pend.karkhanaId,
-                    prevStages: [...pend.doneStages],
-                    doneStages: nextTrail,
-                    destBucket: targetBucket,
-                    isDamage: isDmg,
-                    qty
-                }],
-                damagePcs: isDmg ? qty : 0,
-                damageAmt: isDmg ? fineAmt : 0,
-                isTrailV2: true
-            });
 
             setStoreSafe('saree_history', sH);
             setStoreSafe(`jobwork_sheets_${worker.id}`, sheets);
 
-            lastChallanData = {
-                mode: targetBucket === 'lott' ? 'LOTT / DAMAGE' : 'RETURN (WAPAS AAYI)',
-                workerName: worker.name,
-                groupLabel: gLabel,
+            lastChallanObj = {
+                title: `${gLabel.toUpperCase()} ${vchDir === 'out' ? 'OUT (GAYI)' : 'IN (WAPAS AAYI)'}`,
+                party: `${worker.name} (${gLabel})`,
                 date: dDate,
-                saree: pend.saree,
-                maker: pend.maker,
-                trail: formatTrail(nextTrail, targetBucket),
-                pcs: qty
+                items: vchBatch.map((x) => ({
+                    maker: x.maker,
+                    saree: x.saree,
+                    trail: vchDir === 'out'
+                        ? formatTrail(x.doneStages, 'unfinished')
+                        : formatTrail([...x.doneStages, ...(x.doneStages.includes(worker.group) ? [] : [worker.group])], x.dest === 'finished' ? 'finished' : (x.dest === 'lott' ? 'lott' : 'unfinished')),
+                    qty: x.qty
+                }))
             };
 
-            selectedPendingKey = null;
-            const bInp = document.getElementById('jwt-ret-batch');
-            const qInp = document.getElementById('jwt-ret-qty');
-            const fInp = document.getElementById('jwt-ret-fine');
-            if (bInp) bInp.value = '';
-            if (qInp) qInp.value = '';
-            if (fInp) fInp.value = '';
+            vchBatch = [];
+            vchAcceptOpen = false;
+            vchPickStep = 'kariger';
+            vchSelectedMaker = null;
+            vchSelectedBatchKey = null;
 
             invalidateAllCaches(worker.id);
-            renderCurrent();
-            toast(`✅ ${qty} Pcs wapas → ${formatTrail(nextTrail, targetBucket)}`);
+            toast(`✅ ${totQty + totDmg} Pcs Save ho gayi!`);
+            if (doPrint) printBatchChallan(lastChallanObj);
+            renderScreen();
         } catch (err) {
-            console.error('[JW-Trail] Return Error:', err);
-            toast('Return save karne me dikkat aayi!', true);
+            console.error('[JW-Trail] commitVchBatch error:', err);
+            toast('Batch save karne me error aaya!', true);
         } finally {
-            isSubmitting = false;
+            isSaving = false;
         }
     };
 
-    window.jwtDeleteWorkerRow = (sheetId, rowId) => {
+    const commitFinalOutBatch = (doPrint = false) => {
+        if (isSaving) return;
+        if (!foBatch.length) return toast('Batch khali hai! Kam se kam 1 Saree add karein.', true);
+
+        const dDate = toIsoDate(document.getElementById('jwt-fo-date')?.value) || getTodayIso();
+        const note = String(document.getElementById('jwt-fo-note')?.value || '').trim() || 'Apni Main Dukan';
+
+        isSaving = true;
+        try {
+            const challanId = genId('dukan');
+            const now = Date.now();
+            const sH = safeArr(getStoreSafe('saree_history')).slice();
+            const dukanHist = safeArr(getStoreSafe('dukan_transfer_history')).slice();
+
+            foBatch.forEach((it, idx) => {
+                const lType = legacyTypeFromTrail(it.doneStages, it.bucket);
+                const trTxt = formatTrail(it.doneStages, it.bucket);
+
+                sH.push({
+                    id: `sh_fo_${challanId}_${idx}`,
+                    refId: `${challanId}_${idx}`,
+                    date: dDate,
+                    sareeName: it.saree,
+                    karigerName: it.maker,
+                    kariger: it.maker,
+                    partyName: note,
+                    targetWorker: note,
+                    karkhanaId: it.karkhanaId,
+                    type: lType,
+                    typeLabel: `🚚 Final Out ➔ ${note} [${trTxt}]`,
+                    aai: 0,
+                    gai: it.qty,
+                    isOut: true,
+                    doneStages: [...it.doneStages],
+                    stageBucket: it.bucket,
+                    note,
+                    timestamp: now + idx
+                });
+
+                dukanHist.unshift({
+                    id: `${challanId}_${idx}`,
+                    date: dDate,
+                    sareeName: it.saree,
+                    karigerName: it.maker,
+                    pcs: it.qty,
+                    note: `${note} [${trTxt}]`,
+                    karkhanaId: it.karkhanaId,
+                    doneStages: [...it.doneStages],
+                    stageBucket: it.bucket,
+                    timestamp: now + idx
+                });
+            });
+
+            setStoreSafe('saree_history', sH);
+            setStoreSafe('dukan_transfer_history', dukanHist);
+
+            lastChallanObj = {
+                title: 'FINAL OUT (DISPATCH CHALLAN)',
+                party: note,
+                date: dDate,
+                items: foBatch.map((x) => ({
+                    maker: x.maker,
+                    saree: x.saree,
+                    trail: formatTrail(x.doneStages, x.bucket),
+                    qty: x.qty
+                }))
+            };
+
+            foBatch = [];
+            foAcceptOpen = false;
+            foPickStep = 'kariger';
+            foSelectedMaker = null;
+            foSelectedBatchKey = null;
+
+            invalidateAllCaches();
+            if (typeof window.renderDukanTransferTable === 'function') {
+                try { window.renderDukanTransferTable(); } catch (_) {}
+            }
+            toast('✅ Final Out Challan save ho gaya!');
+            if (doPrint) printBatchChallan(lastChallanObj);
+            renderScreen();
+        } catch (err) {
+            console.error('[JW-Trail] commitFinalOutBatch error:', err);
+            toast('Final Out save karne me error aaya!', true);
+        } finally {
+            isSaving = false;
+        }
+    };
+
+    window.jwtDeleteFinalOutEntry = (entryId) => {
+        if (!entryId) return;
+        if (!confirm('Kya is Final Out entry ko delete karna chahte hain? Saree wapas Godam stock me jud jayegi.')) return;
+        const dukanHist = safeArr(getStoreSafe('dukan_transfer_history')).filter((x) => !x || String(x.id) !== String(entryId));
+        const sH = safeArr(getStoreSafe('saree_history')).filter((h) => !h || (String(h.refId) !== String(entryId) && String(h.id) !== `sh_fo_${entryId}`));
+        setStoreSafe('dukan_transfer_history', dukanHist);
+        setStoreSafe('saree_history', sH);
+        invalidateAllCaches();
+        toast('Final Out entry delete ho gayi!');
+        renderScreen();
+    };
+
+    window.jwtDeleteWorkerHistRow = (sheetId, rowId) => {
         if (!activeWorkerId || !rowId) return;
         const sheets = safeArr(getStoreSafe(`jobwork_sheets_${activeWorkerId}`)).slice();
         const sh = sheets.find((s) => s && String(s.id) === String(sheetId));
@@ -801,32 +935,1784 @@
         const row = safeArr(sh.rows).find((r) => r && String(r.id) === String(rowId));
         if (!row) return;
 
-        // Safety check: agar gayi entry delete karne se worker ka pending negative ho raha hai to rokein
         const snap = getSnapshot();
         const worker = snap.workers.find((w) => w.id === activeWorkerId);
         if (worker && safeInt(row.gayiQty) > worker.pending) {
-            return toast('Is batch ki sarees pehle hi wapas aa chuki hain! Pehle Return entry delete karein.', true);
+            return toast('Is batch ki sarees pehle hi wapas aa chuki hain! Pehle IN entry delete karein.', true);
         }
-
-        if (!confirm('Kya is entry ko delete karna chahte hain? Saree stock aur worker hisab automatic theek ho jayega.')) return;
+        if (!confirm('Kya is entry ko delete karna chahte hain? Stock automatic adjust ho jayega.')) return;
 
         sh.rows = safeArr(sh.rows).filter((r) => r && String(r.id) !== String(rowId));
         const sH = safeArr(getStoreSafe('saree_history')).filter((h) => !h || String(h.refId) !== String(rowId));
-
         setStoreSafe('saree_history', sH);
         setStoreSafe(`jobwork_sheets_${activeWorkerId}`, sheets);
         invalidateAllCaches(activeWorkerId);
-        renderCurrent();
-        toast('Entry delete ho gayi aur stock adjust ho gaya!');
+        toast('Entry delete ho gayi!');
+        renderScreen();
     };
 
-    window.jwtSaveManualSareeInward = () => {
+    /* ========================================================================
+       8. A6 THERMAL PRINT & WHATSAPP
+    ======================================================================== */
+    const printBatchChallan = (c) => {
+        if (!c || !c.items || !c.items.length) return toast('Print ke liye koi item nahi hai.', true);
+        let tot = 0;
+        const rowsHtml = c.items.map((it, i) => {
+            tot += safeInt(it.qty);
+            return `<tr style="border-bottom:1px dashed #ccc;">
+                <td style="padding:3px 2px;">${i + 1}</td>
+                <td style="padding:3px 2px; font-weight:bold;">${esc(it.maker)}</td>
+                <td style="padding:3px 2px;">${esc(it.saree)}<br><small style="color:#555;">${esc(it.trail)}</small></td>
+                <td style="padding:3px 2px; text-align:right; font-weight:bold;">${it.qty}</td>
+            </tr>`;
+        }).join('');
+
+        const pw = window.open('', '', 'width=420,height=560');
+        if (!pw) return alert('Popup block hai! Kripya allow karein.');
+        pw.document.write(`<html><head><title>Simplicity Challan - A6</title>
+            <style>
+                @page { size: A6 portrait; margin: 4mm; }
+                body { font-family: monospace, sans-serif; font-size: 11px; margin: 0; padding: 4mm; color: #000; }
+                .box { border: 1.5px dashed #000; padding: 8px; max-width: 92mm; margin: 0 auto; }
+                .hdr { text-align: center; border-bottom: 1.5px dashed #000; padding-bottom: 5px; margin-bottom: 6px; }
+                table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 6px 0; }
+                th { border-top: 1px solid #000; border-bottom: 1px solid #000; text-align: left; padding: 3px 2px; }
+                .tot { background: #eee; border: 1px solid #000; text-align: center; font-size: 13px; font-weight: 900; padding: 5px; margin: 8px 0; }
+                .sign { display: flex; justify-content: space-between; margin-top: 20px; font-size: 10px; }
+            </style></head><body>
+            <div class="box">
+                <div class="hdr"><h3 style="margin:0;">SIMPLICITY ERP</h3><div>${esc(c.title)}</div></div>
+                <div><strong>Party / Worker:</strong> ${esc(c.party)}</div>
+                <div><strong>Tarikh:</strong> ${esc(fmtDate(c.date))}</div>
+                <table><thead><tr><th>#</th><th>KARIGER</th><th>SAREE &amp; TRAIL</th><th style="text-align:right;">PCS</th></tr></thead>
+                <tbody>${rowsHtml}</tbody></table>
+                <div class="tot">KUL SAREE: ${tot} Pcs</div>
+                <div class="sign"><div>हस्ताक्षर मुंशी<br><br>_______</div><div>हस्ताक्षर पाने वाला<br><br>_______</div></div>
+            </div>
+            <script>window.onload=function(){window.focus();window.print();setTimeout(()=>window.close(),600);};<\/script>
+            </body></html>`);
+        pw.document.close();
+    };
+
+    window.jwtPrintLastChallan = () => printBatchChallan(lastChallanObj);
+
+    window.jwtShareWorkerWhatsApp = (wId) => {
+        const snap = getSnapshot();
+        const w = snap.workers.find((x) => x.id === (wId || activeWorkerId));
+        if (!w) return;
+        const mob = getCleanMobile(w.mobile);
+        if (!mob || mob.length < 10) return toast(`${w.name} ka Mobile No. saved nahi hai!`, true);
+
+        const details = w.pendingItems.length
+            ? w.pendingItems.map((p) => `• ${p.saree} (${p.maker}): *${p.pcs} Pcs* [${formatTrail(p.doneStages, 'unfinished')}]`).join('\n')
+            : '• Koi saree pending nahi';
+
+        const msg = `*SIMPLICITY ERP — ${grpLabel(w.group).toUpperCase()}*\n━━━━━━━━━━━━━━━━━━━\n` +
+            `Kariger: *${w.name}*\nTarikh: ${fmtDate(getTodayIso())}\n━━━━━━━━━━━━━━━━━━━\n` +
+            `Diya: ${w.diya} Pcs | Aai: ${w.aai} Pcs\n*ABHI BAKI SAREE: ${w.pending} Pcs*\n\n` +
+            `*Pending Detail:*\n${details}\n━━━━━━━━━━━━━━━━━━━`;
+        window.open(`https://wa.me/${mob}?text=${encodeURIComponent(msg)}`, '_blank');
+    };
+
+    /* ========================================================================
+       9. STYLES & SHELL DOM INJECTION
+    ======================================================================== */
+    const injectStyles = () => {
+        if (document.getElementById('jwt-styles')) return;
+        const st = document.createElement('style');
+        st.id = 'jwt-styles';
+        st.textContent = `
+            #jw-trail-section {
+                padding: 0 !important;
+                overflow: hidden;
+                font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+                color: #1f2937;
+                background: #ffffff;
+            }
+            #jw-trail-section * { box-sizing: border-box; }
+            #jw-trail-section .jwt-topbar {
+                background: #fdf6e2; border-bottom: 1.5px solid #e5d5a7;
+                padding: 10px 16px; display: flex; justify-content: space-between;
+                align-items: center; gap: 10px; flex-wrap: wrap;
+            }
+            #jw-trail-section .jwt-topbar-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+            #jw-trail-section .jwt-topbar h2 { margin: 0; font-size: 16px; font-weight: 800; color: #1f2937; }
+            #jw-trail-section .jwt-pill {
+                font-size: 11.5px; font-weight: 700; color: #92400e;
+                background: #ffffff; border: 1px solid #d9b86c; padding: 2px 9px; border-radius: 999px;
+            }
+            #jw-trail-section .jwt-esc {
+                background: #ffffff; border: 1px solid #d1d5db; color: #374151;
+                padding: 5px 12px; border-radius: 5px; font-size: 12px; font-weight: 700; cursor: pointer;
+            }
+            #jw-trail-section .jwt-esc:hover { border-color: #d9a425; background: #fef9ea; }
+            #jw-trail-section .jwt-save {
+                background: #f2b71d; border: 1px solid #d9a425; color: #1f2937;
+                padding: 6px 15px; border-radius: 5px; font-size: 12.5px; font-weight: 800; cursor: pointer;
+            }
+            #jw-trail-section .jwt-save:hover { background: #e5aa12; }
+            #jw-trail-section .jwt-del {
+                background: #ffffff; border: 1px solid #fca5a5; color: #b91c1c;
+                padding: 5px 12px; border-radius: 5px; font-size: 12px; font-weight: 700; cursor: pointer;
+            }
+            #jw-trail-section .jwt-del:hover { background: #fef2f2; }
+
+            /* Tally Menu Box (Centered Pure Tally Style) */
+            #jw-trail-section .jwt-menu-shell {
+                max-width: 560px; margin: 22px auto; border: 1.5px solid #d9b86c;
+                border-radius: 6px; overflow: hidden; background: #ffffff;
+                box-shadow: 0 6px 20px rgba(0,0,0,0.05);
+            }
+            #jw-trail-section .jwt-menu-head {
+                background: #fdf6e2; border-bottom: 1.5px solid #e5d5a7; padding: 10px 16px;
+                font-size: 13.5px; font-weight: 800; color: #1f2937;
+                display: flex; justify-content: space-between; align-items: center;
+            }
+            #jw-trail-section .jwt-sec-lbl {
+                padding: 10px 18px 4px; font-size: 10.5px; font-weight: 800; color: #92400e;
+                text-transform: uppercase; letter-spacing: 0.5px; background: #fdfcf7;
+                border-top: 1px solid #f3efe0;
+            }
+            #jw-trail-section .jwt-sec-lbl.first { border-top: none; }
+            #jw-trail-section .jwt-menu-item {
+                width: 100%; text-align: left; background: #ffffff; border: none;
+                border-bottom: 1px solid #f3f4f6; padding: 11px 18px; font-size: 13.5px;
+                font-weight: 600; color: #1f2937; cursor: pointer;
+                display: flex; justify-content: space-between; align-items: center; gap: 10px;
+            }
+            #jw-trail-section .jwt-menu-item:hover { background: #fef9ea; }
+            #jw-trail-section .jwt-menu-item.active {
+                background: #f2b71d !important; font-weight: 800; color: #1f2937;
+            }
+            #jw-trail-section .jwt-menu-key { color: #b45309; font-weight: 900; text-decoration: underline; }
+            #jw-trail-section .jwt-menu-item.active .jwt-menu-key { color: #1f2937; }
+            #jw-trail-section .jwt-menu-val { font-size: 12px; color: #6b7280; font-weight: 700; }
+            #jw-trail-section .jwt-menu-item.active .jwt-menu-val { color: #1f2937; }
+
+            /* 5-Box KPI Strip (Used in Owner Report) & 3-Box Strip (Used in Bills) */
+            #jw-trail-section .jwt-kpi-5 {
+                display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+                border-bottom: 1.5px solid #e5d5a7; background: #fdfcf7;
+            }
+            #jw-trail-section .jwt-kpi-3 {
+                display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+                border-bottom: 1.5px solid #e5d5a7; background: #fdfcf7;
+            }
+            #jw-trail-section .jwt-kpi-cell { padding: 10px 14px; border-right: 1px solid #e5d5a7; }
+            #jw-trail-section .jwt-kpi-cell:last-child { border-right: none; background: #fdf6e2; }
+            #jw-trail-section .jwt-kpi-cell small { display: block; font-size: 11px; color: #6b7280; font-weight: 700; }
+            #jw-trail-section .jwt-kpi-cell strong { display: block; font-size: 16px; color: #b47d00; font-weight: 900; margin-top: 2px; }
+
+            /* Tables */
+            #jw-trail-section table {
+                width: 100%; min-width: 0 !important; border-collapse: collapse;
+                border: 1px solid #e5d5a7; font-size: 12.5px; background: #fff;
+            }
+            #jw-trail-section th {
+                background: #fdf6e2; color: #1f2937; font-size: 11.5px; font-weight: 800;
+                padding: 8px 10px; text-align: left; border-bottom: 1.5px solid #e5d5a7;
+            }
+            #jw-trail-section td { padding: 8px 10px; border-bottom: 1px solid #f3f4f6; color: #1f2937; vertical-align: middle; }
+            #jw-trail-section tr.jwt-row { cursor: pointer; }
+            #jw-trail-section tr.jwt-row:hover { background: #fef9ea; }
+            #jw-trail-section tr.jwt-row.active { background: #f2b71d !important; font-weight: 700; }
+            #jw-trail-section .num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+            #jw-trail-section .gold-num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 800; color: #b47d00; }
+            #jw-trail-section tr.jwt-row.active .gold-num { color: #1f2937; }
+            #jw-trail-section .trail { font-size: 11.5px; font-weight: 700; color: #92400e; }
+            #jw-trail-section .trail-muted { font-size: 11px; color: #6b7280; font-weight: 600; }
+            #jw-trail-section .trail-done { font-size: 11.5px; font-weight: 800; color: #065f46; }
+
+            /* 2-Pane Forms & Side Picker */
+            #jw-trail-section .jwt-split { display: grid; grid-template-columns: minmax(0, 1.25fr) 340px; }
+            #jw-trail-section .jwt-pane-l { padding: 16px; border-right: 1.5px solid #e5d5a7; }
+            #jw-trail-section .jwt-pane-r { padding: 12px; background: #fdfcf7; }
+            #jw-trail-section .jwt-frow {
+                display: grid; grid-template-columns: 145px minmax(0, 1fr);
+                align-items: center; gap: 10px; margin-bottom: 9px;
+            }
+            #jw-trail-section .jwt-frow label { font-size: 12px; font-weight: 700; color: #374151; }
+            #jw-trail-section .jwt-inp {
+                width: 100%; padding: 7px 10px; border: 1px solid #d1d5db; border-radius: 4px;
+                font-size: 13px; font-weight: 700; color: #111827; background: #fff; outline: none;
+            }
+            #jw-trail-section .jwt-inp:focus {
+                border-color: #d9a425; background: #fffdf5;
+                box-shadow: 0 0 0 2px rgba(242,183,29,0.22);
+            }
+            #jw-trail-section .jwt-sidebox { border: 1.5px solid #d9b86c; border-radius: 5px; background: #fff; overflow: hidden; }
+            #jw-trail-section .jwt-sidebox-head {
+                background: #fdf6e2; border-bottom: 1.5px solid #e5d5a7; padding: 7px 10px;
+                font-size: 12px; font-weight: 800; color: #1f2937; display: flex; justify-content: space-between;
+            }
+            #jw-trail-section .jwt-side-opt {
+                padding: 8px 10px; border-bottom: 1px solid #f3f4f6; cursor: pointer;
+                display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; font-size: 12px;
+            }
+            #jw-trail-section .jwt-side-opt:hover { background: #fef9ea; }
+            #jw-trail-section .jwt-side-opt.active { background: #f2b71d !important; font-weight: 700; }
+            #jw-trail-section .jwt-accept-bar {
+                background: #fdf6e2; border: 1.5px solid #d9a425; border-radius: 5px;
+                padding: 8px 14px; margin-top: 10px; display: flex; justify-content: space-between;
+                align-items: center; gap: 10px; flex-wrap: wrap;
+            }
+            #jw-trail-section .jwt-subnav {
+                display: flex; gap: 14px; padding: 0 16px; border-bottom: 1.5px solid #e5d5a7;
+                background: #fdfcf7; overflow-x: auto;
+            }
+            #jw-trail-section .jwt-tab {
+                background: none; border: none; border-bottom: 2.5px solid transparent;
+                padding: 9px 4px; font-size: 12.5px; font-weight: 700; color: #6b7280; cursor: pointer; white-space: nowrap;
+            }
+            #jw-trail-section .jwt-tab.active { color: #1f2937; border-bottom-color: #d9a425; font-weight: 800; }
+            #jw-trail-section .jwt-footer {
+                background: #fdf6e2; border-top: 1px solid #e5d5a7; padding: 8px 16px;
+                display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
+                font-size: 11.5px; color: #92400e; font-weight: 700;
+            }
+            #jwt-toast {
+                position: fixed; bottom: 16px; right: 16px; z-index: 999999;
+                padding: 9px 16px; border-radius: 6px; font-size: 12.5px; font-weight: 700;
+                display: none; box-shadow: 0 8px 20px rgba(0,0,0,0.28);
+            }
+            @media (max-width: 860px) {
+                #jw-trail-section .jwt-split { grid-template-columns: 1fr; }
+                #jw-trail-section .jwt-pane-l { border-right: none; border-bottom: 1.5px solid #e5d5a7; }
+                #jw-trail-section .jwt-kpi-5, #jw-trail-section .jwt-kpi-3 { grid-template-columns: repeat(2, 1fr); }
+                #jw-trail-section .jwt-frow { grid-template-columns: 1fr; gap: 4px; }
+            }
+        `;
+        document.head.appendChild(st);
+    };
+
+    const ensureSectionDOM = () => {
+        injectStyles();
+        let sec = document.getElementById('jw-trail-section');
+        if (sec) return sec;
+
+        sec = document.createElement('section');
+        sec.id = 'jw-trail-section';
+        sec.className = 'module-section';
+        sec.style.display = 'none';
+        sec.innerHTML = `
+            <div class="jwt-topbar">
+                <div class="jwt-topbar-left">
+                    <button type="button" class="jwt-esc" id="jwt-back-btn" onclick="jwtHandleEsc()">&larr; [Esc] Back</button>
+                    <h2 id="jwt-title">JobWork Hub</h2>
+                    <span class="jwt-pill" id="jwt-godam-pill">Sabhi Karkhane</span>
+                </div>
+                <span id="jwt-top-hint" style="font-size:11.5px; font-weight:700; color:#92400e;">Tally Keyboard Mode</span>
+            </div>
+            <div id="jwt-body"></div>
+        `;
+        const main = document.querySelector('#desktop-screen .main-container');
+        if (main) main.appendChild(sec);
+        else document.body.appendChild(sec);
+        return sec;
+    };
+
+    /* ========================================================================
+       10. SCREEN NAVIGATION & RENDERERS
+    ======================================================================== */
+    window.jwtGo = (view, resetIdx = true) => {
+        curView = view;
+        if (resetIdx) menuIdx = 0;
+        armNavGuard();
+        renderScreen();
+    };
+
+    const setTopHeader = (title, backLabel, hint = '[↑ ↓] Chunein · [Enter] Kholein · [Esc] Back') => {
+        const tEl = document.getElementById('jwt-title');
+        const bEl = document.getElementById('jwt-back-btn');
+        const gEl = document.getElementById('jwt-godam-pill');
+        const hEl = document.getElementById('jwt-top-hint');
+        if (tEl) tEl.textContent = title;
+        if (bEl) bEl.textContent = backLabel;
+        if (gEl) gEl.textContent = getGodamLabel(getActiveGodam());
+        if (hEl) hEl.textContent = hint;
+    };
+
+    const renderScreen = () => {
+        try {
+            const body = document.getElementById('jwt-body');
+            if (!body) return;
+            const snap = getSnapshot();
+
+            // 1. GATEWAY OF JOB WORK (CLEAN — NO EXTRA TABLES/CLUTTER)
+            if (curView === 'gateway') {
+                setTopHeader('JobWork Hub', '← [Esc] Dashboard', '[↑ ↓] + [Enter] · [Esc] Dashboard');
+                const items = [
+                    { sec: 'JobWork Master', key: 'c', label: '<span class="jwt-menu-key">C</span>reate (Worker / Group)', val: 'New', action: "jwtGo('create-menu')" },
+                    { key: 'a', label: '<span class="jwt-menu-key">A</span>lter (Worker / Group)', val: 'Edit / Del', action: "jwtGo('alter-menu')" },
+                    { key: 'j', label: '<span class="jwt-menu-key">J</span>ob Work Register', val: `${snap.totals.pending} Pending`, action: "jwtGo('jw-groups')" },
+                    { sec: 'Report & Stock', key: 'o', label: '<span class="jwt-menu-key">O</span>wner Report', val: `${snap.totals.total} Pcs`, action: "jwtGo('owner-menu')" },
+                    { key: 's', label: '<span class="jwt-menu-key">S</span>aree Stock', val: `${snap.totals.raw + snap.totals.finished + snap.totals.lott} Pcs`, action: "jwtGo('stock-list')" },
+                    { sec: 'Out & Account', key: 'f', label: '<span class="jwt-menu-key">F</span>inal Out (Dispatch)', val: 'Batch Out', action: "jwtOpenFinalOut()" },
+                    { key: 'b', label: '<span class="jwt-menu-key">B</span>ills &amp; Hisab', val: '3 Boxes', action: "jwtOpenBills('pending')" }
+                ];
+                if (menuIdx >= items.length) menuIdx = 0;
+
+                let html = `<div style="padding:10px 16px;"><div class="jwt-menu-shell">
+                    <div class="jwt-menu-head"><span>Gateway of Job Work</span><span style="font-size:11px; color:#92400e;">[C/A/J/O/S/F/B]</span></div>`;
+                items.forEach((it, i) => {
+                    if (it.sec) html += `<div class="jwt-sec-lbl ${i === 0 ? 'first' : ''}">${esc(it.sec)}</div>`;
+                    html += `<button type="button" class="jwt-menu-item ${i === menuIdx ? 'active' : ''}" data-key="${it.key}" onclick="${it.action}">
+                        <span>${it.label}</span><span class="jwt-menu-val">${esc(it.val)}</span>
+                    </button>`;
+                });
+                html += `<div class="jwt-footer"><span>[&uarr; &darr;] Upar-Niche &middot; [Enter] Select</span><span>[Esc] Dashboard</span></div></div></div>`;
+                body.innerHTML = html;
+                return;
+            }
+
+            // 2. CREATE MENU
+            if (curView === 'create-menu') {
+                setTopHeader('Create (Worker / Group)', '← [Esc] Gateway');
+                const opts = [
+                    { label: '1. Create JobWorker', val: `${snap.workers.length} Workers`, action: "jwtOpenCreateWorker()" },
+                    { label: '2. Create New Work Group', val: `${snap.groups.length} Groups`, action: "jwtOpenCreateGroup()" }
+                ];
+                if (menuIdx >= opts.length) menuIdx = 0;
+                body.innerHTML = `<div style="padding:10px 16px;"><div class="jwt-menu-shell">
+                    <div class="jwt-menu-head"><span>Create Master</span></div>
+                    ${opts.map((o, i) => `<button type="button" class="jwt-menu-item ${i === menuIdx ? 'active' : ''}" onclick="${o.action}"><span>${o.label}</span><span class="jwt-menu-val">${esc(o.val)}</span></button>`).join('')}
+                    <div class="jwt-footer"><span>[&uarr; &darr;] + [Enter]</span><span>[Esc] Gateway</span></div>
+                </div></div>`;
+                return;
+            }
+
+            // 2A. CREATE JOBWORKER
+            if (curView === 'create-worker') {
+                setTopHeader('Create JobWorker', '← [Esc] Create Menu', '[Enter] Agla Box · [↑↓] Group Chunein · [Esc] Back');
+                const groups = snap.groups;
+                if (!groups.some((g) => g.key === selectedCreateGroupKey) && groups.length) {
+                    selectedCreateGroupKey = groups[0].key;
+                    createSideIdx = 0;
+                }
+                createSideIdx = Math.max(0, groups.findIndex((g) => g.key === selectedCreateGroupKey));
+                crAcceptOpen = false;
+
+                body.innerHTML = `<div class="jwt-split">
+                    <div class="jwt-pane-l">
+                        <div class="jwt-frow"><label>Worker Name :</label><input type="text" id="jwt-cw-name" class="jwt-inp" placeholder="e.g. ASLAM BHAI"></div>
+                        <div class="jwt-frow"><label>Under (Work Group) :</label><input type="text" id="jwt-cw-grp" class="jwt-inp" readonly value="${esc(grpLabel(selectedCreateGroupKey))}"></div>
+                        <div class="jwt-frow"><label>Mobile No. :</label><input type="tel" id="jwt-cw-mob" maxlength="10" class="jwt-inp" placeholder="10-digit Mobile"></div>
+                        <div class="jwt-frow"><label>Address / Mohalla :</label><input type="text" id="jwt-cw-addr" class="jwt-inp" placeholder="e.g. Alaipura, Varanasi"></div>
+                        <div class="jwt-frow"><label>Join Date :</label><input type="date" id="jwt-cw-date" class="jwt-inp" value="${getTodayIso()}"></div>
+                        <div id="jwt-cr-accept" class="jwt-accept-bar" style="display:none;">
+                            <strong style="font-size:12.5px;">Accept? Worker Save Karein?</strong>
+                            <div style="display:flex; gap:8px;">
+                                <button type="button" id="jwt-cr-yes" class="jwt-save" onclick="jwtSaveNewWorker()">Yes [Y / Enter]</button>
+                                <button type="button" class="jwt-esc" onclick="jwtCancelCrAccept()">No [N / Esc]</button>
+                            </div>
+                        </div>
+                        <div style="text-align:right; margin-top:12px;">
+                            <button type="button" class="jwt-save" onclick="jwtAskCrAccept()">Save Worker [Ctrl+Enter]</button>
+                        </div>
+                    </div>
+                    <div class="jwt-pane-r">
+                        <div class="jwt-sidebox">
+                            <div class="jwt-sidebox-head"><span>List of Work Groups</span><small>${groups.length}</small></div>
+                            <div id="jwt-cw-side-list">${groups.map((g, i) => `
+                                <div class="jwt-side-opt ${i === createSideIdx ? 'active' : ''}" onmousedown="event.preventDefault(); jwtPickCwGroup(${i})">
+                                    <span>${esc(g.label)}</span><small>JobWork</small>
+                                </div>`).join('')}
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+                bindCreateWorkerKeys();
+                setTimeout(() => document.getElementById('jwt-cw-name')?.focus(), 30);
+                return;
+            }
+
+            // 2B. CREATE NEW WORK GROUP
+            if (curView === 'create-group') {
+                setTopHeader('Create New Work Group', '← [Esc] Create Menu');
+                crAcceptOpen = false;
+                body.innerHTML = `<div class="jwt-split">
+                    <div class="jwt-pane-l">
+                        <div class="jwt-frow"><label>Work Group Name :</label><input type="text" id="jwt-cg-name" class="jwt-inp" placeholder="e.g. Jhalar, Stone, Tassel"></div>
+                        <div style="font-size:12px; color:#6b7280; margin:6px 0 12px;">Save karte hi yeh group Create, Alter, JobWork Register, Saree Trail aur Owner Report me automatic aa jayega.</div>
+                        <div id="jwt-cr-accept" class="jwt-accept-bar" style="display:none;">
+                            <strong style="font-size:12.5px;">Accept? Naya Group Save Karein?</strong>
+                            <div style="display:flex; gap:8px;">
+                                <button type="button" id="jwt-cr-yes" class="jwt-save" onclick="jwtSaveNewGroup()">Yes [Y / Enter]</button>
+                                <button type="button" class="jwt-esc" onclick="jwtCancelCrAccept()">No [N / Esc]</button>
+                            </div>
+                        </div>
+                        <div style="text-align:right;"><button type="button" class="jwt-save" onclick="jwtAskCrAccept()">Save Group [Enter]</button></div>
+                    </div>
+                    <div class="jwt-pane-r">
+                        <div class="jwt-sidebox">
+                            <div class="jwt-sidebox-head"><span>Existing Work Groups</span><small>${snap.groups.length}</small></div>
+                            ${snap.groups.map((g) => `<div class="jwt-side-opt"><span>${esc(g.label)}</span><small>Active</small></div>`).join('')}
+                        </div>
+                    </div>
+                </div>`;
+                const gInp = document.getElementById('jwt-cg-name');
+                if (gInp) {
+                    gInp.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); jwtAskCrAccept(); }
+                    });
+                    setTimeout(() => gInp.focus(), 30);
+                }
+                return;
+            }
+
+            // 3. ALTER MENU
+            if (curView === 'alter-menu') {
+                setTopHeader('Alter (Worker / Group)', '← [Esc] Gateway');
+                const opts = [
+                    { label: '1. Alter JobWorker (Edit / Delete)', val: `${snap.workers.length} Workers`, action: "jwtGo('alter-worker-list')" },
+                    { label: '2. Alter JobWork Group (Rename / Delete)', val: `${snap.groups.length} Groups`, action: "jwtGo('alter-group-list')" }
+                ];
+                if (menuIdx >= opts.length) menuIdx = 0;
+                body.innerHTML = `<div style="padding:10px 16px;"><div class="jwt-menu-shell">
+                    <div class="jwt-menu-head"><span>Alter Master</span></div>
+                    ${opts.map((o, i) => `<button type="button" class="jwt-menu-item ${i === menuIdx ? 'active' : ''}" onclick="${o.action}"><span>${o.label}</span><span class="jwt-menu-val">${esc(o.val)}</span></button>`).join('')}
+                    <div class="jwt-footer"><span>[&uarr; &darr;] + [Enter]</span><span>[Esc] Gateway</span></div>
+                </div></div>`;
+                return;
+            }
+
+            // 3A. ALTER WORKER LIST
+            if (curView === 'alter-worker-list') {
+                setTopHeader('Alter JobWorker — List', '← [Esc] Alter Menu', '[↑ ↓] Chunein · [Enter] Edit / Delete · [/] Search');
+                const q = (document.getElementById('jwt-aw-search')?.value || '').trim().toLowerCase();
+                const list = snap.workers.filter((w) => !q || `${w.name} ${grpLabel(w.group)} ${w.mobile} ${w.address}`.toLowerCase().includes(q));
+                if (menuIdx >= list.length) menuIdx = 0;
+
+                body.innerHTML = `<div style="padding:12px 16px;">
+                    <input type="text" id="jwt-aw-search" class="jwt-inp" style="margin-bottom:10px;" value="${esc(q)}" placeholder="Search Worker..." oninput="jwtFilterList()">
+                    <table>
+                        <thead><tr><th>Worker Name</th><th>Work Group</th><th>Mobile &amp; Address</th><th class="num">Pending</th><th style="text-align:right;">Action</th></tr></thead>
+                        <tbody>
+                            ${list.length ? list.map((w, i) => `
+                                <tr class="jwt-row ${i === menuIdx ? 'active' : ''}" onclick="jwtOpenAlterWorkerEdit('${esc(w.id)}')">
+                                    <td><strong>${esc(w.name)}</strong></td>
+                                    <td>${esc(grpLabel(w.group))}</td>
+                                    <td>${esc(w.mobile || '-')} &middot; ${esc(w.address || '-')}</td>
+                                    <td class="gold-num">${w.pending} Pcs</td>
+                                    <td style="text-align:right;">Edit / Del &rarr;</td>
+                                </tr>`).join('') : `<tr><td colspan="5" style="text-align:center; padding:18px; color:#6b7280;">Koi worker nahi mila.</td></tr>`}
+                        </tbody>
+                    </table>
+                </div>`;
+                bindSearchKey('jwt-aw-search');
+                return;
+            }
+
+            // 3B. ALTER WORKER EDIT
+            if (curView === 'alter-worker-edit') {
+                const w = snap.workers.find((x) => x.id === alterEditWorkerId);
+                if (!w) return jwtGo('alter-worker-list');
+                setTopHeader(`Alter Worker: ${w.name}`, '← [Esc] Workers List');
+                const groups = snap.groups;
+                const gIdx = Math.max(0, groups.findIndex((g) => g.key === w.group));
+
+                body.innerHTML = `<div class="jwt-split">
+                    <div class="jwt-pane-l">
+                        <div class="jwt-frow"><label>Worker Name :</label><input type="text" id="jwt-ew-name" class="jwt-inp" value="${esc(w.name)}"></div>
+                        <div class="jwt-frow"><label>Work Group :</label>
+                            <select id="jwt-ew-grp" class="jwt-inp">
+                                ${groups.map((g) => `<option value="${esc(g.key)}" ${g.key === w.group ? 'selected' : ''}>${esc(g.label)}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div class="jwt-frow"><label>Mobile No. :</label><input type="tel" id="jwt-ew-mob" maxlength="10" class="jwt-inp" value="${esc(w.mobile)}"></div>
+                        <div class="jwt-frow"><label>Address :</label><input type="text" id="jwt-ew-addr" class="jwt-inp" value="${esc(w.address)}"></div>
+                        <div class="jwt-frow"><label>Join Date :</label><input type="date" id="jwt-ew-date" class="jwt-inp" value="${esc(toIsoDate(w.date) || getTodayIso())}"></div>
+                        <div style="display:flex; justify-content:space-between; margin-top:14px; gap:8px;">
+                            <button type="button" class="jwt-del" onclick="jwtDeleteWorker('${esc(w.id)}')">Delete Worker</button>
+                            <button type="button" class="jwt-save" onclick="jwtUpdateWorker('${esc(w.id)}')">Update Worker [Enter]</button>
+                        </div>
+                    </div>
+                    <div class="jwt-pane-r">
+                        <div class="jwt-sidebox">
+                            <div class="jwt-sidebox-head"><span>Worker Stock Info</span></div>
+                            <div style="padding:12px; font-size:12.5px; line-height:1.7;">
+                                <div><strong>Diya:</strong> ${w.diya} Pcs</div>
+                                <div><strong>Aai:</strong> ${w.aai} Pcs</div>
+                                <div><strong>Pending:</strong> ${w.pending} Pcs</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+                setTimeout(() => document.getElementById('jwt-ew-name')?.focus(), 30);
+                return;
+            }
+
+            // 3C. ALTER GROUP LIST
+            if (curView === 'alter-group-list') {
+                setTopHeader('Alter JobWork Group — List', '← [Esc] Alter Menu');
+                const groups = snap.groups;
+                if (menuIdx >= groups.length) menuIdx = 0;
+
+                body.innerHTML = `<div style="padding:10px 16px;"><div class="jwt-menu-shell">
+                    <div class="jwt-menu-head"><span>Select Work Group to Alter / Delete</span></div>
+                    ${groups.map((g, i) => {
+                        const wc = snap.workers.filter((w) => w.group === g.key).length;
+                        return `<button type="button" class="jwt-menu-item ${i === menuIdx ? 'active' : ''}" onclick="jwtOpenAlterGroupEdit('${esc(g.key)}')">
+                            <span>${esc(g.label)}</span><span class="jwt-menu-val">${wc} Workers</span>
+                        </button>`;
+                    }).join('')}
+                    <div class="jwt-footer"><span>[&uarr; &darr;] + [Enter]</span><span>[Esc] Alter Menu</span></div>
+                </div></div>`;
+                return;
+            }
+
+            // 3D. ALTER GROUP EDIT
+            if (curView === 'alter-group-edit') {
+                const g = snap.groups.find((x) => x.key === alterEditGroupKey);
+                if (!g) return jwtGo('alter-group-list');
+                setTopHeader(`Alter Work Group: ${g.label}`, '← [Esc] Groups List');
+                const wc = snap.workers.filter((w) => w.group === g.key).length;
+
+                body.innerHTML = `<div style="padding:16px; max-width:540px;">
+                    <div class="jwt-frow"><label>Group Name :</label><input type="text" id="jwt-eg-name" class="jwt-inp" value="${esc(g.label)}"></div>
+                    <div style="font-size:12px; color:#6b7280; margin:6px 0 14px;">Is group me abhi <strong>${wc} Workers</strong> hain.</div>
+                    <div style="display:flex; justify-content:space-between; gap:8px;">
+                        <button type="button" class="jwt-del" onclick="jwtDeleteGroup('${esc(g.key)}')">Delete Group</button>
+                        <button type="button" class="jwt-save" onclick="jwtUpdateGroup('${esc(g.key)}')">Update Group [Enter]</button>
+                    </div>
+                </div>`;
+                const el = document.getElementById('jwt-eg-name');
+                if (el) {
+                    el.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); jwtUpdateGroup(g.key); }
+                    });
+                    setTimeout(() => { el.focus(); el.select(); }, 30);
+                }
+                return;
+            }
+
+            // 4. JOBWORK REGISTER — LEVEL 1: WORK GROUPS LIST
+            if (curView === 'jw-groups') {
+                setTopHeader('Job Work Register — Select Work Group', '← [Esc] Gateway');
+                const groups = snap.groups;
+                if (menuIdx >= groups.length) menuIdx = 0;
+
+                body.innerHTML = `<div style="padding:10px 16px;"><div class="jwt-menu-shell">
+                    <div class="jwt-menu-head"><span>Select JobWork Group</span><span>Pending</span></div>
+                    ${groups.map((g, i) => {
+                        const ws = snap.workers.filter((w) => w.group === g.key);
+                        const pend = ws.reduce((s, w) => s + w.pending, 0);
+                        return `<button type="button" class="jwt-menu-item ${i === menuIdx ? 'active' : ''}" onclick="jwtSelectJwGroup('${esc(g.key)}')">
+                            <span>${esc(g.label)} <small style="color:#6b7280;">(${ws.length} Workers)</small></span>
+                            <span class="jwt-menu-val">${pend} Pcs</span>
+                        </button>`;
+                    }).join('')}
+                    <div class="jwt-footer"><span>[&uarr; &darr;] Group Chunein &middot; [Enter] Workers List</span><span>[Esc] Gateway</span></div>
+                </div></div>`;
+                return;
+            }
+
+            // 5. JOBWORK REGISTER — LEVEL 2: LIST OF [GROUP] WORKERS (TOTAL PCS ONLY)
+            if (curView === 'jw-workers') {
+                const gLbl = grpLabel(activeGroupKey);
+                setTopHeader(`List of ${gLbl} Workers`, '← [Esc] Work Groups', '[↑ ↓] Worker Chunein · [Enter] Kholein · [/] Search');
+                const q = (document.getElementById('jwt-jww-search')?.value || '').trim().toLowerCase();
+                const list = snap.workers
+                    .filter((w) => w.group === activeGroupKey)
+                    .filter((w) => !q || `${w.name} ${w.mobile} ${w.address}`.toLowerCase().includes(q));
+                if (menuIdx >= list.length) menuIdx = 0;
+
+                body.innerHTML = `<div style="padding:12px 16px;">
+                    <input type="text" id="jwt-jww-search" class="jwt-inp" style="margin-bottom:10px;" value="${esc(q)}" placeholder="Search ${esc(gLbl)} Worker..." oninput="jwtFilterList()">
+                    <table>
+                        <thead><tr><th>Worker Name</th><th>Mobile &amp; Address</th><th class="num">Diya</th><th class="num">Aai</th><th class="num">Pending Pcs</th><th style="text-align:right;">Open</th></tr></thead>
+                        <tbody>
+                            ${list.length ? list.map((w, i) => `
+                                <tr class="jwt-row ${i === menuIdx ? 'active' : ''}" onclick="jwtSelectWorker('${esc(w.id)}')">
+                                    <td><strong>${esc(w.name)}</strong></td>
+                                    <td>${esc(w.mobile || '-')} &middot; ${esc(w.address || '-')}</td>
+                                    <td class="num">${w.diya}</td>
+                                    <td class="num">${w.aai}</td>
+                                    <td class="gold-num">${w.pending} Pcs</td>
+                                    <td style="text-align:right;">Open &rarr;</td>
+                                </tr>`).join('') : `<tr><td colspan="6" style="text-align:center; padding:20px; color:#6b7280;">Is group me koi worker nahi hai.</td></tr>`}
+                        </tbody>
+                    </table>
+                </div>`;
+                bindSearchKey('jwt-jww-search');
+                return;
+            }
+
+            // 6. JOBWORK REGISTER — LEVEL 3: WORKER MENU ([Group] Out / [Group] In)
+            if (curView === 'jw-worker-menu') {
+                const w = snap.workers.find((x) => x.id === activeWorkerId);
+                if (!w) return jwtGo('jw-workers');
+                const gLbl = grpLabel(w.group);
+                setTopHeader(`${w.name} (${gLbl})`, '← [Esc] Workers List');
+
+                const opts = [
+                    { label: `1. ${gLbl} Out (Saree Bhejein)`, val: 'Godam ➔ Worker', action: "jwtOpenWorkerVoucher('out')" },
+                    { label: `2. ${gLbl} In (Saree Wapas Lein)`, val: `${w.pending} Pending`, action: "jwtOpenWorkerVoucher('in')" },
+                    { label: '3. Worker Register (History / Print / WhatsApp)', val: `Diya ${w.diya} / Aai ${w.aai}`, action: "jwtGo('jw-worker-hist')" }
+                ];
+                if (menuIdx >= opts.length) menuIdx = 0;
+
+                body.innerHTML = `<div style="padding:10px 16px;"><div class="jwt-menu-shell">
+                    <div class="jwt-menu-head">
+                        <span>${esc(w.name)} (${esc(gLbl)})</span>
+                        <span style="color:#b47d00;">Pending: ${w.pending} Pcs</span>
+                    </div>
+                    ${opts.map((o, i) => `<button type="button" class="jwt-menu-item ${i === menuIdx ? 'active' : ''}" onclick="${o.action}"><span>${o.label}</span><span class="jwt-menu-val">${esc(o.val)}</span></button>`).join('')}
+                    <div class="jwt-footer"><span>[&uarr; &darr;] + [Enter]</span><span>[Esc] Workers List</span></div>
+                </div></div>`;
+                return;
+            }
+
+            // 7. WORKER OUT / IN BATCH VOUCHER (2-STEP KARIGER -> STAGE -> PCS -> ADD)
+            if (curView === 'jw-voucher') {
+                const w = snap.workers.find((x) => x.id === activeWorkerId);
+                if (!w) return jwtGo('jw-workers');
+                const gLbl = grpLabel(w.group);
+                const isOut = (vchDir === 'out');
+                setTopHeader(`${w.name} — ${gLbl} ${isOut ? 'Out (Bhejein)' : 'In (Wapas Lein)'}`, '← [Esc] Worker Menu', 'Kariger ➔ Stage ➔ Pcs ➔ Batch · Khali Kariger par Enter = Save');
+
+                const sourceBatches = isOut
+                    ? snap.godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0)
+                    : w.pendingItems;
+
+                const totBatchPcs = vchBatch.reduce((s, x) => s + x.qty, 0);
+                const defDest = (w.group === 'calender') ? 'finished' : 'godam';
+
+                body.innerHTML = `
+                    <div class="jwt-split">
+                        <div class="jwt-pane-l">
+                            <div class="jwt-frow"><label>Tarikh :</label><input type="date" id="jwt-vch-date" class="jwt-inp" value="${getTodayIso()}"></div>
+                            <div class="jwt-frow"><label>Kariger (Maker) :</label><input type="text" id="jwt-vch-kariger" class="jwt-inp" autocomplete="off" placeholder="1-2 letter ya ↑↓ chunein (Khali Enter = Save)"></div>
+                            <div class="jwt-frow"><label>Stage / Saree Batch :</label><input type="text" id="jwt-vch-stage" class="jwt-inp" readonly placeholder="Kariger select hone par stage chunein..."></div>
+                            ${!isOut ? `<div class="jwt-frow"><label>Wapas Kahan :</label>
+                                <select id="jwt-vch-dest" class="jwt-inp">
+                                    <option value="godam" ${defDest === 'godam' ? 'selected' : ''}>Godam me Rakho (${esc(gLbl)} Complete)</option>
+                                    <option value="finished" ${defDest === 'finished' ? 'selected' : ''}>Final Tayyar (Finished Stock)</option>
+                                    <option value="lott">Lott / Damage</option>
+                                </select>
+                            </div>` : ''}
+                            <div class="jwt-frow">
+                                <label>Quantity (Pcs) :</label>
+                                <div style="display:flex; gap:8px;">
+                                    <input type="text" inputmode="numeric" id="jwt-vch-qty" class="jwt-inp" placeholder="0 Pcs" style="flex:1;">
+                                    <button type="button" tabindex="-1" class="jwt-save" onclick="jwtAddVchItem()">+ Add</button>
+                                </div>
+                            </div>
+
+                            <div style="margin-top:12px; border:1px solid #e5d5a7; border-radius:5px; overflow:hidden;">
+                                <div class="jwt-sidebox-head"><span>Current ${isOut ? 'Out' : 'In'} Batch List</span><strong>Total: ${totBatchPcs} Pcs (${vchBatch.length})</strong></div>
+                                <div style="max-height:175px; overflow-y:auto;">
+                                    <table>
+                                        <thead><tr><th>#</th><th>Kariger</th><th>Saree &amp; Trail</th>${!isOut ? '<th>Kahan</th>' : ''}<th class="num">Pcs</th><th></th></tr></thead>
+                                        <tbody>
+                                            ${vchBatch.length ? vchBatch.map((it, idx) => `
+                                                <tr>
+                                                    <td>${idx + 1}</td>
+                                                    <td><strong>${esc(it.maker)}</strong></td>
+                                                    <td>${esc(it.saree)}<div class="trail">${esc(formatTrail(it.doneStages, 'unfinished'))}</div></td>
+                                                    ${!isOut ? `<td>${it.dest === 'finished' ? 'Finished' : (it.dest === 'lott' ? 'Lott' : 'Godam')}</td>` : ''}
+                                                    <td class="gold-num">${it.qty}</td>
+                                                    <td style="text-align:center;"><button type="button" tabindex="-1" class="jwt-esc" style="padding:2px 7px;" onclick="jwtRemoveVchItem(${idx})">&times;</button></td>
+                                                </tr>`).join('') : `<tr><td colspan="${isOut ? 5 : 6}" style="text-align:center; padding:12px; color:#6b7280;">Batch khali hai.</td></tr>`}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div id="jwt-vch-accept" class="jwt-accept-bar" style="display:${vchAcceptOpen ? 'flex' : 'none'};">
+                                <strong style="font-size:12.5px;">Accept? Batch Save Karein?</strong>
+                                <div style="display:flex; gap:8px;">
+                                    <button type="button" class="jwt-save" onclick="jwtCommitVch(true)">Save &amp; A6 Slip [P]</button>
+                                    <button type="button" id="jwt-vch-yes" class="jwt-save" onclick="jwtCommitVch(false)">Only Save [Y / Enter]</button>
+                                    <button type="button" class="jwt-esc" onclick="jwtCancelVchAccept()">No [N / Esc]</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="jwt-pane-r">
+                            <div class="jwt-sidebox">
+                                <div class="jwt-sidebox-head"><span id="jwt-vch-r-title">List of Karigers</span><small id="jwt-vch-r-cnt">0</small></div>
+                                <div id="jwt-vch-r-list" style="max-height:340px; overflow-y:auto;"></div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                renderVchRightPanel(sourceBatches);
+                bindVchVoucherKeys(sourceBatches);
+                setTimeout(() => document.getElementById('jwt-vch-kariger')?.focus(), 30);
+                return;
+            }
+
+            // 8. WORKER REGISTER HISTORY
+            if (curView === 'jw-worker-hist') {
+                const w = snap.workers.find((x) => x.id === activeWorkerId);
+                if (!w) return jwtGo('jw-workers');
+                setTopHeader(`${w.name} — Register & Print`, '← [Esc] Worker Menu');
+                const sheets = safeArr(getStoreSafe(`jobwork_sheets_${w.id}`));
+                const rows = [];
+                sheets.forEach((sh) => safeArr(sh.rows).forEach((r) => rows.push({ sheetId: sh.id, r })));
+                rows.reverse();
+
+                body.innerHTML = `<div style="padding:12px 16px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+                        <div><strong>${esc(w.name)}</strong> (${esc(grpLabel(w.group))}) &middot; Diya: ${w.diya} &middot; Aai: ${w.aai} &middot; <strong style="color:#b47d00;">Pending: ${w.pending} Pcs</strong></div>
+                        <div style="display:flex; gap:8px;">
+                            <button type="button" class="jwt-esc" onclick="jwtShareWorkerWhatsApp('${esc(w.id)}')">WhatsApp</button>
+                            <button type="button" class="jwt-esc" onclick="jwtPrintLastChallan()">Last A6 Slip</button>
+                        </div>
+                    </div>
+                    <table>
+                        <thead><tr><th>Tarikh</th><th>Type</th><th>Batch Detail (Kariger &amp; Trail)</th><th class="num">Out</th><th class="num">In / Lott</th><th style="text-align:right;">Action</th></tr></thead>
+                        <tbody>
+                            ${rows.length ? rows.map(({ sheetId, r }) => {
+                                const gQ = safeInt(r.gayiQty);
+                                const aQ = safeInt(r.aayiQty) + safeInt(r.damagePcs);
+                                const items = gQ > 0 ? safeArr(r.gayiItems) : safeArr(r.aayiItems);
+                                const det = items.length
+                                    ? items.map((it) => `${esc(it.karigar || '-')} (${esc(it.saree || 'Saree')} &middot; ${esc(formatTrail(it.doneStages || [], it.destBucket || 'unfinished'))}: ${it.qty})`).join('<br>')
+                                    : '-';
+                                return `<tr>
+                                    <td>${esc(fmtDate(r.date))}</td>
+                                    <td><strong>${gQ > 0 ? 'OUT' : (safeInt(r.damagePcs) > 0 && safeInt(r.aayiQty) === 0 ? 'LOTT' : 'IN')}</strong></td>
+                                    <td>${det}</td>
+                                    <td class="num">${gQ > 0 ? `-${gQ}` : '-'}</td>
+                                    <td class="gold-num">${aQ > 0 ? `+${aQ}` : '-'}</td>
+                                    <td style="text-align:right;"><button type="button" class="jwt-del" onclick="jwtDeleteWorkerHistRow('${esc(sheetId)}', '${esc(r.id)}')">Delete</button></td>
+                                </tr>`;
+                            }).join('') : `<tr><td colspan="6" style="text-align:center; padding:18px; color:#6b7280;">Abhi koi entry nahi hai.</td></tr>`}
+                        </tbody>
+                    </table>
+                </div>`;
+                return;
+            }
+
+            // 9. OWNER REPORT (UPAR 5 BOXES + NICHE SIRF 2 OPTIONS)
+            if (curView === 'owner-menu') {
+                setTopHeader('Owner Report', '← [Esc] Gateway');
+                const t = snap.totals;
+                const opts = [
+                    { label: '1. Har Job Worker Ke Pass', val: `${t.pending} Pcs`, action: "jwtGo('owner-workers')" },
+                    { label: '2. Godam Me Maujud', val: `${t.raw + t.finished + t.lott} Pcs`, action: "jwtGo('owner-godam')" }
+                ];
+                if (menuIdx >= opts.length) menuIdx = 0;
+
+                body.innerHTML = `
+                    <div class="jwt-kpi-5">
+                        <div class="jwt-kpi-cell"><small>Godam (Kaam Baki)</small><strong>${t.raw} Pcs</strong></div>
+                        <div class="jwt-kpi-cell"><small>Worker Ke Pass</small><strong>${t.pending} Pcs</strong></div>
+                        <div class="jwt-kpi-cell"><small>Finished (Tayyar)</small><strong>${t.finished} Pcs</strong></div>
+                        <div class="jwt-kpi-cell"><small>Lot (Damage)</small><strong>${t.lott} Pcs</strong></div>
+                        <div class="jwt-kpi-cell"><small>Kul Saree (100% Match)</small><strong>${t.total} Pcs</strong></div>
+                    </div>
+                    <div style="padding:10px 16px;">
+                        <div class="jwt-menu-shell">
+                            <div class="jwt-menu-head"><span>Select Report View</span></div>
+                            ${opts.map((o, i) => `<button type="button" class="jwt-menu-item ${i === menuIdx ? 'active' : ''}" onclick="${o.action}"><span>${o.label}</span><span class="jwt-menu-val">${esc(o.val)}</span></button>`).join('')}
+                            <div class="jwt-footer"><span>[&uarr; &darr;] + [Enter]</span><span>[Esc] Gateway</span></div>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
+            // 9A. OWNER REPORT -> HAR JOB WORKER KE PASS (TOTAL PCS ONLY, ENTER FOR BATCHES)
+            if (curView === 'owner-workers') {
+                setTopHeader('Har Job Worker Ke Pass (Summary)', '← [Esc] Owner Report', '[↑ ↓] Worker Chunein · [Enter] Batch Detail');
+                const q = (document.getElementById('jwt-ow-search')?.value || '').trim().toLowerCase();
+                const list = snap.workers.filter((w) => !q || `${w.name} ${grpLabel(w.group)} ${w.mobile}`.toLowerCase().includes(q));
+                if (menuIdx >= list.length) menuIdx = 0;
+
+                body.innerHTML = `<div style="padding:12px 16px;">
+                    <input type="text" id="jwt-ow-search" class="jwt-inp" style="margin-bottom:10px;" value="${esc(q)}" placeholder="Search Worker..." oninput="jwtFilterList()">
+                    <table>
+                        <thead><tr><th>Worker Name</th><th>Work Group</th><th>Mobile &amp; Address</th><th class="num">Diya</th><th class="num">Aai</th><th class="num">Pending Pcs</th><th style="text-align:right;">Batch</th></tr></thead>
+                        <tbody>
+                            ${list.length ? list.map((w, i) => `
+                                <tr class="jwt-row ${i === menuIdx ? 'active' : ''}" onclick="jwtOpenOwnerWorkerDetail('${esc(w.id)}')">
+                                    <td><strong>${esc(w.name)}</strong></td>
+                                    <td>${esc(grpLabel(w.group))}</td>
+                                    <td>${esc(w.mobile || '-')} &middot; ${esc(w.address || '-')}</td>
+                                    <td class="num">${w.diya}</td>
+                                    <td class="num">${w.aai}</td>
+                                    <td class="gold-num">${w.pending} Pcs</td>
+                                    <td style="text-align:right;">Detail &rarr;</td>
+                                </tr>`).join('') : `<tr><td colspan="7" style="text-align:center; padding:18px; color:#6b7280;">Koi worker nahi hai.</td></tr>`}
+                        </tbody>
+                    </table>
+                </div>`;
+                bindSearchKey('jwt-ow-search');
+                return;
+            }
+
+            // 9A-2. OWNER WORKER BATCH DRILLDOWN
+            if (curView === 'owner-worker-detail') {
+                const w = snap.workers.find((x) => x.id === ownerWorkerId);
+                if (!w) return jwtGo('owner-workers');
+                setTopHeader(`${w.name} (${grpLabel(w.group)}) — Pending Batch Detail`, '← [Esc] Workers List');
+
+                body.innerHTML = `<div style="padding:14px 16px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+                        <div><strong>${esc(w.name)}</strong> &middot; Mob: ${esc(w.mobile || '-')} &middot; <strong style="color:#b47d00;">Total Pending: ${w.pending} Pcs</strong></div>
+                        <div style="display:flex; gap:8px;">
+                            <button type="button" class="jwt-esc" onclick="jwtShareWorkerWhatsApp('${esc(w.id)}')">WhatsApp</button>
+                            <button type="button" class="jwt-save" onclick="activeWorkerId='${esc(w.id)}'; jwtGo('jw-worker-menu');">Open Out / In</button>
+                        </div>
+                    </div>
+                    <table>
+                        <thead><tr><th>#</th><th>Saree Design</th><th>Kariger (Maker)</th><th>Godam</th><th>Pehle Kya Ho Chuka (Trail)</th><th class="num">Pending Pcs</th></tr></thead>
+                        <tbody>
+                            ${w.pendingItems.length ? w.pendingItems.map((p, i) => `
+                                <tr>
+                                    <td>${i + 1}</td>
+                                    <td><strong>${esc(p.saree)}</strong></td>
+                                    <td>${esc(p.maker)}</td>
+                                    <td>${esc(p.godamName)}</td>
+                                    <td class="trail">${esc(formatTrail(p.doneStages, 'unfinished'))}</td>
+                                    <td class="gold-num">${p.pcs} Pcs</td>
+                                </tr>`).join('') : `<tr><td colspan="6" style="text-align:center; padding:18px; color:#6b7280;">Koi pending saree nahi hai.</td></tr>`}
+                        </tbody>
+                    </table>
+                </div>`;
+                return;
+            }
+
+            // 9B. OWNER REPORT -> GODAM ME MAUJUD (TOTAL PCS SUMMARY, ENTER FOR TRAIL BATCHES)
+            if (curView === 'owner-godam') {
+                setTopHeader('Godam Me Maujud (Summary)', '← [Esc] Owner Report', '[↑ ↓] Row Chunein · [Enter] Stage Trail Detail');
+                const q = (document.getElementById('jwt-og-search')?.value || '').trim().toLowerCase();
+                const list = snap.godamSummaries.filter((g) => !q || `${g.saree} ${g.maker} ${g.godamName} ${g.bucket}`.toLowerCase().includes(q));
+                if (menuIdx >= list.length) menuIdx = 0;
+
+                body.innerHTML = `<div style="padding:12px 16px;">
+                    <input type="text" id="jwt-og-search" class="jwt-inp" style="margin-bottom:10px;" value="${esc(q)}" placeholder="Search Saree, Maker, Godam..." oninput="jwtFilterList()">
+                    <table>
+                        <thead><tr><th>Saree Design</th><th>Kariger (Maker)</th><th>Godam</th><th>Status</th><th class="num">Total Available</th><th style="text-align:right;">Stages</th></tr></thead>
+                        <tbody>
+                            ${list.length ? list.map((g, i) => `
+                                <tr class="jwt-row ${i === menuIdx ? 'active' : ''}" onclick="jwtOpenOwnerGodamDetail('${encodeURIComponent(g.summaryKey)}')">
+                                    <td><strong>${esc(g.saree)}</strong></td>
+                                    <td>${esc(g.maker)}</td>
+                                    <td>${esc(g.godamName)}</td>
+                                    <td>${g.bucket === 'finished' ? 'Finished' : (g.bucket === 'lott' ? 'Lott' : 'Godam WIP')}</td>
+                                    <td class="gold-num">${g.pcs} Pcs</td>
+                                    <td style="text-align:right;">Trail (${g.batches.length}) &rarr;</td>
+                                </tr>`).join('') : `<tr><td colspan="6" style="text-align:center; padding:18px; color:#6b7280;">Godam khali hai.</td></tr>`}
+                        </tbody>
+                    </table>
+                </div>`;
+                bindSearchKey('jwt-og-search');
+                return;
+            }
+
+            // 9B-2. OWNER GODAM TRAIL DRILLDOWN
+            if (curView === 'owner-godam-detail') {
+                const g = snap.godamSummaries.find((x) => x.summaryKey === ownerGodamSummaryKey);
+                if (!g) return jwtGo('owner-godam');
+                setTopHeader(`${g.saree} (${g.maker}) — Completed Stages Detail`, '← [Esc] Godam Summary');
+
+                body.innerHTML = `<div style="padding:14px 16px;">
+                    <div style="margin-bottom:10px;"><strong>${esc(g.saree)}</strong> (${esc(g.maker)}) &middot; ${esc(g.godamName)} &middot; <strong style="color:#b47d00;">Total: ${g.pcs} Pcs</strong></div>
+                    <table>
+                        <thead><tr><th>#</th><th>Completed Stages Trail</th><th>Last Date</th><th class="num">Available Pcs</th></tr></thead>
+                        <tbody>
+                            ${g.batches.map((b, i) => `
+                                <tr>
+                                    <td>${i + 1}</td>
+                                    <td class="${b.bucket === 'finished' ? 'trail-done' : 'trail'}">${esc(formatTrail(b.doneStages, b.bucket))}</td>
+                                    <td>${esc(fmtDate(b.lastDate))}</td>
+                                    <td class="gold-num">${b.pcs} Pcs</td>
+                                </tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>`;
+                return;
+            }
+
+            // 10. SAREE STOCK (SUMMARY LIST + INWARD + ENTER FOR TRAIL & PASSBOOK)
+            if (curView === 'stock-list') {
+                setTopHeader('Saree Stock', '← [Esc] Gateway', '[↑ ↓] Chunein · [Enter] Trail & Passbook · [/] Search');
+                const tabs = [
+                    { key: 'all', lbl: 'Sabhi' },
+                    { key: 'unfinished', lbl: 'Kaam Baaki (WIP)' },
+                    { key: 'finished', lbl: 'Finished (Ready)' },
+                    { key: 'lott', lbl: 'Lott' }
+                ];
+                const q = (document.getElementById('jwt-st-search')?.value || '').trim().toLowerCase();
+                const list = snap.godamSummaries
+                    .filter((g) => stockBucketFilter === 'all' || g.bucket === stockBucketFilter)
+                    .filter((g) => !q || `${g.saree} ${g.maker} ${g.godamName} ${g.batches.map((b) => formatTrail(b.doneStages, b.bucket)).join(' ')}`.toLowerCase().includes(q));
+                if (menuIdx >= list.length) menuIdx = 0;
+
+                body.innerHTML = `
+                    <div class="jwt-subnav">
+                        ${tabs.map((t) => {
+                            const cnt = (t.key === 'all' ? snap.godamSummaries : snap.godamSummaries.filter((x) => x.bucket === t.key)).reduce((s, x) => s + x.pcs, 0);
+                            return `<button type="button" class="jwt-tab ${stockBucketFilter === t.key ? 'active' : ''}" onclick="jwtSetStockBucket('${t.key}')">${esc(t.lbl)} (${cnt})</button>`;
+                        }).join('')}
+                    </div>
+                    <div style="padding:12px 16px;">
+                        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+                            <input type="text" id="jwt-st-search" class="jwt-inp" style="flex:1; min-width:200px;" value="${esc(q)}" placeholder="Search Saree, Maker, Stage..." oninput="jwtFilterList()">
+                            <button type="button" class="jwt-save" onclick="jwtToggleInward()">+ Saree Inward</button>
+                        </div>
+                        <div id="jwt-inw-box" style="display:${stockInwardOpen ? 'block' : 'none'}; background:#fdfcf7; border:1.5px solid #d9b86c; border-radius:6px; padding:12px; margin-bottom:12px;">
+                            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:8px;">
+                                <div><label style="font-size:11px; font-weight:700;">Tarikh</label><input type="date" id="jwt-inw-date" class="jwt-inp" value="${getTodayIso()}"></div>
+                                <div><label style="font-size:11px; font-weight:700;">Saree Design</label><input type="text" id="jwt-inw-saree" class="jwt-inp" placeholder="Banarasi Katan"></div>
+                                <div><label style="font-size:11px; font-weight:700;">Kariger (Maker)</label><input type="text" id="jwt-inw-maker" class="jwt-inp" placeholder="Raju"></div>
+                                <div><label style="font-size:11px; font-weight:700;">Pcs</label><input type="text" inputmode="numeric" id="jwt-inw-pcs" class="jwt-inp" placeholder="20"></div>
+                                <div><label style="font-size:11px; font-weight:700;">Stage</label>
+                                    <select id="jwt-inw-stage" class="jwt-inp">
+                                        <option value="fresh">Fresh (Kora)</option>
+                                        <option value="cutting">Cutting Complete</option>
+                                        <option value="embroidery">Embroidery Complete</option>
+                                        <option value="finished">Finished Ready</option>
+                                        <option value="lott">Lott</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div style="text-align:right; margin-top:10px; display:flex; gap:8px; justify-content:flex-end;">
+                                <button type="button" class="jwt-esc" onclick="jwtToggleInward()">Cancel</button>
+                                <button type="button" class="jwt-save" onclick="jwtSaveInward()">Save Inward</button>
+                            </div>
+                        </div>
+                        <table>
+                            <thead><tr><th>Saree Design</th><th>Kariger (Maker)</th><th>Godam</th><th>Bucket</th><th class="num">Total Bachi</th><th style="text-align:right;">Detail</th></tr></thead>
+                            <tbody>
+                                ${list.length ? list.map((g, i) => `
+                                    <tr class="jwt-row ${i === menuIdx ? 'active' : ''}" onclick="jwtOpenStockDetail('${encodeURIComponent(g.summaryKey)}')">
+                                        <td><strong>${esc(g.saree)}</strong></td>
+                                        <td>${esc(g.maker)}</td>
+                                        <td>${esc(g.godamName)}</td>
+                                        <td>${g.bucket === 'finished' ? 'Finished' : (g.bucket === 'lott' ? 'Lott' : 'Godam WIP')}</td>
+                                        <td class="gold-num">${g.pcs} Pcs</td>
+                                        <td style="text-align:right;">Trail (${g.batches.length}) &rarr;</td>
+                                    </tr>`).join('') : `<tr><td colspan="6" style="text-align:center; padding:18px; color:#6b7280;">Koi stock nahi mila.</td></tr>`}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+                bindSearchKey('jwt-st-search');
+                return;
+            }
+
+            // 10A. SAREE STOCK DETAIL (STAGE TRAIL BREAKDOWN + PASSBOOK)
+            if (curView === 'stock-detail') {
+                const g = snap.godamSummaries.find((x) => x.summaryKey === stockDetailKey);
+                if (!g) return jwtGo('stock-list');
+                setTopHeader(`${g.saree} (${g.maker}) — Stage Trail & Passbook`, '← [Esc] Saree Stock');
+
+                const sH = safeArr(getStoreSafe('saree_history')).filter((h) => {
+                    if (!h) return false;
+                    const sN = normText(h.sareeName || h.name || h.saree, 'GENERAL SAREE');
+                    const mN = normText(h.karigerName || h.kariger, 'KARKHANA');
+                    const kid = normGodam(h.karkhanaId);
+                    return sN === g.saree && mN === g.maker && kid === g.karkhanaId;
+                }).sort((a, b) => safeNum(b.timestamp, 0) - safeNum(a.timestamp, 0)).slice(0, 40);
+
+                body.innerHTML = `<div style="padding:14px 16px;">
+                    <div style="margin-bottom:8px;"><strong>${esc(g.saree)}</strong> (${esc(g.maker)}) &middot; ${esc(g.godamName)} &middot; <strong style="color:#b47d00;">Total: ${g.pcs} Pcs</strong></div>
+                    <h4 style="margin:10px 0 6px; font-size:12px; color:#92400e; text-transform:uppercase;">1. Stage-Wise Available Stock</h4>
+                    <table style="margin-bottom:14px;">
+                        <thead><tr><th>#</th><th>Completed Stages Trail</th><th class="num">Available Pcs</th></tr></thead>
+                        <tbody>
+                            ${g.batches.map((b, i) => `
+                                <tr>
+                                    <td>${i + 1}</td>
+                                    <td class="${b.bucket === 'finished' ? 'trail-done' : 'trail'}">${esc(formatTrail(b.doneStages, b.bucket))}</td>
+                                    <td class="gold-num">${b.pcs} Pcs</td>
+                                </tr>`).join('')}
+                        </tbody>
+                    </table>
+                    <h4 style="margin:10px 0 6px; font-size:12px; color:#92400e; text-transform:uppercase;">2. Movement Passbook</h4>
+                    <table>
+                        <thead><tr><th>Tarikh</th><th>Detail</th><th class="num">Aai (+)</th><th class="num">Gayi (-)</th></tr></thead>
+                        <tbody>
+                            ${sH.map((h) => {
+                                const isOut = (h.isOut === true) || (safeNum(h.gai) > 0);
+                                const q = isOut ? safeInt(h.gai) : safeInt(h.aai);
+                                return `<tr>
+                                    <td>${esc(fmtDate(h.date))}</td>
+                                    <td>${esc(h.typeLabel || h.note || '-')}</td>
+                                    <td class="num">${!isOut ? `+${q}` : '-'}</td>
+                                    <td class="num" style="color:#6b7280;">${isOut ? `-${q}` : '-'}</td>
+                                </tr>`;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>`;
+                return;
+            }
+
+            // 11. FINAL OUT (DISPATCH — 2-STEP KARIGER -> STAGE BATCH -> PCS)
+            if (curView === 'final-out') {
+                setTopHeader('Final Out (Dispatch)', '← [Esc] Gateway', 'Kariger ➔ Stage Batch ➔ Pcs ➔ Add · Khali Kariger par Enter = Save');
+                const allBatches = snap.godamBatches.filter((b) => b.bucket !== 'lott' && b.pcs > 0);
+                const totFoPcs = foBatch.reduce((s, x) => s + x.qty, 0);
+                const dukanHist = safeArr(getStoreSafe('dukan_transfer_history')).slice().sort((a, b) => safeNum(b.timestamp, 0) - safeNum(a.timestamp, 0)).slice(0, 20);
+
+                body.innerHTML = `
+                    <div class="jwt-split">
+                        <div class="jwt-pane-l">
+                            <div class="jwt-frow"><label>Tarikh :</label><input type="date" id="jwt-fo-date" class="jwt-inp" value="${getTodayIso()}"></div>
+                            <div class="jwt-frow"><label>Dukan / Party Note :</label><input type="text" id="jwt-fo-note" class="jwt-inp" value="Apni Main Dukan" placeholder="Dukan / Party naam..."></div>
+                            <div class="jwt-frow"><label>Kariger (Maker) :</label><input type="text" id="jwt-fo-kariger" class="jwt-inp" autocomplete="off" placeholder="1-2 letter ya ↑↓ chunein (Khali Enter = Save)"></div>
+                            <div class="jwt-frow"><label>Stage / Saree Batch :</label><input type="text" id="jwt-fo-stage" class="jwt-inp" readonly placeholder="Kariger select hone par stage chunein..."></div>
+                            <div class="jwt-frow">
+                                <label>Dispatch Pcs :</label>
+                                <div style="display:flex; gap:8px;">
+                                    <input type="text" inputmode="numeric" id="jwt-fo-qty" class="jwt-inp" placeholder="0 Pcs" style="flex:1;">
+                                    <button type="button" tabindex="-1" class="jwt-save" onclick="jwtAddFoItem()">+ Add</button>
+                                </div>
+                            </div>
+
+                            <div style="margin-top:12px; border:1px solid #e5d5a7; border-radius:5px; overflow:hidden;">
+                                <div class="jwt-sidebox-head"><span>Final Out Batch List</span><strong>Total: ${totFoPcs} Pcs (${foBatch.length})</strong></div>
+                                <div style="max-height:165px; overflow-y:auto;">
+                                    <table>
+                                        <thead><tr><th>#</th><th>Kariger</th><th>Saree &amp; Stage</th><th class="num">Pcs</th><th></th></tr></thead>
+                                        <tbody>
+                                            ${foBatch.length ? foBatch.map((it, idx) => `
+                                                <tr>
+                                                    <td>${idx + 1}</td>
+                                                    <td><strong>${esc(it.maker)}</strong></td>
+                                                    <td>${esc(it.saree)}<div class="trail">${esc(formatTrail(it.doneStages, it.bucket))}</div></td>
+                                                    <td class="gold-num">${it.qty}</td>
+                                                    <td style="text-align:center;"><button type="button" tabindex="-1" class="jwt-esc" style="padding:2px 7px;" onclick="jwtRemoveFoItem(${idx})">&times;</button></td>
+                                                </tr>`).join('') : `<tr><td colspan="5" style="text-align:center; padding:12px; color:#6b7280;">Batch khali hai.</td></tr>`}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div id="jwt-fo-accept" class="jwt-accept-bar" style="display:${foAcceptOpen ? 'flex' : 'none'};">
+                                <strong style="font-size:12.5px;">Accept? Final Out Save Karein?</strong>
+                                <div style="display:flex; gap:8px;">
+                                    <button type="button" class="jwt-save" onclick="jwtCommitFo(true)">Save &amp; A6 Challan [P]</button>
+                                    <button type="button" id="jwt-fo-yes" class="jwt-save" onclick="jwtCommitFo(false)">Only Save [Y / Enter]</button>
+                                    <button type="button" class="jwt-esc" onclick="jwtCancelFoAccept()">No [N / Esc]</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="jwt-pane-r">
+                            <div class="jwt-sidebox">
+                                <div class="jwt-sidebox-head"><span id="jwt-fo-r-title">List of Karigers</span><small id="jwt-fo-r-cnt">0</small></div>
+                                <div id="jwt-fo-r-list" style="max-height:340px; overflow-y:auto;"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="padding:12px 16px; border-top:1.5px solid #e5d5a7;">
+                        <div style="font-size:11.5px; font-weight:800; color:#92400e; text-transform:uppercase; margin-bottom:6px;">Recent Final Out Register</div>
+                        <table>
+                            <thead><tr><th>Tarikh</th><th>Saree</th><th>Kariger</th><th>Note / Stage</th><th class="num">Pcs</th><th style="text-align:right;">Action</th></tr></thead>
+                            <tbody>
+                                ${dukanHist.length ? dukanHist.map((d) => `
+                                    <tr>
+                                        <td>${esc(fmtDate(d.date))}</td>
+                                        <td><strong>${esc(d.sareeName)}</strong></td>
+                                        <td>${esc(d.karigerName || '-')}</td>
+                                        <td>${esc(d.note || '-')}</td>
+                                        <td class="gold-num">${safeInt(d.pcs)}</td>
+                                        <td style="text-align:right;"><button type="button" class="jwt-del" onclick="jwtDeleteFinalOutEntry('${esc(d.id)}')">Delete</button></td>
+                                    </tr>`).join('') : `<tr><td colspan="6" style="text-align:center; padding:14px; color:#6b7280;">Abhi koi Final Out entry nahi hai.</td></tr>`}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+                renderFoRightPanel(allBatches);
+                bindFinalOutKeys(allBatches);
+                setTimeout(() => document.getElementById('jwt-fo-kariger')?.focus(), 30);
+                return;
+            }
+
+            // 12. BILLS & HISAB (UPAR 3 BOXES + NICHE SIRF 3 BUTTONS: PENDING NEW BILL, PENDING BILL, PAID BILL)
+            if (curView === 'bills') {
+                setTopHeader('Bills & Hisab', '← [Esc] Gateway', '[1] New Bill · [2] Pending Bill · [3] Paid Bill · [Esc] Back');
+                const bills = safeArr(getStoreSafe('jw_bills_list'));
+                const payments = safeArr(getStoreSafe('jw_payments_list'));
+
+                let totAmt = 0, totPaid = 0;
+                bills.forEach((b) => { totAmt += safeNum(b.billAmt); totPaid += safeNum(b.paidAmt); });
+                const totBaki = Math.max(0, totAmt - totPaid);
+
+                let contentHtml = '';
+                if (billsTab === 'new') {
+                    billAcceptOpen = false;
+                    contentHtml = `<div class="jwt-split">
+                        <div class="jwt-pane-l">
+                            <div class="jwt-frow"><label>Tarikh :</label><input type="date" id="jwt-b-date" class="jwt-inp" value="${getTodayIso()}"></div>
+                            <div class="jwt-frow"><label>Job Worker :</label><input type="text" id="jwt-b-worker" class="jwt-inp" autocomplete="off" placeholder="Worker naam likhein ya ↑↓ chunein..."></div>
+                            <div class="jwt-frow"><label>Bill No. :</label><input type="text" id="jwt-b-no" class="jwt-inp" placeholder="e.g. 101"></div>
+                            <div class="jwt-frow"><label>Saree Pcs :</label><input type="text" inputmode="numeric" id="jwt-b-pcs" class="jwt-inp" placeholder="0"></div>
+                            <div class="jwt-frow"><label>Bill Amount (₹) :</label><input type="text" inputmode="decimal" id="jwt-b-amt" class="jwt-inp" placeholder="0.00"></div>
+                            <div class="jwt-frow"><label>Note :</label><input type="text" id="jwt-b-note" class="jwt-inp" placeholder="Detail..."></div>
+                            <div id="jwt-b-accept" class="jwt-accept-bar" style="display:none;">
+                                <strong style="font-size:12.5px;">Accept? Naya Bill Save Karein?</strong>
+                                <div style="display:flex; gap:8px;">
+                                    <button type="button" id="jwt-b-yes" class="jwt-save" onclick="jwtSaveNewBill()">Yes [Y / Enter]</button>
+                                    <button type="button" class="jwt-esc" onclick="jwtCancelBillAccept()">No [N / Esc]</button>
+                                </div>
+                            </div>
+                            <div style="text-align:right; margin-top:10px;"><button type="button" class="jwt-save" onclick="jwtAskBillAccept()">Save Bill [Ctrl+Enter]</button></div>
+                        </div>
+                        <div class="jwt-pane-r">
+                            <div class="jwt-sidebox">
+                                <div class="jwt-sidebox-head"><span>List of Job Workers</span><small id="jwt-b-wcnt">${snap.workers.length}</small></div>
+                                <div id="jwt-b-wlist" style="max-height:300px; overflow-y:auto;"></div>
+                            </div>
+                        </div>
+                    </div>`;
+                } else {
+                    const isPend = (billsTab === 'pending');
+                    const filtered = bills.filter((b) => {
+                        const baki = Math.max(0, safeNum(b.billAmt) - safeNum(b.paidAmt));
+                        return isPend ? baki > 0 : baki <= 0;
+                    });
+                    if (menuIdx >= filtered.length) menuIdx = 0;
+
+                    let ledgerHtml = '';
+                    if (activeBillId) {
+                        const b = bills.find((x) => String(x.id) === String(activeBillId));
+                        if (b) {
+                            const baki = Math.max(0, safeNum(b.billAmt) - safeNum(b.paidAmt));
+                            const bPays = payments.filter((p) => String(p.billId) === String(b.id));
+                            ledgerHtml = `<div style="margin-top:12px; background:#fdfcf7; border:1.5px solid #d9b86c; border-radius:6px; padding:12px 14px;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+                                    <strong>Bill #${esc(b.billNo || '-')} &mdash; ${esc(b.workerName)} (Baki: ₹ ${baki.toFixed(2)})</strong>
+                                    <div style="display:flex; gap:8px;">
+                                        <button type="button" class="jwt-del" onclick="jwtDeleteBill('${esc(b.id)}')">Delete Bill</button>
+                                        <button type="button" class="jwt-esc" onclick="activeBillId=null; renderBillsOnly();">Close</button>
+                                    </div>
+                                </div>
+                                ${baki > 0 ? `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(135px, 1fr)); gap:8px; margin-bottom:10px; background:#fff; padding:10px; border:1px solid #e5d5a7; border-radius:5px;">
+                                    <div><label style="font-size:11px; font-weight:700;">Tarikh</label><input type="date" id="jwt-bp-date" class="jwt-inp" value="${getTodayIso()}"></div>
+                                    <div><label style="font-size:11px; font-weight:700;">Amount (₹)</label><input type="text" inputmode="decimal" id="jwt-bp-amt" class="jwt-inp" value="${baki}"></div>
+                                    <div><label style="font-size:11px; font-weight:700;">Mode</label><select id="jwt-bp-mode" class="jwt-inp"><option>Cash</option><option>UPI / Online</option><option>Bank Transfer</option></select></div>
+                                    <div><label style="font-size:11px; font-weight:700;">Note</label><input type="text" id="jwt-bp-note" class="jwt-inp" value="Bill Payment"></div>
+                                    <div style="display:flex; align-items:flex-end;"><button type="button" class="jwt-save" style="width:100%;" onclick="jwtSaveBillPayment('${esc(b.id)}')">Save Pay</button></div>
+                                </div>` : ''}
+                                <table>
+                                    <thead><tr><th>Tarikh</th><th>Mode / Note</th><th class="num">Paid (₹)</th><th style="text-align:right;">Action</th></tr></thead>
+                                    <tbody>
+                                        ${bPays.length ? bPays.map((p) => `<tr>
+                                            <td>${esc(fmtDate(p.date))}</td>
+                                            <td>${esc(p.mode || 'Cash')} &middot; ${esc(p.note || '')}</td>
+                                            <td class="gold-num">₹ ${safeNum(p.amount).toFixed(2)}</td>
+                                            <td style="text-align:right;"><button type="button" class="jwt-del" onclick="jwtDeleteBillPay('${esc(p.id)}', '${esc(b.id)}')">Del</button></td>
+                                        </tr>`).join('') : `<tr><td colspan="4" style="text-align:center; padding:10px; color:#6b7280;">Koi payment nahi hai.</td></tr>`}
+                                    </tbody>
+                                </table>
+                            </div>`;
+                        }
+                    }
+
+                    contentHtml = `<div style="padding:12px 16px;">
+                        <table>
+                            <thead><tr><th>Tarikh</th><th>Bill No</th><th>Job Worker</th><th>Work</th><th class="num">Pcs</th><th class="num">Total (₹)</th><th class="num">Paid (₹)</th><th class="num">Baki (₹)</th><th style="text-align:right;">Open</th></tr></thead>
+                            <tbody>
+                                ${filtered.length ? filtered.map((b, i) => {
+                                    const baki = Math.max(0, safeNum(b.billAmt) - safeNum(b.paidAmt));
+                                    return `<tr class="jwt-row ${i === menuIdx || String(activeBillId) === String(b.id) ? 'active' : ''}" onclick="activeBillId='${esc(b.id)}'; menuIdx=${i}; renderBillsOnly();">
+                                        <td>${esc(fmtDate(b.date))}</td>
+                                        <td><strong>${esc(b.billNo || '-')}</strong></td>
+                                        <td><strong>${esc(b.workerName)}</strong></td>
+                                        <td>${esc(grpLabel(b.workType || 'cutting'))}</td>
+                                        <td class="num">${safeInt(b.pcs)}</td>
+                                        <td class="num">₹ ${safeNum(b.billAmt).toFixed(2)}</td>
+                                        <td class="num">₹ ${safeNum(b.paidAmt).toFixed(2)}</td>
+                                        <td class="gold-num">₹ ${baki.toFixed(2)}</td>
+                                        <td style="text-align:right;">Pay / Detail &rarr;</td>
+                                    </tr>`;
+                                }).join('') : `<tr><td colspan="9" style="text-align:center; padding:18px; color:#6b7280;">${isPend ? 'Koi pending bill nahi hai.' : 'Koi paid bill nahi hai.'}</td></tr>`}
+                            </tbody>
+                        </table>
+                        ${ledgerHtml}
+                    </div>`;
+                }
+
+                body.innerHTML = `
+                    <div class="jwt-kpi-3">
+                        <div class="jwt-kpi-cell"><small>Kul Bill Amount</small><strong>₹ ${totAmt.toFixed(2)}</strong></div>
+                        <div class="jwt-kpi-cell"><small>Kul Paid</small><strong>₹ ${totPaid.toFixed(2)}</strong></div>
+                        <div class="jwt-kpi-cell"><small>Dena Baki</small><strong>₹ ${totBaki.toFixed(2)}</strong></div>
+                    </div>
+                    <div class="jwt-subnav" style="padding:8px 16px; gap:10px;">
+                        <button type="button" class="${billsTab === 'new' ? 'jwt-save' : 'jwt-esc'}" onclick="jwtOpenBills('new')">1. Pending New Bill</button>
+                        <button type="button" class="${billsTab === 'pending' ? 'jwt-save' : 'jwt-esc'}" onclick="jwtOpenBills('pending')">2. Pending Bill</button>
+                        <button type="button" class="${billsTab === 'paid' ? 'jwt-save' : 'jwt-esc'}" onclick="jwtOpenBills('paid')">3. Paid Bill</button>
+                    </div>
+                    ${contentHtml}
+                `;
+
+                if (billsTab === 'new') {
+                    renderBillWorkerList('');
+                    bindBillNewKeys();
+                    setTimeout(() => document.getElementById('jwt-b-worker')?.focus(), 30);
+                }
+                return;
+            }
+        } catch (err) {
+            console.error('[JW-Trail] Render failure prevented:', err);
+        }
+    };
+
+    /* ========================================================================
+       11. 2-STEP VOUCHER PICKERS & KEYBOARD BINDINGS
+    ======================================================================== */
+    const renderVchRightPanel = (sourceBatches) => {
+        const titleEl = document.getElementById('jwt-vch-r-title');
+        const cntEl = document.getElementById('jwt-vch-r-cnt');
+        const listEl = document.getElementById('jwt-vch-r-list');
+        if (!listEl) return;
+
+        const kQuery = document.getElementById('jwt-vch-kariger')?.value || '';
+        if (vchPickStep === 'kariger') {
+            vchRightItems = buildKarigerPickerList(sourceBatches, vchBatch, kQuery);
+            if (vchRightIdx >= vchRightItems.length) vchRightIdx = 0;
+            if (titleEl) titleEl.textContent = '1. List of Karigers';
+            if (cntEl) cntEl.textContent = `${vchRightItems.length} Karigers`;
+
+            listEl.innerHTML = vchRightItems.length
+                ? vchRightItems.map((it, i) => `
+                    <div class="jwt-side-opt ${i === vchRightIdx ? 'active' : ''}" onmousedown="event.preventDefault(); jwtPickVchRight(${i})">
+                        <div><strong>${esc(it.maker)}</strong><div class="trail-muted">${it.stagesCount} Stage(s)</div></div>
+                        <strong style="white-space:nowrap;">${it.totalPcs} Pc</strong>
+                    </div>`).join('')
+                : `<div style="padding:16px; text-align:center; color:#6b7280; font-size:12px;">Koi available stock nahi hai.</div>`;
+        } else {
+            vchRightItems = buildStagePickerList(sourceBatches, vchSelectedMaker, vchBatch, '');
+            if (vchRightIdx >= vchRightItems.length) vchRightIdx = 0;
+            if (titleEl) titleEl.textContent = `2. ${vchSelectedMaker} ke Stages`;
+            if (cntEl) cntEl.textContent = `${vchRightItems.length} Batches`;
+
+            listEl.innerHTML = vchRightItems.length
+                ? vchRightItems.map((b, i) => `
+                    <div class="jwt-side-opt ${i === vchRightIdx ? 'active' : ''}" onmousedown="event.preventDefault(); jwtPickVchRight(${i})">
+                        <div>
+                            <div><strong>${esc(b.saree)}</strong></div>
+                            <div class="trail" style="font-size:11px;">${esc(formatTrail(b.doneStages, 'unfinished'))}</div>
+                            <div class="trail-muted" style="font-size:10.5px;">${esc(b.godamName)}</div>
+                        </div>
+                        <strong style="white-space:nowrap;">${b.availPcs} Pc</strong>
+                    </div>`).join('')
+                : `<div style="padding:16px; text-align:center; color:#6b7280; font-size:12px;">Is kariger ka aur stock nahi bacha.</div>`;
+        }
+        listEl.querySelector('.jwt-side-opt.active')?.scrollIntoView({ block: 'nearest' });
+    };
+
+    window.jwtPickVchRight = (idx) => {
+        const snap = getSnapshot();
+        const w = snap.workers.find((x) => x.id === activeWorkerId);
+        const sourceBatches = (vchDir === 'out') ? snap.godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0) : (w ? w.pendingItems : []);
+        const item = vchRightItems[idx];
+        if (!item) return;
+
+        if (vchPickStep === 'kariger') {
+            vchSelectedMaker = item.maker;
+            const kInp = document.getElementById('jwt-vch-kariger');
+            if (kInp) kInp.value = item.maker;
+            vchPickStep = 'stage';
+            vchRightIdx = 0;
+            renderVchRightPanel(sourceBatches);
+            setTimeout(() => document.getElementById('jwt-vch-stage')?.focus(), 20);
+        } else {
+            vchSelectedBatchKey = item.key;
+            const sInp = document.getElementById('jwt-vch-stage');
+            const qInp = document.getElementById('jwt-vch-qty');
+            if (sInp) sInp.value = `${item.saree} [${formatTrail(item.doneStages, 'unfinished')}] — ${item.availPcs} Pc`;
+            if (qInp) qInp.value = item.availPcs;
+            setTimeout(() => {
+                if (vchDir === 'in') {
+                    document.getElementById('jwt-vch-dest')?.focus();
+                } else {
+                    qInp?.focus();
+                    qInp?.select();
+                }
+            }, 20);
+        }
+    };
+
+    window.jwtAddVchItem = () => {
+        const snap = getSnapshot();
+        const w = snap.workers.find((x) => x.id === activeWorkerId);
+        const sourceBatches = (vchDir === 'out') ? snap.godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0) : (w ? w.pendingItems : []);
+        const batch = sourceBatches.find((b) => b.key === vchSelectedBatchKey);
+        if (!batch) return toast('Pehle Kariger aur Stage Batch chunein!', true);
+
+        const avail = batch.pcs - getBatchUsedQty(vchBatch, batch.key);
+        const qty = safeInt(document.getElementById('jwt-vch-qty')?.value);
+        if (qty <= 0 || qty > avail) return toast(`Sahi Pcs daalein (Max ${avail} Pcs)!`, true);
+
+        const dest = (vchDir === 'in') ? (document.getElementById('jwt-vch-dest')?.value || 'godam') : 'out';
+        vchBatch.push({
+            batchKey: batch.key,
+            saree: batch.saree,
+            maker: batch.maker,
+            karkhanaId: batch.karkhanaId,
+            doneStages: [...batch.doneStages],
+            dest,
+            qty
+        });
+
+        vchPickStep = 'kariger';
+        vchSelectedMaker = null;
+        vchSelectedBatchKey = null;
+        vchRightIdx = 0;
+        renderScreen();
+    };
+
+    window.jwtRemoveVchItem = (idx) => {
+        vchBatch.splice(idx, 1);
+        renderScreen();
+    };
+
+    window.jwtCommitVch = (doPrint) => commitVchBatch(doPrint);
+    window.jwtCancelVchAccept = () => {
+        vchAcceptOpen = false;
+        const bar = document.getElementById('jwt-vch-accept');
+        if (bar) bar.style.display = 'none';
+        document.getElementById('jwt-vch-kariger')?.focus();
+    };
+
+    const bindVchVoucherKeys = (sourceBatches) => {
+        const kInp = document.getElementById('jwt-vch-kariger');
+        const sInp = document.getElementById('jwt-vch-stage');
+        const dSel = document.getElementById('jwt-vch-dest');
+        const qInp = document.getElementById('jwt-vch-qty');
+        const dtInp = document.getElementById('jwt-vch-date');
+        const yesBtn = document.getElementById('jwt-vch-yes');
+
+        if (dtInp) {
+            dtInp.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); kInp?.focus(); }
+            });
+        }
+        if (kInp) {
+            kInp.addEventListener('focus', () => {
+                vchPickStep = 'kariger';
+                vchRightIdx = 0;
+                renderVchRightPanel(sourceBatches);
+            });
+            kInp.addEventListener('input', () => {
+                vchPickStep = 'kariger';
+                vchRightIdx = 0;
+                renderVchRightPanel(sourceBatches);
+            });
+            kInp.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    if (vchRightItems.length) {
+                        e.preventDefault();
+                        vchRightIdx = e.key === 'ArrowDown' ? (vchRightIdx + 1) % vchRightItems.length : (vchRightIdx - 1 + vchRightItems.length) % vchRightItems.length;
+                        renderVchRightPanel(sourceBatches);
+                    }
+                    return;
+                }
+                if (e.key === 'Enter' && !e.ctrlKey) {
+                    e.preventDefault();
+                    if (!kInp.value.trim() && vchBatch.length > 0 && vchPickStep === 'kariger') {
+                        vchAcceptOpen = true;
+                        const bar = document.getElementById('jwt-vch-accept');
+                        if (bar) bar.style.display = 'flex';
+                        setTimeout(() => document.getElementById('jwt-vch-yes')?.focus(), 20);
+                        return;
+                    }
+                    if (vchRightItems[vchRightIdx]) window.jwtPickVchRight(vchRightIdx);
+                }
+            });
+        }
+        if (sInp) {
+            sInp.addEventListener('focus', () => {
+                if (vchSelectedMaker) {
+                    vchPickStep = 'stage';
+                    renderVchRightPanel(sourceBatches);
+                }
+            });
+            sInp.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    if (vchRightItems.length) {
+                        e.preventDefault();
+                        vchRightIdx = e.key === 'ArrowDown' ? (vchRightIdx + 1) % vchRightItems.length : (vchRightIdx - 1 + vchRightItems.length) % vchRightItems.length;
+                        renderVchRightPanel(sourceBatches);
+                    }
+                    return;
+                }
+                if (e.key === 'Enter' && !e.ctrlKey) {
+                    e.preventDefault();
+                    if (vchRightItems[vchRightIdx]) window.jwtPickVchRight(vchRightIdx);
+                }
+            });
+        }
+        if (dSel) {
+            dSel.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    qInp?.focus();
+                    qInp?.select();
+                }
+            });
+        }
+        if (qInp) {
+            qInp.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    window.jwtAddVchItem();
+                }
+            });
+        }
+        if (yesBtn) {
+            yesBtn.addEventListener('keydown', (e) => {
+                if (e.key === 'y' || e.key === 'Y' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); commitVchBatch(false); }
+                else if (e.key === 'p' || e.key === 'P') { e.preventDefault(); e.stopPropagation(); commitVchBatch(true); }
+                else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); e.stopPropagation(); window.jwtCancelVchAccept(); }
+            });
+        }
+    };
+
+    // FINAL OUT RIGHT PANEL & KEYS
+    const renderFoRightPanel = (allBatches) => {
+        const titleEl = document.getElementById('jwt-fo-r-title');
+        const cntEl = document.getElementById('jwt-fo-r-cnt');
+        const listEl = document.getElementById('jwt-fo-r-list');
+        if (!listEl) return;
+
+        const kQuery = document.getElementById('jwt-fo-kariger')?.value || '';
+        if (foPickStep === 'kariger') {
+            foRightItems = buildKarigerPickerList(allBatches, foBatch, kQuery);
+            if (foRightIdx >= foRightItems.length) foRightIdx = 0;
+            if (titleEl) titleEl.textContent = '1. List of Karigers';
+            if (cntEl) cntEl.textContent = `${foRightItems.length} Karigers`;
+
+            listEl.innerHTML = foRightItems.length
+                ? foRightItems.map((it, i) => `
+                    <div class="jwt-side-opt ${i === foRightIdx ? 'active' : ''}" onmousedown="event.preventDefault(); jwtPickFoRight(${i})">
+                        <div><strong>${esc(it.maker)}</strong><div class="trail-muted">${it.stagesCount} Stage(s)</div></div>
+                        <strong style="white-space:nowrap;">${it.totalPcs} Pc</strong>
+                    </div>`).join('')
+                : `<div style="padding:16px; text-align:center; color:#6b7280; font-size:12px;">Godam me dispatch ke liye stock nahi hai.</div>`;
+        } else {
+            foRightItems = buildStagePickerList(allBatches, foSelectedMaker, foBatch, '');
+            if (foRightIdx >= foRightItems.length) foRightIdx = 0;
+            if (titleEl) titleEl.textContent = `2. ${foSelectedMaker} ke Stages`;
+            if (cntEl) cntEl.textContent = `${foRightItems.length} Stages`;
+
+            listEl.innerHTML = foRightItems.length
+                ? foRightItems.map((b, i) => `
+                    <div class="jwt-side-opt ${i === foRightIdx ? 'active' : ''}" onmousedown="event.preventDefault(); jwtPickFoRight(${i})">
+                        <div>
+                            <div><strong>${esc(b.saree)}</strong></div>
+                            <div class="${b.bucket === 'finished' ? 'trail-done' : 'trail'}" style="font-size:11px;">${esc(formatTrail(b.doneStages, b.bucket))}</div>
+                            <div class="trail-muted" style="font-size:10.5px;">${esc(b.godamName)}</div>
+                        </div>
+                        <strong style="white-space:nowrap;">${b.availPcs} Pc</strong>
+                    </div>`).join('')
+                : `<div style="padding:16px; text-align:center; color:#6b7280; font-size:12px;">Is kariger ka aur stock nahi bacha.</div>`;
+        }
+        listEl.querySelector('.jwt-side-opt.active')?.scrollIntoView({ block: 'nearest' });
+    };
+
+    window.jwtPickFoRight = (idx) => {
+        const allBatches = getSnapshot().godamBatches.filter((b) => b.bucket !== 'lott' && b.pcs > 0);
+        const item = foRightItems[idx];
+        if (!item) return;
+
+        if (foPickStep === 'kariger') {
+            foSelectedMaker = item.maker;
+            const kInp = document.getElementById('jwt-fo-kariger');
+            if (kInp) kInp.value = item.maker;
+            foPickStep = 'stage';
+            foRightIdx = 0;
+            renderFoRightPanel(allBatches);
+            setTimeout(() => document.getElementById('jwt-fo-stage')?.focus(), 20);
+        } else {
+            foSelectedBatchKey = item.key;
+            const sInp = document.getElementById('jwt-fo-stage');
+            const qInp = document.getElementById('jwt-fo-qty');
+            if (sInp) sInp.value = `${item.saree} [${formatTrail(item.doneStages, item.bucket)}] — ${item.availPcs} Pc`;
+            if (qInp) qInp.value = item.availPcs;
+            setTimeout(() => { qInp?.focus(); qInp?.select(); }, 20);
+        }
+    };
+
+    window.jwtAddFoItem = () => {
+        const allBatches = getSnapshot().godamBatches.filter((b) => b.bucket !== 'lott' && b.pcs > 0);
+        const batch = allBatches.find((b) => b.key === foSelectedBatchKey);
+        if (!batch) return toast('Pehle Kariger aur Stage chunein!', true);
+
+        const avail = batch.pcs - getBatchUsedQty(foBatch, batch.key);
+        const qty = safeInt(document.getElementById('jwt-fo-qty')?.value);
+        if (qty <= 0 || qty > avail) return toast(`Sahi Pcs daalein (Max ${avail} Pcs)!`, true);
+
+        foBatch.push({
+            batchKey: batch.key,
+            saree: batch.saree,
+            maker: batch.maker,
+            karkhanaId: batch.karkhanaId,
+            doneStages: [...batch.doneStages],
+            bucket: batch.bucket,
+            qty
+        });
+
+        foPickStep = 'kariger';
+        foSelectedMaker = null;
+        foSelectedBatchKey = null;
+        foRightIdx = 0;
+        renderScreen();
+    };
+
+    window.jwtRemoveFoItem = (idx) => { foBatch.splice(idx, 1); renderScreen(); };
+    window.jwtCommitFo = (doPrint) => commitFinalOutBatch(doPrint);
+    window.jwtCancelFoAccept = () => {
+        foAcceptOpen = false;
+        const bar = document.getElementById('jwt-fo-accept');
+        if (bar) bar.style.display = 'none';
+        document.getElementById('jwt-fo-kariger')?.focus();
+    };
+
+    const bindFinalOutKeys = (allBatches) => {
+        const kInp = document.getElementById('jwt-fo-kariger');
+        const sInp = document.getElementById('jwt-fo-stage');
+        const qInp = document.getElementById('jwt-fo-qty');
+        const yesBtn = document.getElementById('jwt-fo-yes');
+
+        if (kInp) {
+            kInp.addEventListener('focus', () => { foPickStep = 'kariger'; foRightIdx = 0; renderFoRightPanel(allBatches); });
+            kInp.addEventListener('input', () => { foPickStep = 'kariger'; foRightIdx = 0; renderFoRightPanel(allBatches); });
+            kInp.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    if (foRightItems.length) {
+                        e.preventDefault();
+                        foRightIdx = e.key === 'ArrowDown' ? (foRightIdx + 1) % foRightItems.length : (foRightIdx - 1 + foRightItems.length) % foRightItems.length;
+                        renderFoRightPanel(allBatches);
+                    }
+                    return;
+                }
+                if (e.key === 'Enter' && !e.ctrlKey) {
+                    e.preventDefault();
+                    if (!kInp.value.trim() && foBatch.length > 0 && foPickStep === 'kariger') {
+                        foAcceptOpen = true;
+                        const bar = document.getElementById('jwt-fo-accept');
+                        if (bar) bar.style.display = 'flex';
+                        setTimeout(() => document.getElementById('jwt-fo-yes')?.focus(), 20);
+                        return;
+                    }
+                    if (foRightItems[foRightIdx]) window.jwtPickFoRight(foRightIdx);
+                }
+            });
+        }
+        if (sInp) {
+            sInp.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    if (foRightItems.length) {
+                        e.preventDefault();
+                        foRightIdx = e.key === 'ArrowDown' ? (foRightIdx + 1) % foRightItems.length : (foRightIdx - 1 + foRightItems.length) % foRightItems.length;
+                        renderFoRightPanel(allBatches);
+                    }
+                    return;
+                }
+                if (e.key === 'Enter' && !e.ctrlKey) {
+                    e.preventDefault();
+                    if (foRightItems[foRightIdx]) window.jwtPickFoRight(foRightIdx);
+                }
+            });
+        }
+        if (qInp) {
+            qInp.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); window.jwtAddFoItem(); }
+            });
+        }
+        if (yesBtn) {
+            yesBtn.addEventListener('keydown', (e) => {
+                if (e.key === 'y' || e.key === 'Y' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); commitFinalOutBatch(false); }
+                else if (e.key === 'p' || e.key === 'P') { e.preventDefault(); e.stopPropagation(); commitFinalOutBatch(true); }
+                else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); e.stopPropagation(); window.jwtCancelFoAccept(); }
+            });
+        }
+    };
+
+    /* ========================================================================
+       12. CREATE, ALTER, STOCK, BILLS ACTIONS
+    ======================================================================== */
+    window.jwtOpenCreateWorker = () => {
+        selectedCreateGroupKey = getWorkGroups()[0]?.key || 'cutting';
+        window.jwtGo('create-worker');
+    };
+    window.jwtOpenCreateGroup = () => window.jwtGo('create-group');
+
+    window.jwtPickCwGroup = (idx) => {
+        const groups = getWorkGroups();
+        if (!groups[idx]) return;
+        createSideIdx = idx;
+        selectedCreateGroupKey = groups[idx].key;
+        const gInp = document.getElementById('jwt-cw-grp');
+        if (gInp) gInp.value = groups[idx].label;
+        document.querySelectorAll('#jwt-cw-side-list .jwt-side-opt').forEach((el, i) => el.classList.toggle('active', i === idx));
+        document.getElementById('jwt-cw-mob')?.focus();
+    };
+
+    window.jwtAskCrAccept = () => {
+        crAcceptOpen = true;
+        const bar = document.getElementById('jwt-cr-accept');
+        if (bar) bar.style.display = 'flex';
+        setTimeout(() => document.getElementById('jwt-cr-yes')?.focus(), 20);
+    };
+    window.jwtCancelCrAccept = () => {
+        crAcceptOpen = false;
+        const bar = document.getElementById('jwt-cr-accept');
+        if (bar) bar.style.display = 'none';
+    };
+
+    const bindCreateWorkerKeys = () => {
+        const order = ['jwt-cw-name', 'jwt-cw-grp', 'jwt-cw-mob', 'jwt-cw-addr', 'jwt-cw-date'];
+        order.forEach((id, i) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.addEventListener('keydown', (e) => {
+                if (id === 'jwt-cw-grp' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                    e.preventDefault();
+                    const groups = getWorkGroups();
+                    if (!groups.length) return;
+                    createSideIdx = e.key === 'ArrowDown' ? (createSideIdx + 1) % groups.length : (createSideIdx - 1 + groups.length) % groups.length;
+                    selectedCreateGroupKey = groups[createSideIdx].key;
+                    el.value = groups[createSideIdx].label;
+                    document.querySelectorAll('#jwt-cw-side-list .jwt-side-opt').forEach((opt, idx) => opt.classList.toggle('active', idx === createSideIdx));
+                    return;
+                }
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (i < order.length - 1) document.getElementById(order[i + 1])?.focus();
+                    else window.jwtAskCrAccept();
+                }
+            });
+        });
+    };
+
+    window.jwtSaveNewWorker = () => {
+        const name = normText(document.getElementById('jwt-cw-name')?.value);
+        const mobile = String(document.getElementById('jwt-cw-mob')?.value || '').trim();
+        const address = String(document.getElementById('jwt-cw-addr')?.value || '').trim();
+        const joinDate = toIsoDate(document.getElementById('jwt-cw-date')?.value) || getTodayIso();
+        if (!name) return toast('Worker Name zaroori hai!', true);
+
+        const list = safeArr(getStoreSafe('jobwork_workers')).slice();
+        list.push({ id: `jw_${Date.now()}`, type: selectedCreateGroupKey, date: joinDate, name, address, mobile });
+        setStoreSafe('jobwork_workers', list);
+        invalidateAllCaches();
+        toast(`✅ Worker [${name}] (${grpLabel(selectedCreateGroupKey)}) save ho gaya!`);
+        window.jwtGo('create-worker');
+    };
+
+    window.jwtSaveNewGroup = () => {
+        const raw = String(document.getElementById('jwt-cg-name')?.value || '').trim();
+        if (!raw) return toast('Work Group Name likhein!', true);
+        const key = raw.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+        if (!key || key === 'all' || key === 'kariger') return toast('Yeh naam reserve hai!', true);
+
+        const groups = getWorkGroups();
+        if (groups.some((g) => g.key === key)) return toast('Yeh Work Group pehle se maujood hai!', true);
+        groups.push({ key, label: raw });
+        setStoreSafe(GROUPS_STORE_KEY, groups);
+        selectedCreateGroupKey = key;
+        invalidateAllCaches();
+        syncTallyMasterGroups();
+        toast(`✅ Work Group [${raw}] add ho gaya!`);
+        window.jwtGo('create-menu');
+    };
+
+    window.jwtOpenAlterWorkerEdit = (wId) => { alterEditWorkerId = wId; window.jwtGo('alter-worker-edit'); };
+    window.jwtUpdateWorker = (wId) => {
+        const name = normText(document.getElementById('jwt-ew-name')?.value);
+        const type = document.getElementById('jwt-ew-grp')?.value || 'cutting';
+        const mobile = String(document.getElementById('jwt-ew-mob')?.value || '').trim();
+        const address = String(document.getElementById('jwt-ew-addr')?.value || '').trim();
+        const date = toIsoDate(document.getElementById('jwt-ew-date')?.value) || getTodayIso();
+        if (!name) return toast('Worker Name zaroori hai!', true);
+
+        const list = safeArr(getStoreSafe('jobwork_workers')).map((w) => {
+            if (String(w.id) !== String(wId)) return w;
+            return { ...w, name, type, mobile, address, date };
+        });
+        setStoreSafe('jobwork_workers', list);
+        invalidateAllCaches(wId);
+        toast(`✅ [${name}] update ho gaya!`);
+        window.jwtGo('alter-worker-list');
+    };
+
+    window.jwtDeleteWorker = (wId) => {
+        const snap = getSnapshot();
+        const w = snap.workers.find((x) => x.id === wId);
+        if (w && w.pending > 0) {
+            return toast(`Is worker ke paas abhi ${w.pending} Pcs saree pending hai! Pehle wapas lein.`, true);
+        }
+        if (!confirm(`Kya worker [${w?.name || ''}] ko delete karna chahte hain?`)) return;
+        const list = safeArr(getStoreSafe('jobwork_workers')).filter((x) => String(x.id) !== String(wId));
+        setStoreSafe('jobwork_workers', list);
+        invalidateAllCaches(wId);
+        toast('Worker delete ho gaya!');
+        window.jwtGo('alter-worker-list');
+    };
+
+    window.jwtOpenAlterGroupEdit = (gKey) => { alterEditGroupKey = gKey; window.jwtGo('alter-group-edit'); };
+    window.jwtUpdateGroup = (gKey) => {
+        const raw = String(document.getElementById('jwt-eg-name')?.value || '').trim();
+        if (!raw) return toast('Group Name likhein!', true);
+        const groups = getWorkGroups().map((g) => (g.key === gKey ? { ...g, label: raw } : g));
+        setStoreSafe(GROUPS_STORE_KEY, groups);
+        invalidateAllCaches();
+        syncTallyMasterGroups();
+        toast(`✅ Group [${raw}] update ho gaya!`);
+        window.jwtGo('alter-group-list');
+    };
+
+    window.jwtDeleteGroup = (gKey) => {
+        const snap = getSnapshot();
+        const wc = snap.workers.filter((w) => w.group === gKey).length;
+        if (wc > 0) {
+            return toast(`Is group me abhi ${wc} workers hain! Pehle unhe delete ya doosre group me shift karein.`, true);
+        }
+        if (!confirm(`Kya Work Group [${grpLabel(gKey)}] ko delete karna chahte hain?`)) return;
+        const groups = getWorkGroups().filter((g) => g.key !== gKey);
+        setStoreSafe(GROUPS_STORE_KEY, groups);
+        invalidateAllCaches();
+        syncTallyMasterGroups();
+        toast('Work Group delete ho gaya!');
+        window.jwtGo('alter-group-list');
+    };
+
+    // JobWork Register selections
+    window.jwtSelectJwGroup = (gKey) => { activeGroupKey = gKey; window.jwtGo('jw-workers'); };
+    window.jwtSelectWorker = (wId) => { activeWorkerId = wId; window.jwtGo('jw-worker-menu'); };
+    window.jwtOpenWorkerVoucher = (dir) => {
+        vchDir = dir;
+        vchBatch = [];
+        vchAcceptOpen = false;
+        vchPickStep = 'kariger';
+        vchSelectedMaker = null;
+        vchSelectedBatchKey = null;
+        vchRightIdx = 0;
+        window.jwtGo('jw-voucher');
+    };
+
+    // Owner Report selections
+    window.jwtOpenOwnerWorkerDetail = (wId) => { ownerWorkerId = wId; window.jwtGo('owner-worker-detail'); };
+    window.jwtOpenOwnerGodamDetail = (encKey) => { ownerGodamSummaryKey = decodeURIComponent(encKey || ''); window.jwtGo('owner-godam-detail'); };
+
+    // Stock selections
+    window.jwtSetStockBucket = (b) => { stockBucketFilter = b; menuIdx = 0; renderScreen(); };
+    window.jwtOpenStockDetail = (encKey) => { stockDetailKey = decodeURIComponent(encKey || ''); window.jwtGo('stock-detail'); };
+    window.jwtToggleInward = () => {
+        stockInwardOpen = !stockInwardOpen;
+        const b = document.getElementById('jwt-inw-box');
+        if (b) b.style.display = stockInwardOpen ? 'block' : 'none';
+        if (stockInwardOpen) setTimeout(() => document.getElementById('jwt-inw-saree')?.focus(), 20);
+    };
+    window.jwtSaveInward = () => {
         const dDate = toIsoDate(document.getElementById('jwt-inw-date')?.value) || getTodayIso();
         const saree = normText(document.getElementById('jwt-inw-saree')?.value);
         const maker = normText(document.getElementById('jwt-inw-maker')?.value, 'DIRECT INWARD');
         const pcs = safeInt(document.getElementById('jwt-inw-pcs')?.value);
         const stage = document.getElementById('jwt-inw-stage')?.value || 'fresh';
-
         if (!saree || pcs <= 0) return toast('Saree Design aur Sahi Pcs bharein!', true);
 
         const activeG = getActiveGodam();
@@ -853,1205 +2739,290 @@
             note: 'Direct Inward',
             timestamp: Date.now()
         });
-
         setStoreSafe('saree_history', sH);
         stockInwardOpen = false;
         invalidateAllCaches();
-        renderCurrent();
-        toast(`✅ ${pcs} Pcs [${saree}] Godam me jama ho gayi!`);
+        toast(`✅ ${pcs} Pcs [${saree}] jama ho gayi!`);
+        renderScreen();
     };
 
-    window.jwtSaveNewWorkerProfile = () => {
-        const name = normText(document.getElementById('jwt-cr-w-name')?.value);
-        const mobile = String(document.getElementById('jwt-cr-w-mob')?.value || '').trim();
-        const address = String(document.getElementById('jwt-cr-w-addr')?.value || '').trim();
-        const joinDate = toIsoDate(document.getElementById('jwt-cr-w-date')?.value) || getTodayIso();
-
-        if (!name) return toast('Worker Name zaroori hai!', true);
-
-        const list = safeArr(getStoreSafe('jobwork_workers')).slice();
-        list.push({
-            id: `jw_${Date.now()}`,
-            type: selectedCreateGroupKey || 'cutting',
-            date: joinDate,
-            name,
-            address,
-            mobile
-        });
-
-        setStoreSafe('jobwork_workers', list);
-        ['jwt-cr-w-name', 'jwt-cr-w-mob', 'jwt-cr-w-addr'].forEach((id) => {
-            const el = document.getElementById(id);
-            if (el) el.value = '';
-        });
-
-        invalidateAllCaches();
-        syncTallyMasterGroups();
-        renderCurrent();
-        toast(`✅ Worker [${name}] (${grpLabel(selectedCreateGroupKey)}) save ho gaya!`);
+    // Final Out open
+    window.jwtOpenFinalOut = () => {
+        foBatch = [];
+        foAcceptOpen = false;
+        foPickStep = 'kariger';
+        foSelectedMaker = null;
+        foSelectedBatchKey = null;
+        foRightIdx = 0;
+        window.jwtGo('final-out');
     };
 
-    window.jwtSaveNewWorkGroup = () => {
-        const raw = String(document.getElementById('jwt-cr-g-name')?.value || '').trim();
-        if (!raw) return toast('Work Group Name likhein!', true);
-        const key = raw.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-        if (!key || key === 'all' || key === 'kariger') return toast('Yeh naam reserve hai, koi doosra naam likhein!', true);
+    // Bills & Hisab actions
+    window.jwtOpenBills = (tab) => {
+        billsTab = tab || 'pending';
+        activeBillId = null;
+        billSelectedWorkerId = null;
+        billWorkerIdx = 0;
+        menuIdx = 0;
+        window.jwtGo('bills');
+    };
+    window.renderBillsOnly = () => renderScreen();
 
-        const groups = getWorkGroups();
-        if (groups.some((g) => g.key === key)) return toast('Yeh Work Group pehle se maujood hai!', true);
-
-        groups.push({ key, label: raw });
-        setStoreSafe(GROUPS_STORE_KEY, groups);
-        selectedCreateGroupKey = key;
-
-        const gInp = document.getElementById('jwt-cr-g-name');
-        if (gInp) gInp.value = '';
-
-        setCreateMode('worker');
-        invalidateAllCaches();
-        syncTallyMasterGroups();
-        renderCurrent();
-        toast(`✅ Naya Group [${raw}] poore software me jud gaya!`);
+    const renderBillWorkerList = (q) => {
+        const box = document.getElementById('jwt-b-wlist');
+        if (!box) return;
+        const query = String(q || '').trim().toLowerCase();
+        billWorkerItems = getSnapshot().workers.filter((w) => !query || `${w.name} ${grpLabel(w.group)}`.toLowerCase().includes(query));
+        if (billWorkerIdx >= billWorkerItems.length) billWorkerIdx = 0;
+        box.innerHTML = billWorkerItems.length
+            ? billWorkerItems.map((w, i) => `
+                <div class="jwt-side-opt ${i === billWorkerIdx ? 'active' : ''}" onmousedown="event.preventDefault(); jwtPickBillWorker(${i})">
+                    <span>${esc(w.name)}</span><small>${esc(grpLabel(w.group))}</small>
+                </div>`).join('')
+            : `<div style="padding:14px; text-align:center; color:#6b7280; font-size:12px;">Koi worker nahi mila.</div>`;
+        box.querySelector('.jwt-side-opt.active')?.scrollIntoView({ block: 'nearest' });
     };
 
-    /* ========================================================================
-       7. A6 THERMAL PRINT & WHATSAPP SHARE
-    ======================================================================== */
-    window.jwtPrintLastChallan = () => {
-        if (!lastChallanData) return toast('Abhi koi naya Issue/Return nahi hua hai.', true);
-        const c = lastChallanData;
-        const pw = window.open('', '', 'width=420,height=520');
-        if (!pw) return alert('Popup block hai! Kripya allow karein.');
-        pw.document.write(`<html><head><title>JobWork Slip - A6</title>
-            <style>
-                @page { size: A6 portrait; margin: 4mm; }
-                body { font-family: monospace, sans-serif; font-size: 11px; margin: 0; padding: 4mm; color: #000; }
-                .box { border: 1.5px dashed #000; padding: 8px; max-width: 90mm; margin: 0 auto; }
-                .hdr { text-align: center; border-bottom: 1.5px dashed #000; padding-bottom: 6px; margin-bottom: 8px; }
-                .row { display: flex; justify-content: space-between; margin-bottom: 4px; gap: 8px; }
-                .tot { background: #eee; border: 1px solid #000; text-align: center; font-size: 14px; font-weight: 900; padding: 6px; margin: 10px 0; }
-                .sign { display: flex; justify-content: space-between; margin-top: 24px; font-size: 10px; }
-            </style></head><body>
-            <div class="box">
-                <div class="hdr"><h3 style="margin:0;">SIMPLICITY ERP</h3><div>${esc(c.mode)}</div></div>
-                <div class="row"><strong>Worker:</strong><span>${esc(c.workerName)} (${esc(c.groupLabel)})</span></div>
-                <div class="row"><strong>Tarikh:</strong><span>${esc(fmtDate(c.date))}</span></div>
-                <div class="row"><strong>Saree:</strong><span>${esc(c.saree)} (${esc(c.maker)})</span></div>
-                <div class="row"><strong>Process Trail:</strong><span>${esc(c.trail)}</span></div>
-                <div class="tot">KUL SAREE: ${c.pcs} Pcs</div>
-                <div class="sign"><div>हस्ताक्षर मुंशी<br><br>_______</div><div>हस्ताक्षर पाने वाला<br><br>_______</div></div>
-            </div>
-            <script>window.onload=function(){window.focus();window.print();setTimeout(()=>window.close(),600);};<\/script>
-            </body></html>`);
-        pw.document.close();
-    };
-
-    window.jwtShareWorkerWhatsApp = (wId) => {
-        const snap = getSnapshot();
-        const w = snap.workers.find((x) => x.id === (wId || activeWorkerId));
+    window.jwtPickBillWorker = (idx) => {
+        const w = billWorkerItems[idx];
         if (!w) return;
-        const mob = getCleanMobile(w.mobile);
-        if (!mob || mob.length < 10) return toast(`${w.name} ka Mobile No. saved nahi hai!`, true);
-
-        const details = w.pendingItems.length
-            ? w.pendingItems.map((p) => `• ${p.saree} (${p.maker}): *${p.pcs} Pcs* [${formatTrail(p.doneStages, 'unfinished')}]`).join('\n')
-            : '• Koi saree pending nahi';
-
-        const msg = `*SIMPLICITY ERP — ${grpLabel(w.group).toUpperCase()} HISAB*\n` +
-            `━━━━━━━━━━━━━━━━━━━\n` +
-            `Kariger: *${w.name}*\nTarikh: ${fmtDate(getTodayIso())}\n` +
-            `━━━━━━━━━━━━━━━━━━━\n` +
-            `Diya: ${w.diya} Pcs | Aai: ${w.aai} Pcs\n` +
-            `*ABHI BAKI SAREE: ${w.pending} Pcs*\n\n` +
-            `*Pending Saree Detail:*\n${details}\n` +
-            `━━━━━━━━━━━━━━━━━━━\n_Simplicity ERP_`;
-
-        window.open(`https://wa.me/${mob}?text=${encodeURIComponent(msg)}`, '_blank');
+        billSelectedWorkerId = w.id;
+        const inp = document.getElementById('jwt-b-worker');
+        if (inp) inp.value = w.name;
+        document.getElementById('jwt-b-no')?.focus();
     };
 
-    /* ========================================================================
-       8. UI RENDERERS & DOM INJECTION (TALLY WHITE & GOLD)
-    ======================================================================== */
-    const injectStyles = () => {
-        if (document.getElementById('jwt-styles')) return;
-        const st = document.createElement('style');
-        st.id = 'jwt-styles';
-        st.textContent = `
-            #jw-trail-section {
-                padding: 0 !important;
-                overflow: hidden;
-                font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
-                color: #1f2937;
-            }
-            #jw-trail-section * { box-sizing: border-box; }
-            #jw-trail-section .jwt-topbar {
-                background: #fdf6e2; border-bottom: 1.5px solid #e5d5a7;
-                padding: 10px 18px; display: flex; justify-content: space-between;
-                align-items: center; gap: 10px; flex-wrap: wrap;
-            }
-            #jw-trail-section .jwt-topbar-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-            #jw-trail-section .jwt-topbar h2 { margin: 0; font-size: 16px; font-weight: 800; color: #1f2937; }
-            #jw-trail-section .jwt-crumb {
-                font-size: 11.5px; font-weight: 700; color: #92400e;
-                background: #ffffff; border: 1px solid #d9b86c; padding: 2px 9px; border-radius: 999px;
-            }
-            #jw-trail-section .jwt-esc {
-                background: #ffffff; border: 1px solid #d1d5db; color: #374151;
-                padding: 5px 12px; border-radius: 5px; font-size: 12px; font-weight: 700; cursor: pointer;
-            }
-            #jw-trail-section .jwt-esc:hover { border-color: #d9a425; background: #fef9ea; }
-            #jw-trail-section .jwt-kpi-strip {
-                display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
-                border-bottom: 1.5px solid #e5d5a7; background: #fdfcf7;
-            }
-            #jw-trail-section .jwt-kpi-cell { padding: 9px 14px; border-right: 1px solid #e5d5a7; }
-            #jw-trail-section .jwt-kpi-cell:last-child { border-right: none; background: #fdf6e2; }
-            #jw-trail-section .jwt-kpi-cell small { display: block; font-size: 10.5px; color: #6b7280; font-weight: 700; }
-            #jw-trail-section .jwt-kpi-cell strong { display: block; font-size: 15px; color: #b47d00; font-weight: 900; margin-top: 2px; }
-            #jw-trail-section .jwt-gw-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) 330px; min-height: 430px; }
-            #jw-trail-section .jwt-gw-left { padding: 16px; border-right: 1.5px solid #e5d5a7; background: #ffffff; }
-            #jw-trail-section .jwt-gw-right { background: #fdfcf7; display: flex; flex-direction: column; justify-content: space-between; }
-            #jw-trail-section .jwt-gw-head {
-                background: #fdf6e2; border-bottom: 1.5px solid #e5d5a7; padding: 10px 14px;
-                font-size: 13px; font-weight: 800; color: #1f2937; text-align: center;
-            }
-            #jw-trail-section .jwt-sec-lbl {
-                padding: 10px 16px 4px; font-size: 10.5px; font-weight: 800; color: #92400e;
-                text-transform: uppercase; letter-spacing: 0.5px;
-            }
-            #jw-trail-section .jwt-gw-item {
-                width: 100%; text-align: left; background: transparent; border: none; border-bottom: 1px solid #f3f4f6;
-                padding: 10px 16px; font-size: 13px; font-weight: 600; color: #1f2937; cursor: pointer;
-                display: flex; justify-content: space-between; align-items: center;
-            }
-            #jw-trail-section .jwt-gw-item:hover { background: #fef9ea; }
-            #jw-trail-section .jwt-gw-item.active { background: #f2b71d; font-weight: 800; color: #1f2937; }
-            #jw-trail-section .jwt-gw-key { color: #b45309; font-weight: 900; text-decoration: underline; }
-            #jw-trail-section .jwt-gw-item.active .jwt-gw-key { color: #1f2937; }
-            #jw-trail-section .jwt-gw-val { font-size: 11.5px; color: #6b7280; font-weight: 700; }
-            #jw-trail-section .jwt-gw-item.active .jwt-gw-val { color: #1f2937; }
-            #jw-trail-section .jwt-sec-title {
-                font-size: 12px; font-weight: 800; color: #92400e; text-transform: uppercase;
-                letter-spacing: 0.4px; margin: 0 0 8px 0;
-            }
-            #jw-trail-section table { width: 100%; min-width: 0 !important; border-collapse: collapse; border: 1px solid #e5d5a7; font-size: 12.5px; background: #fff; }
-            #jw-trail-section th {
-                background: #fdf6e2; color: #1f2937; font-size: 11.5px; font-weight: 800;
-                padding: 8px 10px; text-align: left; border-bottom: 1.5px solid #e5d5a7;
-            }
-            #jw-trail-section td { padding: 8px 10px; border-bottom: 1px solid #f3f4f6; color: #1f2937; vertical-align: top; }
-            #jw-trail-section tr.jwt-row { cursor: pointer; }
-            #jw-trail-section tr.jwt-row:hover { background: #fef9ea; }
-            #jw-trail-section .num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
-            #jw-trail-section .gold-num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 800; color: #b47d00; }
-            #jw-trail-section .trail { font-size: 12px; font-weight: 700; color: #92400e; }
-            #jw-trail-section .trail-muted { font-size: 11.5px; color: #6b7280; font-weight: 600; }
-            #jw-trail-section .trail-done { font-size: 12px; font-weight: 800; color: #065f46; }
-            #jw-trail-section .jwt-subnav {
-                display: flex; gap: 18px; padding: 0 16px; border-bottom: 1.5px solid #e5d5a7; background: #fdfcf7; overflow-x: auto;
-            }
-            #jw-trail-section .jwt-tab {
-                background: none; border: none; border-bottom: 2.5px solid transparent;
-                padding: 9px 2px; font-size: 12.5px; font-weight: 700; color: #6b7280; cursor: pointer; white-space: nowrap;
-            }
-            #jw-trail-section .jwt-tab.active { color: #1f2937; border-bottom-color: #d9a425; font-weight: 800; }
-            #jw-trail-section .jwt-split { display: grid; grid-template-columns: minmax(0, 1.25fr) 320px; }
-            #jw-trail-section .jwt-pane-l { padding: 16px; border-right: 1.5px solid #e5d5a7; }
-            #jw-trail-section .jwt-pane-r { padding: 12px; background: #fdfcf7; }
-            #jw-trail-section .jwt-frow { display: grid; grid-template-columns: 145px minmax(0, 1fr); align-items: center; gap: 10px; margin-bottom: 9px; }
-            #jw-trail-section .jwt-frow label { font-size: 12px; font-weight: 700; color: #374151; }
-            #jw-trail-section .jwt-inp {
-                width: 100%; padding: 6px 9px; border: 1px solid #d1d5db; border-radius: 4px;
-                font-size: 12.5px; font-weight: 700; color: #111827; background: #fff; outline: none;
-            }
-            #jw-trail-section .jwt-inp:focus { border-color: #d9a425; background: #fffdf5; box-shadow: 0 0 0 2px rgba(242,183,29,0.2); }
-            #jw-trail-section .jwt-save {
-                background: #f2b71d; border: 1px solid #d9a425; color: #1f2937;
-                padding: 7px 16px; border-radius: 4px; font-size: 12.5px; font-weight: 800; cursor: pointer;
-            }
-            #jw-trail-section .jwt-save:hover { background: #e5aa12; }
-            #jw-trail-section .jwt-sidebox { border: 1.5px solid #d9b86c; border-radius: 5px; background: #fff; overflow: hidden; }
-            #jw-trail-section .jwt-sidebox-head {
-                background: #fdf6e2; border-bottom: 1.5px solid #e5d5a7; padding: 7px 10px;
-                font-size: 12px; font-weight: 800; color: #1f2937; display: flex; justify-content: space-between;
-            }
-            #jw-trail-section .jwt-side-opt {
-                padding: 8px 10px; border-bottom: 1px solid #f3f4f6; cursor: pointer;
-                display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; font-size: 12px;
-            }
-            #jw-trail-section .jwt-side-opt:hover { background: #fef9ea; }
-            #jw-trail-section .jwt-side-opt.selected { background: #f2b71d; font-weight: 700; }
-            #jw-trail-section .jwt-footer {
-                background: #fdf6e2; border-top: 1px solid #e5d5a7; padding: 8px 16px;
-                display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
-                font-size: 11.5px; color: #92400e; font-weight: 700;
-            }
-            #jwt-toast {
-                position: fixed; bottom: 16px; right: 16px; z-index: 999999;
-                padding: 9px 16px; border-radius: 6px; font-size: 12.5px; font-weight: 700;
-                display: none; box-shadow: 0 8px 20px rgba(0,0,0,0.28);
-            }
-            @media (max-width: 860px) {
-                #jw-trail-section .jwt-gw-grid,
-                #jw-trail-section .jwt-split { grid-template-columns: 1fr; }
-                #jw-trail-section .jwt-gw-left,
-                #jw-trail-section .jwt-pane-l { border-right: none; border-bottom: 1.5px solid #e5d5a7; }
-                #jw-trail-section .jwt-kpi-strip { grid-template-columns: repeat(2, 1fr); }
-                #jw-trail-section .jwt-frow { grid-template-columns: 1fr; gap: 4px; }
-            }
-        `;
-        document.head.appendChild(st);
+    window.jwtAskBillAccept = () => {
+        billAcceptOpen = true;
+        const bar = document.getElementById('jwt-b-accept');
+        if (bar) bar.style.display = 'flex';
+        setTimeout(() => document.getElementById('jwt-b-yes')?.focus(), 20);
+    };
+    window.jwtCancelBillAccept = () => {
+        billAcceptOpen = false;
+        const bar = document.getElementById('jwt-b-accept');
+        if (bar) bar.style.display = 'none';
     };
 
-    const ensureSectionDOM = () => {
-        injectStyles();
-        let sec = document.getElementById('jw-trail-section');
-        if (sec) return sec;
-
-        sec = document.createElement('section');
-        sec.id = 'jw-trail-section';
-        sec.className = 'module-section';
-        sec.style.display = 'none';
-
-        sec.innerHTML = `
-            <div class="jwt-topbar">
-                <div class="jwt-topbar-left">
-                    <button type="button" class="jwt-esc" id="jwt-top-back-btn" onclick="jwtHandleEsc()">&larr; [Esc] Dashboard</button>
-                    <h2 id="jwt-screen-title">Simplicity JobWork &amp; Saree Trail</h2>
-                    <span class="jwt-crumb" id="jwt-godam-badge">Sabhi Karkhane</span>
-                </div>
-                <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                    <button type="button" class="jwt-esc" onclick="jwtOpenScreen('gateway')">Gateway</button>
-                    <button type="button" class="jwt-esc" onclick="jwtOpenScreen('malik')">Malik Report</button>
-                    <button type="button" class="jwt-esc" onclick="jwtOpenScreen('stock')">Saree Stock</button>
-                    <button type="button" class="jwt-esc" onclick="jwtOpenScreen('jobwork')">Workers</button>
-                    <button type="button" class="jwt-esc" onclick="jwtOpenScreen('create')">+ Create</button>
-                </div>
-            </div>
-
-            <div class="jwt-kpi-strip" id="jwt-kpi-strip"></div>
-
-            <!-- SCREEN 1: GATEWAY -->
-            <div id="jwt-scr-gateway">
-                <div class="jwt-gw-grid">
-                    <div class="jwt-gw-left">
-                        <h3 class="jwt-sec-title">JobWork Summary (Workers Ke Paas)</h3>
-                        <div style="overflow-x:auto; margin-bottom:14px;">
-                            <table>
-                                <thead><tr><th>Work Group</th><th class="num">Diya</th><th class="num">Aai</th><th class="num">Abhi Pending</th></tr></thead>
-                                <tbody id="jwt-gw-jw-tbody"></tbody>
-                            </table>
-                        </div>
-
-                        <h3 class="jwt-sec-title">Godam Stock Haalat (Completed Trail)</h3>
-                        <div style="overflow-x:auto;">
-                            <table>
-                                <thead><tr><th>Saree &amp; Completed Stages</th><th class="num">Available</th></tr></thead>
-                                <tbody id="jwt-gw-stock-tbody"></tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <aside class="jwt-gw-right">
-                        <div>
-                            <div class="jwt-gw-head">Gateway of JobWork &amp; Trail</div>
-                            <div class="jwt-sec-lbl">Reports &amp; Stock</div>
-                            <button type="button" class="jwt-gw-item active" onclick="jwtOpenScreen('malik')">
-                                <span><span class="jwt-gw-key">M</span>alik Report (Full Hisab)</span>
-                                <span class="jwt-gw-val">Workers + Trail</span>
-                            </button>
-                            <button type="button" class="jwt-gw-item" onclick="jwtOpenScreen('stock')">
-                                <span><span class="jwt-gw-key">S</span>aree Stock (Stage Trail)</span>
-                                <span class="jwt-gw-val" id="jwt-gw-stock-val">0 Pcs</span>
-                            </button>
-                            <div class="jwt-sec-lbl">JobWork &amp; Masters</div>
-                            <button type="button" class="jwt-gw-item" onclick="jwtOpenScreen('jobwork')">
-                                <span><span class="jwt-gw-key">J</span>obWork Register</span>
-                                <span class="jwt-gw-val" id="jwt-gw-jw-val">0 Pending</span>
-                            </button>
-                            <button type="button" class="jwt-gw-item" onclick="jwtOpenScreen('create')">
-                                <span><span class="jwt-gw-key">C</span>reate (Worker / Group)</span>
-                                <span class="jwt-gw-val" id="jwt-gw-grp-val">Groups</span>
-                            </button>
-                            <div class="jwt-sec-lbl">Dukan &amp; Accounts</div>
-                            <button type="button" class="jwt-gw-item" onclick="jwtOpenLegacySub('dukan')">
-                                <span><span class="jwt-gw-key">D</span>ukan Bheja (Dispatch)</span>
-                                <span class="jwt-gw-val">Final Out</span>
-                            </button>
-                            <button type="button" class="jwt-gw-item" onclick="jwtOpenLegacySub('billing')">
-                                <span><span class="jwt-gw-key">B</span>ills &amp; Hisab</span>
-                                <span class="jwt-gw-val">Payments</span>
-                            </button>
-                        </div>
-                        <div class="jwt-footer">
-                            <span>[&uarr; &darr;] Chunein &middot; [Enter] Kholein</span>
-                            <span>[M / S / J / C / D / B]</span>
-                        </div>
-                    </aside>
-                </div>
-            </div>
-
-            <!-- SCREEN 2: MALIK REPORT -->
-            <div id="jwt-scr-malik" style="display:none;">
-                <div style="padding:14px 16px;">
-                    <h3 class="jwt-sec-title">1. Har JobWorker Ke Paas Pending Sarees (Full Profile + Saree Detail)</h3>
-                    <div style="overflow-x:auto; margin-bottom:16px;">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Worker (Naam &amp; Group)</th>
-                                    <th>Mobile &amp; Address</th>
-                                    <th>Kaunsi Saree Paas Hai (Aur Pehle Kya Ho Chuka)</th>
-                                    <th class="num">Diya / Aai</th>
-                                    <th class="num">Pending</th>
-                                </tr>
-                            </thead>
-                            <tbody id="jwt-malik-workers-tbody"></tbody>
-                        </table>
-                    </div>
-
-                    <h3 class="jwt-sec-title">2. Godam Mein Maujood Saree (Exact Completed Stages Trail)</h3>
-                    <div style="overflow-x:auto;">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Saree Design &amp; Kariger</th>
-                                    <th>Godam</th>
-                                    <th>Ab Tak Kaun-Kaun Se Stages Complete Hue</th>
-                                    <th>Status</th>
-                                    <th class="num">Available Pcs</th>
-                                </tr>
-                            </thead>
-                            <tbody id="jwt-malik-godam-tbody"></tbody>
-                        </table>
-                    </div>
-                </div>
-                <div class="jwt-footer">
-                    <span>Worker row par click karke seedha uska Issue/Return Voucher kholein</span>
-                    <span>[Esc] Gateway</span>
-                </div>
-            </div>
-
-            <!-- SCREEN 3: SAREE STOCK (COMPLETED PROCESS TRAIL) -->
-            <div id="jwt-scr-stock" style="display:none;">
-                <div class="jwt-subnav" id="jwt-stock-filter-tabs"></div>
-                <div style="padding:12px 16px;">
-                    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; align-items:center;">
-                        <input type="text" id="jwt-stock-search" class="jwt-inp" style="flex:1; min-width:200px;" placeholder="Search Saree, Maker, ya Stage (jaise: Cutting, Jhalar, Embroidery)..." oninput="jwtRenderStockScreen()">
-                        <button type="button" class="jwt-save" onclick="jwtToggleInwardForm()">+ Saree Inward</button>
-                    </div>
-
-                    <div id="jwt-inward-form" style="display:none; background:#fdfcf7; border:1.5px solid #d9b86c; border-radius:6px; padding:12px 14px; margin-bottom:12px;">
-                        <div class="jwt-sec-title" style="margin-top:0;">Direct Godam Saree Inward</div>
-                        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:8px;">
-                            <div><label style="font-size:11px; font-weight:700;">Tarikh</label><input type="date" id="jwt-inw-date" class="jwt-inp"></div>
-                            <div><label style="font-size:11px; font-weight:700;">Saree Design</label><input type="text" id="jwt-inw-saree" class="jwt-inp" placeholder="e.g. Banarasi Katan"></div>
-                            <div><label style="font-size:11px; font-weight:700;">Kariger (Maker)</label><input type="text" id="jwt-inw-maker" class="jwt-inp" placeholder="e.g. Raju"></div>
-                            <div><label style="font-size:11px; font-weight:700;">Pcs</label><input type="text" inputmode="numeric" id="jwt-inw-pcs" class="jwt-inp" placeholder="e.g. 20"></div>
-                            <div>
-                                <label style="font-size:11px; font-weight:700;">Stage</label>
-                                <select id="jwt-inw-stage" class="jwt-inp">
-                                    <option value="fresh">Fresh (Kora)</option>
-                                    <option value="cutting">Cutting Complete</option>
-                                    <option value="embroidery">Embroidery Complete</option>
-                                    <option value="finished">Finished Ready</option>
-                                    <option value="lott">Lott</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div style="text-align:right; margin-top:10px; display:flex; gap:8px; justify-content:flex-end;">
-                            <button type="button" class="jwt-esc" onclick="jwtToggleInwardForm()">Cancel</button>
-                            <button type="button" class="jwt-save" onclick="jwtSaveManualSareeInward()">Save Inward</button>
-                        </div>
-                    </div>
-
-                    <div style="overflow-x:auto;">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Saree Design</th>
-                                    <th>Kariger (Maker)</th>
-                                    <th>Godam</th>
-                                    <th>Completed Stages Trail (Kaam Ho Chuka)</th>
-                                    <th>Bucket</th>
-                                    <th class="num">Bachi Saree</th>
-                                </tr>
-                            </thead>
-                            <tbody id="jwt-stock-tbody"></tbody>
-                        </table>
-                    </div>
-
-                    <div id="jwt-passbook-drawer" style="display:none; margin-top:12px; background:#fdfcf7; border:1.5px solid #d9b86c; border-radius:6px; padding:12px;"></div>
-                </div>
-                <div class="jwt-footer">
-                    <span id="jwt-stock-foot-summary">0 Pcs</span>
-                    <span>Row click par Passbook khulegi &middot; [Esc] Back</span>
-                </div>
-            </div>
-
-            <!-- SCREEN 4: JOBWORK REGISTER & WORKER VOUCHER -->
-            <div id="jwt-scr-jobwork" style="display:none;">
-                <div id="jwt-jw-list-view">
-                    <div class="jwt-subnav" id="jwt-jw-group-tabs"></div>
-                    <div style="padding:12px 16px;">
-                        <input type="text" id="jwt-jw-search" class="jwt-inp" style="margin-bottom:10px;" placeholder="Search Worker Name, Mobile, Address..." oninput="jwtRenderWorkersList()">
-                        <div style="overflow-x:auto;">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>Worker Name</th>
-                                        <th>Work Group</th>
-                                        <th>Mobile &amp; Address</th>
-                                        <th>Kaunsi Saree Paas Hai</th>
-                                        <th class="num">Pending Pcs</th>
-                                        <th style="text-align:right;">Open</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="jwt-jw-workers-tbody"></tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-
-                <div id="jwt-jw-voucher-view" style="display:none;">
-                    <div style="background:#fdfcf7; border-bottom:1px solid #e5d5a7; padding:9px 16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; font-size:12.5px;">
-                        <div>
-                            <strong id="jwt-vch-worker-name">-</strong> &middot;
-                            <span id="jwt-vch-worker-meta" style="color:#6b7280; font-weight:600;">-</span>
-                        </div>
-                        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                            <span style="color:#92400e; font-weight:800;" id="jwt-vch-worker-totals">Pending: 0 Pcs</span>
-                            <button type="button" class="jwt-esc" onclick="jwtShareWorkerWhatsApp()">WhatsApp</button>
-                            <button type="button" class="jwt-esc" onclick="jwtPrintLastChallan()">Last A6 Slip</button>
-                        </div>
-                    </div>
-
-                    <div class="jwt-subnav">
-                        <button type="button" class="jwt-tab active" id="jwt-vch-tab-issue" onclick="jwtSetVchMode('issue')">1. Saree Issue Karein (Bhejein)</button>
-                        <button type="button" class="jwt-tab" id="jwt-vch-tab-return" onclick="jwtSetVchMode('return')">2. Saree Wapas Lein (Return)</button>
-                        <button type="button" class="jwt-tab" id="jwt-vch-tab-history" onclick="jwtSetVchMode('history')">3. Worker Khata History</button>
-                    </div>
-
-                    <div id="jwt-vch-split-pane" class="jwt-split">
-                        <div class="jwt-pane-l">
-                            <div id="jwt-vch-issue-form">
-                                <div class="jwt-frow">
-                                    <label>Tarikh :</label>
-                                    <input type="date" id="jwt-issue-date" class="jwt-inp">
-                                </div>
-                                <div class="jwt-frow">
-                                    <label>Selected Saree Batch :</label>
-                                    <input type="text" id="jwt-issue-batch" class="jwt-inp" readonly placeholder="Right side list se Saree chunein...">
-                                </div>
-                                <div class="jwt-frow">
-                                    <label>Quantity (Pcs) :</label>
-                                    <input type="text" inputmode="numeric" id="jwt-issue-qty" class="jwt-inp" placeholder="e.g. 10">
-                                </div>
-                                <div style="text-align:right; margin-top:12px;">
-                                    <button type="button" class="jwt-save" onclick="jwtSubmitIssue()">Issue Confirm [Enter]</button>
-                                </div>
-                            </div>
-
-                            <div id="jwt-vch-return-form" style="display:none;">
-                                <div class="jwt-frow">
-                                    <label>Tarikh :</label>
-                                    <input type="date" id="jwt-ret-date" class="jwt-inp">
-                                </div>
-                                <div class="jwt-frow">
-                                    <label>Pending Saree Batch :</label>
-                                    <input type="text" id="jwt-ret-batch" class="jwt-inp" readonly placeholder="Right side se pending saree chunein...">
-                                </div>
-                                <div class="jwt-frow">
-                                    <label>Wapas Aai (Pcs) :</label>
-                                    <input type="text" inputmode="numeric" id="jwt-ret-qty" class="jwt-inp" placeholder="e.g. 10">
-                                </div>
-                                <div class="jwt-frow">
-                                    <label>Wapas Aake Kahan :</label>
-                                    <select id="jwt-ret-dest" class="jwt-inp" onchange="jwtToggleFineRow()"></select>
-                                </div>
-                                <div class="jwt-frow" id="jwt-ret-fine-row" style="display:none;">
-                                    <label>Damage Fine (₹) :</label>
-                                    <input type="text" inputmode="decimal" id="jwt-ret-fine" class="jwt-inp" placeholder="0.00">
-                                </div>
-                                <div style="text-align:right; margin-top:12px;">
-                                    <button type="button" class="jwt-save" onclick="jwtSubmitReturn()">Return Confirm [Enter]</button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="jwt-pane-r">
-                            <div class="jwt-sidebox">
-                                <div class="jwt-sidebox-head">
-                                    <span id="jwt-vch-side-title">Godam Available Sarees</span>
-                                    <small id="jwt-vch-side-count">0</small>
-                                </div>
-                                <div style="padding:6px; border-bottom:1px solid #f3f4f6;">
-                                    <input type="text" id="jwt-vch-side-search" class="jwt-inp" placeholder="Search saree / stage..." oninput="jwtRenderVchSideList()">
-                                </div>
-                                <div id="jwt-vch-side-list" style="max-height:290px; overflow-y:auto;"></div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div id="jwt-vch-history-pane" style="display:none; padding:14px 16px;">
-                        <div style="overflow-x:auto;">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>Tarikh</th>
-                                        <th>Type</th>
-                                        <th>Saree &amp; Trail Detail</th>
-                                        <th class="num">Gayi</th>
-                                        <th class="num">Aayi</th>
-                                        <th class="num">Damage</th>
-                                        <th style="text-align:right;">Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="jwt-vch-hist-tbody"></tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="jwt-footer">
-                    <span id="jwt-jw-footer-tip">Worker par click karke Issue / Return karein</span>
-                    <span>[Esc] Back</span>
-                </div>
-            </div>
-
-            <!-- SCREEN 5: CREATE WORKER / WORK GROUP -->
-            <div id="jwt-scr-create" style="display:none;">
-                <div class="jwt-subnav">
-                    <button type="button" class="jwt-tab active" id="jwt-cr-tab-worker" onclick="jwtSetCreateMode('worker')">1. Create JobWorker Profile</button>
-                    <button type="button" class="jwt-tab" id="jwt-cr-tab-group" onclick="jwtSetCreateMode('group')">2. Create New Work Group (Jhalar / Stone...)</button>
-                </div>
-
-                <div class="jwt-split">
-                    <div class="jwt-pane-l">
-                        <div id="jwt-cr-worker-form">
-                            <div class="jwt-frow"><label>Worker Name :</label><input type="text" id="jwt-cr-w-name" class="jwt-inp" placeholder="e.g. Aslam Bhai"></div>
-                            <div class="jwt-frow"><label>Under (Work Group) :</label><input type="text" id="jwt-cr-w-grp" class="jwt-inp" readonly placeholder="Right side list se Group chunein"></div>
-                            <div class="jwt-frow"><label>Mobile No. :</label><input type="tel" id="jwt-cr-w-mob" maxlength="10" class="jwt-inp" placeholder="10-digit Mobile"></div>
-                            <div class="jwt-frow"><label>Address / Mohalla :</label><input type="text" id="jwt-cr-w-addr" class="jwt-inp" placeholder="e.g. Alaipura, Varanasi"></div>
-                            <div class="jwt-frow"><label>Join Date :</label><input type="date" id="jwt-cr-w-date" class="jwt-inp"></div>
-                            <div style="text-align:right; margin-top:12px;">
-                                <button type="button" class="jwt-save" onclick="jwtSaveNewWorkerProfile()">Save Worker</button>
-                            </div>
-                        </div>
-
-                        <div id="jwt-cr-group-form" style="display:none;">
-                            <div class="jwt-frow"><label>Work Group Name :</label><input type="text" id="jwt-cr-g-name" class="jwt-inp" placeholder="e.g. Jhalar, Stone, Tassel"></div>
-                            <div style="font-size:12px; color:#6b7280; margin:6px 0 14px;">
-                                Save karte hi yeh Group poore software (Create, JobWork, Saree Completed Trail aur Malik Report) mein automatic jud jayega aur Supabase par sync ho jayega.
-                            </div>
-                            <div style="text-align:right;">
-                                <button type="button" class="jwt-save" onclick="jwtSaveNewWorkGroup()">Save Group</button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="jwt-pane-r">
-                        <div class="jwt-sidebox">
-                            <div class="jwt-sidebox-head">
-                                <span>List of Work Groups</span>
-                                <small id="jwt-cr-grp-count">0</small>
-                            </div>
-                            <div id="jwt-cr-grp-side-list"></div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="jwt-footer">
-                    <span>Side List se Work Group chunein &middot; Supabase row-by-row synced</span>
-                    <span>[Esc] Gateway</span>
-                </div>
-            </div>
-        `;
-
-        const mainContainer = document.querySelector('#desktop-screen .main-container');
-        if (mainContainer) mainContainer.appendChild(sec);
-        else document.body.appendChild(sec);
-
-        // Bind Enter inside Issue/Return qty inputs
-        const issQ = document.getElementById('jwt-issue-qty');
-        if (issQ) {
-            issQ.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') { e.preventDefault(); window.jwtSubmitIssue(); }
-            });
-        }
-        const retQ = document.getElementById('jwt-ret-qty');
-        if (retQ) {
-            retQ.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') { e.preventDefault(); window.jwtSubmitReturn(); }
-            });
-        }
-
-        return sec;
-    };
-
-    const renderKpiStrip = (snap) => {
-        const t = snap.totals;
-        const el = document.getElementById('jwt-kpi-strip');
-        if (el) {
-            el.innerHTML = `
-                <div class="jwt-kpi-cell"><small>Godam (Kaam Baaki)</small><strong>${t.raw} Pcs</strong></div>
-                <div class="jwt-kpi-cell"><small>Workers Ke Paas (Pending)</small><strong>${t.pending} Pcs</strong></div>
-                <div class="jwt-kpi-cell"><small>Finished (Tayyar)</small><strong>${t.finished} Pcs</strong></div>
-                <div class="jwt-kpi-cell"><small>Lott (Damage)</small><strong>${t.lott} Pcs</strong></div>
-                <div class="jwt-kpi-cell"><small>KUL SAREE (100% Match)</small><strong>${t.total} Pcs</strong></div>
-            `;
-        }
-        const gEl = document.getElementById('jwt-godam-badge');
-        if (gEl) gEl.textContent = getGodamLabel(snap.godamFilter);
-        const sVal = document.getElementById('jwt-gw-stock-val');
-        const jVal = document.getElementById('jwt-gw-jw-val');
-        const grpVal = document.getElementById('jwt-gw-grp-val');
-        if (sVal) sVal.textContent = `${t.raw + t.finished + t.lott} Pcs`;
-        if (jVal) jVal.textContent = `${t.pending} Pending`;
-        if (grpVal) grpVal.textContent = `${snap.groups.length} Groups`;
-    };
-
-    const renderGateway = (snap) => {
-        const jwBody = document.getElementById('jwt-gw-jw-tbody');
-        if (jwBody) {
-            jwBody.innerHTML = snap.groups.map((grp) => {
-                const ws = snap.workers.filter((w) => w.group === grp.key);
-                const diya = ws.reduce((s, w) => s + w.diya, 0);
-                const aai = ws.reduce((s, w) => s + w.aai, 0);
-                const pend = ws.reduce((s, w) => s + w.pending, 0);
-                return `<tr class="jwt-row" onclick="jwtOpenGroupWorkers('${esc(grp.key)}')">
-                    <td><strong>${esc(grp.label)}</strong> <span class="trail-muted">(${ws.length})</span></td>
-                    <td class="num">${diya}</td>
-                    <td class="num">${aai}</td>
-                    <td class="gold-num">${pend} Pcs</td>
-                </tr>`;
-            }).join('') || `<tr><td colspan="4" style="text-align:center; padding:16px; color:#6b7280;">Koi work group nahi hai.</td></tr>`;
-        }
-
-        const stBody = document.getElementById('jwt-gw-stock-tbody');
-        if (stBody) {
-            stBody.innerHTML = snap.godamBatches.length
-                ? snap.godamBatches.map((b) => `
-                    <tr class="jwt-row" onclick="jwtOpenScreen('stock')">
-                        <td>
-                            <strong>${esc(b.saree)}</strong> <span class="trail-muted">(${esc(b.maker)} &middot; ${esc(b.godamName)})</span>
-                            <div class="${b.bucket === 'finished' ? 'trail-done' : 'trail'}">${esc(formatTrail(b.doneStages, b.bucket))}</div>
-                        </td>
-                        <td class="gold-num">${b.pcs} Pcs</td>
-                    </tr>`).join('')
-                : `<tr><td colspan="2" style="text-align:center; padding:16px; color:#6b7280;">Godam me abhi koi saree nahi hai.</td></tr>`;
-        }
-    };
-
-    const renderMalik = (snap) => {
-        const wBody = document.getElementById('jwt-malik-workers-tbody');
-        if (wBody) {
-            wBody.innerHTML = snap.workers.length
-                ? snap.workers.map((w) => {
-                    const sHtml = w.pendingItems.length
-                        ? w.pendingItems.map((p) => `<div><strong>${esc(p.saree)}</strong> (${esc(p.maker)}) &mdash; <strong>${p.pcs} Pcs</strong> <span class="trail-muted">[${esc(formatTrail(p.doneStages, 'unfinished'))}]</span></div>`).join('')
-                        : '<span class="trail-muted">Koi saree pending nahi</span>';
-
-                    return `<tr class="jwt-row" onclick="jwtOpenWorkerVoucher('${esc(w.id)}')">
-                        <td><strong>${esc(w.name)}</strong><div class="trail">${esc(grpLabel(w.group))}</div></td>
-                        <td><div>${esc(w.mobile || '-')}</div><div class="trail-muted">${esc(w.address || '-')}</div></td>
-                        <td>${sHtml}</td>
-                        <td class="num">${w.diya} / ${w.aai}</td>
-                        <td class="gold-num">${w.pending} Pcs</td>
-                    </tr>`;
-                }).join('')
-                : `<tr><td colspan="5" style="text-align:center; padding:18px; color:#6b7280;">Koi JobWorker nahi bana hai.</td></tr>`;
-        }
-
-        const gBody = document.getElementById('jwt-malik-godam-tbody');
-        if (gBody) {
-            gBody.innerHTML = snap.godamBatches.length
-                ? snap.godamBatches.map((b) => {
-                    const bLbl = b.bucket === 'finished' ? 'Finished' : (b.bucket === 'lott' ? 'Lott' : 'Godam (Kaam Baaki)');
-                    const cls = b.bucket === 'finished' ? 'trail-done' : 'trail';
-                    return `<tr>
-                        <td><strong>${esc(b.saree)}</strong> <span class="trail-muted">(${esc(b.maker)})</span></td>
-                        <td>${esc(b.godamName)}</td>
-                        <td class="${cls}">${esc(formatTrail(b.doneStages, b.bucket))}</td>
-                        <td>${bLbl}</td>
-                        <td class="gold-num">${b.pcs} Pcs</td>
-                    </tr>`;
-                }).join('')
-                : `<tr><td colspan="5" style="text-align:center; padding:18px; color:#6b7280;">Godam khali hai.</td></tr>`;
-        }
-    };
-
-    window.jwtSetStockFilter = (f) => {
-        stockFilter = f || 'all';
-        selectedPassbookKey = null;
-        jwtRenderStockScreen();
-    };
-
-    window.jwtToggleInwardForm = () => {
-        stockInwardOpen = !stockInwardOpen;
-        const f = document.getElementById('jwt-inward-form');
-        if (f) f.style.display = stockInwardOpen ? 'block' : 'none';
-        if (stockInwardOpen) {
-            const dEl = document.getElementById('jwt-inw-date');
-            if (dEl) dEl.value = getTodayIso();
-            setTimeout(() => document.getElementById('jwt-inw-saree')?.focus(), 30);
-        }
-    };
-
-    window.jwtRenderStockScreen = () => {
-        const snap = getSnapshot();
-        const active = snap.godamBatches;
-        const tabs = [
-            { key: 'all', lbl: 'Sabhi Godam Stock' },
-            { key: 'unfinished', lbl: 'Kaam Baaki (WIP)' },
-            { key: 'finished', lbl: 'Finished (Ready)' },
-            { key: 'lott', lbl: 'Lott' }
-        ];
-
-        const tabsEl = document.getElementById('jwt-stock-filter-tabs');
-        if (tabsEl) {
-            tabsEl.innerHTML = tabs.map((t) => {
-                const cnt = (t.key === 'all' ? active : active.filter((b) => b.bucket === t.key)).reduce((s, b) => s + b.pcs, 0);
-                return `<button type="button" class="jwt-tab ${stockFilter === t.key ? 'active' : ''}" onclick="jwtSetStockFilter('${t.key}')">${esc(t.lbl)} (${cnt})</button>`;
-            }).join('');
-        }
-
-        const q = (document.getElementById('jwt-stock-search')?.value || '').trim().toLowerCase();
-        const list = active
-            .filter((b) => stockFilter === 'all' || b.bucket === stockFilter)
-            .filter((b) => !q || `${b.saree} ${b.maker} ${b.godamName} ${formatTrail(b.doneStages, b.bucket)}`.toLowerCase().includes(q));
-
-        const tot = list.reduce((s, b) => s + b.pcs, 0);
-        const foot = document.getElementById('jwt-stock-foot-summary');
-        if (foot) foot.textContent = `Dikh rahi Sarees: ${tot} Pcs (${list.length} batches)`;
-
-        const tbody = document.getElementById('jwt-stock-tbody');
-        if (tbody) {
-            tbody.innerHTML = list.length
-                ? list.map((b) => `
-                    <tr class="jwt-row" onclick="jwtOpenBatchPassbook('${encodeURIComponent(b.key)}')">
-                        <td><strong>${esc(b.saree)}</strong></td>
-                        <td>${esc(b.maker)}</td>
-                        <td>${esc(b.godamName)}</td>
-                        <td class="${b.bucket === 'finished' ? 'trail-done' : 'trail'}">${esc(formatTrail(b.doneStages, b.bucket))}</td>
-                        <td>${b.bucket === 'finished' ? 'Finished' : (b.bucket === 'lott' ? 'Lott' : 'Godam WIP')}</td>
-                        <td class="gold-num">${b.pcs} Pcs</td>
-                    </tr>`).join('')
-                : `<tr><td colspan="6" style="text-align:center; padding:20px; color:#6b7280;">Koi batch nahi mila.</td></tr>`;
-        }
-
-        const drawer = document.getElementById('jwt-passbook-drawer');
-        if (drawer) {
-            if (!selectedPassbookKey) {
-                drawer.style.display = 'none';
-            } else {
-                const batch = active.find((b) => b.key === selectedPassbookKey);
-                if (!batch) {
-                    drawer.style.display = 'none';
-                } else {
-                    const sH = safeArr(getStoreSafe('saree_history')).filter((h) => {
-                        if (!h) return false;
-                        const sN = normText(h.sareeName || h.name || h.saree, 'GENERAL SAREE');
-                        const mN = normText(h.karigerName || h.kariger, 'KARKHANA');
-                        const kid = normGodam(h.karkhanaId);
-                        return sN === batch.saree && mN === batch.maker && kid === batch.karkhanaId;
-                    }).sort((a, b) => safeNum(b.timestamp, 0) - safeNum(a.timestamp, 0)).slice(0, 25);
-
-                    drawer.style.display = 'block';
-                    drawer.innerHTML = `
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px;">
-                            <strong>Passbook: ${esc(batch.saree)} (${esc(batch.maker)}) &mdash; ${esc(formatTrail(batch.doneStages, batch.bucket))}</strong>
-                            <button type="button" class="jwt-esc" onclick="document.getElementById('jwt-passbook-drawer').style.display='none'">Close</button>
-                        </div>
-                        <div style="overflow-x:auto;">
-                            <table>
-                                <thead><tr><th>Tarikh</th><th>Detail / Worker</th><th class="num">Aai (+)</th><th class="num">Gayi (-)</th></tr></thead>
-                                <tbody>
-                                    ${sH.map((h) => {
-                                        const isOut = (h.isOut === true) || (safeNum(h.gai) > 0);
-                                        const qty = isOut ? safeInt(h.gai) : safeInt(h.aai);
-                                        return `<tr>
-                                            <td>${esc(fmtDate(h.date))}</td>
-                                            <td>${esc(h.typeLabel || h.note || '-')}</td>
-                                            <td class="num">${!isOut ? `+${qty}` : '-'}</td>
-                                            <td class="num" style="color:#6b7280;">${isOut ? `-${qty}` : '-'}</td>
-                                        </tr>`;
-                                    }).join('')}
-                                </tbody>
-                            </table>
-                        </div>
-                    `;
+    const bindBillNewKeys = () => {
+        const wInp = document.getElementById('jwt-b-worker');
+        const order = ['jwt-b-date', 'jwt-b-worker', 'jwt-b-no', 'jwt-b-pcs', 'jwt-b-amt', 'jwt-b-note'];
+        if (wInp) {
+            wInp.addEventListener('input', () => { billWorkerIdx = 0; renderBillWorkerList(wInp.value); });
+            wInp.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    if (billWorkerItems.length) {
+                        e.preventDefault();
+                        billWorkerIdx = e.key === 'ArrowDown' ? (billWorkerIdx + 1) % billWorkerItems.length : (billWorkerIdx - 1 + billWorkerItems.length) % billWorkerItems.length;
+                        renderBillWorkerList(wInp.value);
+                    }
+                    return;
                 }
-            }
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (billWorkerItems[billWorkerIdx]) window.jwtPickBillWorker(billWorkerIdx);
+                }
+            });
         }
-    };
-
-    window.jwtOpenBatchPassbook = (encKey) => {
-        selectedPassbookKey = decodeURIComponent(encKey || '');
-        jwtRenderStockScreen();
-    };
-
-    window.jwtSetJwGroup = (g) => {
-        jwFilterGroup = g || 'all';
-        jwtRenderWorkersList();
-    };
-
-    window.jwtOpenGroupWorkers = (gKey) => {
-        jwFilterGroup = gKey || 'all';
-        jwSubMode = 'list';
-        jwtOpenScreen('jobwork');
-    };
-
-    window.jwtOpenWorkerVoucher = (wId) => {
-        activeWorkerId = wId;
-        jwSubMode = 'voucher';
-        vchMode = 'issue';
-        selectedGodamKey = null;
-        selectedPendingKey = null;
-        if (curScreen !== 'jobwork') jwtOpenScreen('jobwork');
-        jwSubMode = 'voucher';
-        renderCurrent();
-    };
-
-    window.jwtSetVchMode = (m) => {
-        vchMode = m || 'issue';
-        selectedGodamKey = null;
-        selectedPendingKey = null;
-        ['jwt-issue-batch', 'jwt-issue-qty', 'jwt-ret-batch', 'jwt-ret-qty', 'jwt-ret-fine'].forEach((id) => {
+        order.forEach((id, i) => {
+            if (id === 'jwt-b-worker') return;
             const el = document.getElementById(id);
-            if (el) el.value = '';
+            if (!el) return;
+            el.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (i < order.length - 1) document.getElementById(order[i + 1])?.focus();
+                    else window.jwtAskBillAccept();
+                }
+            });
         });
-        renderJobWorkScreen(getSnapshot());
     };
 
-    window.jwtToggleFineRow = () => {
-        const dest = document.getElementById('jwt-ret-dest')?.value;
-        const row = document.getElementById('jwt-ret-fine-row');
-        if (row) row.style.display = (dest === 'lott') ? 'grid' : 'none';
-    };
+    window.jwtSaveNewBill = () => {
+        const dDate = toIsoDate(document.getElementById('jwt-b-date')?.value) || getTodayIso();
+        const billNo = String(document.getElementById('jwt-b-no')?.value || '-').trim();
+        const pcs = safeInt(document.getElementById('jwt-b-pcs')?.value);
+        const amt = safeNum(document.getElementById('jwt-b-amt')?.value);
+        const note = String(document.getElementById('jwt-b-note')?.value || billNo).trim();
+        const worker = getSnapshot().workers.find((w) => w.id === billSelectedWorkerId);
+        if (!worker || amt <= 0) return toast('Worker aur Sahi Bill Amount (₹) bharein!', true);
 
-    window.jwtRenderWorkersList = () => {
-        const snap = getSnapshot();
-        const tabsEl = document.getElementById('jwt-jw-group-tabs');
-        if (tabsEl) {
-            const tabs = [{ key: 'all', label: 'Sabhi' }, ...snap.groups];
-            tabsEl.innerHTML = tabs.map((t) => `
-                <button type="button" class="jwt-tab ${jwFilterGroup === t.key ? 'active' : ''}" onclick="jwtSetJwGroup('${esc(t.key)}')">${esc(t.label)}</button>
-            `).join('');
-        }
-
-        const q = (document.getElementById('jwt-jw-search')?.value || '').trim().toLowerCase();
-        const ws = snap.workers
-            .filter((w) => jwFilterGroup === 'all' || w.group === jwFilterGroup)
-            .filter((w) => !q || `${w.name} ${w.mobile} ${w.address} ${grpLabel(w.group)}`.toLowerCase().includes(q));
-
-        const tbody = document.getElementById('jwt-jw-workers-tbody');
-        if (tbody) {
-            tbody.innerHTML = ws.length
-                ? ws.map((w) => {
-                    const det = w.pendingItems.length
-                        ? w.pendingItems.map((p) => `${esc(p.saree)}: <strong>${p.pcs} Pc</strong>`).join(' &middot; ')
-                        : '<span class="trail-muted">Nil</span>';
-                    return `<tr class="jwt-row" onclick="jwtOpenWorkerVoucher('${esc(w.id)}')">
-                        <td><strong>${esc(w.name)}</strong></td>
-                        <td><span class="trail">${esc(grpLabel(w.group))}</span></td>
-                        <td><div>${esc(w.mobile || '-')}</div><div class="trail-muted">${esc(w.address || '-')}</div></td>
-                        <td>${det}</td>
-                        <td class="gold-num">${w.pending} Pcs</td>
-                        <td style="text-align:right; font-weight:700;">Issue / Return &rarr;</td>
-                    </tr>`;
-                }).join('')
-                : `<tr><td colspan="6" style="text-align:center; padding:20px; color:#6b7280;">Is group me koi worker nahi hai. [+ Create] me jaakar banayein.</td></tr>`;
-        }
-    };
-
-    const renderJobWorkScreen = (snap) => {
-        const isVch = (jwSubMode === 'voucher');
-        const listV = document.getElementById('jwt-jw-list-view');
-        const vchV = document.getElementById('jwt-jw-voucher-view');
-        if (listV) listV.style.display = isVch ? 'none' : 'block';
-        if (vchV) vchV.style.display = isVch ? 'block' : 'none';
-
-        const backBtn = document.getElementById('jwt-top-back-btn');
-        if (backBtn) backBtn.textContent = isVch ? '← [Esc] Workers List' : '← [Esc] Gateway';
-
-        if (!isVch) {
-            const tit = document.getElementById('jwt-screen-title');
-            if (tit) tit.textContent = 'JobWork Register — Workers & Pending Sarees';
-            const tip = document.getElementById('jwt-jw-footer-tip');
-            if (tip) tip.textContent = 'Worker par click karke Issue / Return karein';
-            jwtRenderWorkersList();
-            return;
-        }
-
-        const worker = snap.workers.find((w) => w.id === activeWorkerId);
-        if (!worker) {
-            jwSubMode = 'list';
-            return renderJobWorkScreen(snap);
-        }
-
-        const tit = document.getElementById('jwt-screen-title');
-        if (tit) tit.textContent = `Worker Voucher: ${worker.name} (${grpLabel(worker.group)})`;
-        const wNm = document.getElementById('jwt-vch-worker-name');
-        const wMt = document.getElementById('jwt-vch-worker-meta');
-        const wTt = document.getElementById('jwt-vch-worker-totals');
-        if (wNm) wNm.textContent = `${worker.name} [${grpLabel(worker.group)}]`;
-        if (wMt) wMt.textContent = `Mob: ${worker.mobile || '-'} · ${worker.address || '-'}`;
-        if (wTt) wTt.textContent = `Diya: ${worker.diya} · Aai: ${worker.aai} · Pending: ${worker.pending} Pcs`;
-
-        document.getElementById('jwt-vch-tab-issue')?.classList.toggle('active', vchMode === 'issue');
-        document.getElementById('jwt-vch-tab-return')?.classList.toggle('active', vchMode === 'return');
-        document.getElementById('jwt-vch-tab-history')?.classList.toggle('active', vchMode === 'history');
-
-        const splitEl = document.getElementById('jwt-vch-split-pane');
-        const histEl = document.getElementById('jwt-vch-history-pane');
-        if (splitEl) splitEl.style.display = (vchMode === 'history') ? 'none' : 'grid';
-        if (histEl) histEl.style.display = (vchMode === 'history') ? 'block' : 'none';
-
-        const issForm = document.getElementById('jwt-vch-issue-form');
-        const retForm = document.getElementById('jwt-vch-return-form');
-        if (issForm) issForm.style.display = (vchMode === 'issue') ? 'block' : 'none';
-        if (retForm) retForm.style.display = (vchMode === 'return') ? 'block' : 'none';
-
-        const issDate = document.getElementById('jwt-issue-date');
-        const retDate = document.getElementById('jwt-ret-date');
-        if (issDate && !issDate.value) issDate.value = getTodayIso();
-        if (retDate && !retDate.value) retDate.value = getTodayIso();
-
-        const destSel = document.getElementById('jwt-ret-dest');
-        if (destSel) {
-            const prevVal = destSel.value;
-            destSel.innerHTML = `
-                <option value="godam">Godam me Rakho (${esc(grpLabel(worker.group))} Complete — agle kaam ke liye)</option>
-                <option value="finished">Final Tayyar (Seedha Finished Stock me)</option>
-                <option value="lott">Lott / Damage</option>
-            `;
-            if (prevVal && ['godam', 'finished', 'lott'].includes(prevVal)) destSel.value = prevVal;
-            else if (worker.group === 'calender') destSel.value = 'finished';
-            jwtToggleFineRow();
-        }
-
-        if (vchMode === 'history') {
-            renderWorkerHistoryTable(worker);
-        } else {
-            jwtRenderVchSideList();
-        }
-    };
-
-    const renderWorkerHistoryTable = (worker) => {
-        const tbody = document.getElementById('jwt-vch-hist-tbody');
-        if (!tbody) return;
-        const sheets = safeArr(getStoreSafe(`jobwork_sheets_${worker.id}`));
-        const allRows = [];
-        sheets.forEach((sh) => {
-            safeArr(sh.rows).forEach((r) => allRows.push({ sheetId: sh.id, row: r }));
+        const bills = safeArr(getStoreSafe('jw_bills_list')).slice();
+        bills.push({
+            id: `bill_${Date.now()}`,
+            billNo,
+            date: dDate,
+            workerId: worker.id,
+            workerName: worker.name,
+            workType: worker.group,
+            pcs,
+            billAmt: amt,
+            paidAmt: 0,
+            note
         });
-        allRows.reverse();
-
-        if (!allRows.length) {
-            tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:18px; color:#6b7280;">Abhi koi transaction nahi hai.</td></tr>`;
-            return;
-        }
-
-        tbody.innerHTML = allRows.map(({ sheetId, row }) => {
-            const gQ = safeInt(row.gayiQty);
-            const aQ = safeInt(row.aayiQty);
-            const dQ = safeInt(row.damagePcs);
-            const isGayi = gQ > 0;
-            const items = isGayi ? safeArr(row.gayiItems) : safeArr(row.aayiItems);
-            const det = items.length
-                ? items.map((it) => `${esc(it.saree || 'Saree')} (${esc(it.karigar || '-')}) [${esc(formatTrail(it.doneStages || [], it.destBucket || 'unfinished'))}]`).join(', ')
-                : '-';
-
-            return `<tr>
-                <td>${esc(fmtDate(row.date))}</td>
-                <td><strong>${isGayi ? 'ISSUE' : (dQ > 0 ? 'LOTT' : 'RETURN')}</strong></td>
-                <td>${det}</td>
-                <td class="num">${gQ > 0 ? `-${gQ}` : '-'}</td>
-                <td class="gold-num">${aQ > 0 ? `+${aQ}` : '-'}</td>
-                <td class="num">${dQ > 0 ? dQ : '-'}</td>
-                <td style="text-align:right;">
-                    <button type="button" class="jwt-esc" onclick="jwtDeleteWorkerRow('${esc(sheetId)}', '${esc(row.id)}')">Delete</button>
-                </td>
-            </tr>`;
-        }).join('');
+        setStoreSafe('jw_bills_list', bills);
+        invalidateAllCaches();
+        toast(`✅ Bill #${billNo} save ho gaya!`);
+        window.jwtOpenBills('pending');
     };
 
-    window.jwtRenderVchSideList = () => {
-        const snap = getSnapshot();
-        const q = (document.getElementById('jwt-vch-side-search')?.value || '').trim().toLowerCase();
-        const listEl = document.getElementById('jwt-vch-side-list');
-        const titleEl = document.getElementById('jwt-vch-side-title');
-        const cntEl = document.getElementById('jwt-vch-side-count');
-        if (!listEl) return;
+    window.jwtSaveBillPayment = (billId) => {
+        const dDate = toIsoDate(document.getElementById('jwt-bp-date')?.value) || getTodayIso();
+        const amt = safeNum(document.getElementById('jwt-bp-amt')?.value);
+        const mode = document.getElementById('jwt-bp-mode')?.value || 'Cash';
+        const note = String(document.getElementById('jwt-bp-note')?.value || '').trim();
+        if (amt <= 0) return toast('Sahi Amount daalein!', true);
 
-        if (vchMode === 'issue') {
-            if (titleEl) titleEl.textContent = 'Godam Stock (Completed Trail)';
-            const items = snap.godamBatches
-                .filter((b) => b.bucket === 'unfinished' && b.pcs > 0)
-                .filter((b) => !q || `${b.saree} ${b.maker} ${b.godamName} ${formatTrail(b.doneStages, b.bucket)}`.toLowerCase().includes(q));
-            if (cntEl) cntEl.textContent = `${items.length} Batches`;
+        let targetBill = null;
+        const bills = safeArr(getStoreSafe('jw_bills_list')).map((b) => {
+            if (String(b.id) !== String(billId)) return b;
+            targetBill = { ...b, paidAmt: safeNum(b.paidAmt) + amt };
+            return targetBill;
+        });
+        if (!targetBill) return;
 
-            listEl.innerHTML = items.length
-                ? items.map((b) => `
-                    <div class="jwt-side-opt ${selectedGodamKey === b.key ? 'selected' : ''}" onclick="jwtPickIssueBatch('${encodeURIComponent(b.key)}')">
-                        <div>
-                            <div><strong>${esc(b.saree)}</strong> (${esc(b.maker)})</div>
-                            <div class="trail" style="font-size:11px;">${esc(formatTrail(b.doneStages, b.bucket))}</div>
-                            <div class="trail-muted" style="font-size:10.5px;">${esc(b.godamName)}</div>
-                        </div>
-                        <strong style="white-space:nowrap;">${b.pcs} Pc</strong>
-                    </div>`).join('')
-                : `<div style="padding:16px; text-align:center; color:#6b7280; font-size:12px;">Godam me unfinished stock nahi hai.</div>`;
-        } else {
-            if (titleEl) titleEl.textContent = 'Is Worker Ke Paas Pending';
-            const items = snap.pendingBatches
-                .filter((p) => p.workerId === activeWorkerId && p.pcs > 0)
-                .filter((p) => !q || `${p.saree} ${p.maker} ${formatTrail(p.doneStages, 'unfinished')}`.toLowerCase().includes(q));
-            if (cntEl) cntEl.textContent = `${items.length} Pending`;
-
-            listEl.innerHTML = items.length
-                ? items.map((p) => `
-                    <div class="jwt-side-opt ${selectedPendingKey === p.key ? 'selected' : ''}" onclick="jwtPickReturnBatch('${encodeURIComponent(p.key)}')">
-                        <div>
-                            <div><strong>${esc(p.saree)}</strong> (${esc(p.maker)})</div>
-                            <div class="trail-muted" style="font-size:11px;">${esc(formatTrail(p.doneStages, 'unfinished'))}</div>
-                        </div>
-                        <strong style="white-space:nowrap;">${p.pcs} Pc</strong>
-                    </div>`).join('')
-                : `<div style="padding:16px; text-align:center; color:#6b7280; font-size:12px;">Koi pending saree nahi hai.</div>`;
-        }
+        const pays = safeArr(getStoreSafe('jw_payments_list')).slice();
+        pays.push({
+            id: `pay_${Date.now()}`,
+            billId,
+            billNo: targetBill.billNo || '-',
+            date: dDate,
+            workerName: targetBill.workerName,
+            amount: amt,
+            mode,
+            note
+        });
+        setStoreSafe('jw_bills_list', bills);
+        setStoreSafe('jw_payments_list', pays);
+        invalidateAllCaches();
+        toast(`✅ ₹ ${amt.toFixed(2)} Payment save ho gaya!`);
+        renderScreen();
     };
 
-    window.jwtPickIssueBatch = (encKey) => {
-        const key = decodeURIComponent(encKey || '');
-        const b = getSnapshot().godamBatches.find((x) => x.key === key);
-        if (!b) return;
-        selectedGodamKey = key;
-        const bInp = document.getElementById('jwt-issue-batch');
-        const qInp = document.getElementById('jwt-issue-qty');
-        if (bInp) bInp.value = `${b.saree} (${b.maker}) [${formatTrail(b.doneStages, b.bucket)}] — ${b.pcs} Pc`;
-        if (qInp) qInp.value = b.pcs;
-        jwtRenderVchSideList();
-        qInp?.focus();
-        qInp?.select();
+    window.jwtDeleteBillPay = (payId, billId) => {
+        if (!confirm('Is payment ko delete karein?')) return;
+        const pays = safeArr(getStoreSafe('jw_payments_list'));
+        const targetP = pays.find((p) => String(p.id) === String(payId));
+        if (!targetP) return;
+
+        const bills = safeArr(getStoreSafe('jw_bills_list')).map((b) => {
+            if (String(b.id) !== String(billId)) return b;
+            return { ...b, paidAmt: Math.max(0, safeNum(b.paidAmt) - safeNum(targetP.amount)) };
+        });
+        setStoreSafe('jw_bills_list', bills);
+        setStoreSafe('jw_payments_list', pays.filter((p) => String(p.id) !== String(payId)));
+        invalidateAllCaches();
+        toast('Payment delete ho gaya!');
+        renderScreen();
     };
 
-    window.jwtPickReturnBatch = (encKey) => {
-        const key = decodeURIComponent(encKey || '');
-        const p = getSnapshot().pendingBatches.find((x) => x.key === key);
-        if (!p) return;
-        selectedPendingKey = key;
-        const bInp = document.getElementById('jwt-ret-batch');
-        const qInp = document.getElementById('jwt-ret-qty');
-        if (bInp) bInp.value = `${p.saree} (${p.maker}) [${formatTrail(p.doneStages, 'unfinished')}] — ${p.pcs} Pc`;
-        if (qInp) qInp.value = p.pcs;
-        jwtRenderVchSideList();
-        qInp?.focus();
-        qInp?.select();
+    window.jwtDeleteBill = (billId) => {
+        if (!confirm('Kya is Bill ko delete karna chahte hain?')) return;
+        const bills = safeArr(getStoreSafe('jw_bills_list')).filter((b) => String(b.id) !== String(billId));
+        const pays = safeArr(getStoreSafe('jw_payments_list')).filter((p) => String(p.billId) !== String(billId));
+        setStoreSafe('jw_bills_list', bills);
+        setStoreSafe('jw_payments_list', pays);
+        activeBillId = null;
+        invalidateAllCaches();
+        toast('Bill delete ho gaya!');
+        renderScreen();
     };
 
-    window.jwtSetCreateMode = (m) => {
-        createMode = m || 'worker';
-        document.getElementById('jwt-cr-tab-worker')?.classList.toggle('active', createMode === 'worker');
-        document.getElementById('jwt-cr-tab-group')?.classList.toggle('active', createMode === 'group');
-        const wF = document.getElementById('jwt-cr-worker-form');
-        const gF = document.getElementById('jwt-cr-group-form');
-        if (wF) wF.style.display = createMode === 'worker' ? 'block' : 'none';
-        if (gF) gF.style.display = createMode === 'group' ? 'block' : 'none';
-    };
-
-    window.jwtPickCreateGroup = (key) => {
-        selectedCreateGroupKey = key;
-        renderCreateScreen(getSnapshot());
-    };
-
-    const renderCreateScreen = (snap) => {
-        const groups = snap.groups;
-        if (!groups.some((g) => g.key === selectedCreateGroupKey) && groups.length) {
-            selectedCreateGroupKey = groups[0].key;
-        }
-        const cEl = document.getElementById('jwt-cr-grp-count');
-        const gInp = document.getElementById('jwt-cr-w-grp');
-        const dInp = document.getElementById('jwt-cr-w-date');
-        if (cEl) cEl.textContent = `${groups.length}`;
-        if (gInp) gInp.value = grpLabel(selectedCreateGroupKey);
-        if (dInp && !dInp.value) dInp.value = getTodayIso();
-
-        const listEl = document.getElementById('jwt-cr-grp-side-list');
-        if (listEl) {
-            listEl.innerHTML = groups.map((g) => `
-                <div class="jwt-side-opt ${selectedCreateGroupKey === g.key ? 'selected' : ''}" onclick="jwtPickCreateGroup('${esc(g.key)}')">
-                    <span>${esc(g.label)}</span>
-                    <small style="color:#6b7280;">JobWork</small>
-                </div>
-            `).join('');
-        }
-    };
-
-    const renderCurrent = () => {
-        try {
-            const snap = computeLiveState(getActiveGodam());
-            renderKpiStrip(snap);
-
-            const backBtn = document.getElementById('jwt-top-back-btn');
-            const titleEl = document.getElementById('jwt-screen-title');
-
-            if (curScreen === 'gateway') {
-                if (backBtn) backBtn.textContent = '← [Esc] Dashboard';
-                if (titleEl) titleEl.textContent = 'Simplicity JobWork & Saree Trail';
-                renderGateway(snap);
-            } else if (curScreen === 'malik') {
-                if (backBtn) backBtn.textContent = '← [Esc] Gateway';
-                if (titleEl) titleEl.textContent = 'Malik Report — Workers & Godam Trail';
-                renderMalik(snap);
-            } else if (curScreen === 'stock') {
-                if (backBtn) backBtn.textContent = '← [Esc] Gateway';
-                if (titleEl) titleEl.textContent = 'Saree Stock — Completed Process Trail';
-                jwtRenderStockScreen();
-            } else if (curScreen === 'jobwork') {
-                renderJobWorkScreen(snap);
-            } else if (curScreen === 'create') {
-                if (backBtn) backBtn.textContent = '← [Esc] Gateway';
-                if (titleEl) titleEl.textContent = 'Create Master (Worker Profile / Work Group)';
-                renderCreateScreen(snap);
+    // Live filter preserving focus & cursor
+    window.jwtFilterList = () => {
+        const active = document.activeElement;
+        const aId = active?.id;
+        const aVal = active?.value || '';
+        const pos = active?.selectionStart || aVal.length;
+        menuIdx = 0;
+        renderScreen();
+        if (aId) {
+            const el = document.getElementById(aId);
+            if (el) {
+                el.value = aVal;
+                el.focus();
+                try { el.setSelectionRange(pos, pos); } catch (_) {}
             }
-        } catch (err) {
-            console.error('[JW-Trail] Render failure prevented:', err);
         }
+    };
+
+    const bindSearchKey = (id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowDown' || e.key === 'Enter') {
+                e.preventDefault();
+                el.blur();
+            }
+        });
     };
 
     /* ========================================================================
-       9. NAVIGATION & LEGACY ERP BRIDGE (ZERO BREAKAGE)
+       13. STRICT HIERARCHICAL ESC & TALLY KEYBOARD ENGINE (CAPTURE PHASE)
     ======================================================================== */
-    window.jwtOpenScreen = (scr) => {
-        curScreen = scr || 'gateway';
-        if (scr === 'jobwork') jwSubMode = 'list';
-        ['gateway', 'malik', 'stock', 'jobwork', 'create'].forEach((k) => {
-            const el = document.getElementById(`jwt-scr-${k}`);
-            if (el) el.style.display = (k === curScreen) ? 'block' : 'none';
-        });
-        renderCurrent();
-    };
-
-    window.jwtOpenLegacySub = (sub) => {
-        window.__jwtReturnFromLegacy = true;
-        document.querySelectorAll('.module-section').forEach((s) => { s.style.display = 'none'; });
-        const jwSec = document.getElementById('jobwork-section');
-        if (jwSec) jwSec.style.display = 'block';
-        if (typeof window.openJobWorkSubSection === 'function') {
-            window.openJobWorkSubSection(sub);
-        }
-    };
-
     window.jwtHandleEsc = () => {
-        if (curScreen === 'jobwork' && jwSubMode === 'voucher') {
-            jwSubMode = 'list';
-            renderCurrent();
+        if (curView === 'jw-voucher') {
+            if (vchAcceptOpen) { window.jwtCancelVchAccept(); return; }
+            if (vchPickStep === 'stage') {
+                vchPickStep = 'kariger';
+                vchSelectedMaker = null;
+                vchRightIdx = 0;
+                const kInp = document.getElementById('jwt-vch-kariger');
+                const sInp = document.getElementById('jwt-vch-stage');
+                if (kInp) kInp.value = '';
+                if (sInp) sInp.value = '';
+                const snap = getSnapshot();
+                const w = snap.workers.find((x) => x.id === activeWorkerId);
+                const src = (vchDir === 'out') ? snap.godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0) : (w ? w.pendingItems : []);
+                renderVchRightPanel(src);
+                kInp?.focus();
+                return;
+            }
+            window.jwtGo('jw-worker-menu');
             return;
         }
-        if (curScreen !== 'gateway') {
-            window.jwtOpenScreen('gateway');
+        if (curView === 'final-out') {
+            if (foAcceptOpen) { window.jwtCancelFoAccept(); return; }
+            if (foPickStep === 'stage') {
+                foPickStep = 'kariger';
+                foSelectedMaker = null;
+                foRightIdx = 0;
+                const kInp = document.getElementById('jwt-fo-kariger');
+                const sInp = document.getElementById('jwt-fo-stage');
+                if (kInp) kInp.value = '';
+                if (sInp) sInp.value = '';
+                renderFoRightPanel(getSnapshot().godamBatches.filter((b) => b.bucket !== 'lott' && b.pcs > 0));
+                kInp?.focus();
+                return;
+            }
+            window.jwtGo('gateway');
+            return;
+        }
+        if (curView === 'bills') {
+            if (billAcceptOpen) { window.jwtCancelBillAccept(); return; }
+            if (activeBillId) { activeBillId = null; renderScreen(); return; }
+            window.jwtGo('gateway');
+            return;
+        }
+        if (curView === 'create-worker' || curView === 'create-group') {
+            if (crAcceptOpen) { window.jwtCancelCrAccept(); return; }
+            window.jwtGo('create-menu');
+            return;
+        }
+        if (curView === 'alter-worker-edit') { window.jwtGo('alter-worker-list'); return; }
+        if (curView === 'alter-group-edit') { window.jwtGo('alter-group-list'); return; }
+        if (curView === 'alter-worker-list' || curView === 'alter-group-list') { window.jwtGo('alter-menu'); return; }
+        if (curView === 'jw-worker-hist') { window.jwtGo('jw-worker-menu'); return; }
+        if (curView === 'jw-worker-menu') { window.jwtGo('jw-workers'); return; }
+        if (curView === 'jw-workers') { window.jwtGo('jw-groups'); return; }
+        if (curView === 'owner-worker-detail') { window.jwtGo('owner-workers'); return; }
+        if (curView === 'owner-godam-detail') { window.jwtGo('owner-godam'); return; }
+        if (curView === 'owner-workers' || curView === 'owner-godam') { window.jwtGo('owner-menu'); return; }
+        if (curView === 'stock-detail') { window.jwtGo('stock-list'); return; }
+        if (curView === 'stock-list' && stockInwardOpen) { window.jwtToggleInward(); return; }
+
+        if (curView !== 'gateway') {
+            window.jwtGo('gateway');
             return;
         }
         if (typeof window.backToDashboard === 'function') {
@@ -2059,44 +3030,134 @@
         }
     };
 
-    const openUnifiedModule = (startScreen = 'gateway') => {
+    const handleKeyDown = (e) => {
+        const sec = document.getElementById('jw-trail-section');
+        if (!sec || sec.style.display === 'none') return;
+
+        // Ignore if any external modal overlay is open
+        const anyModal = Array.from(document.querySelectorAll('.modal-overlay')).some((m) => m.style.display && m.style.display !== 'none');
+        if (anyModal) return;
+
+        // CAPTURE-PHASE ESCAPE: NEVER LET OLD JOBWORK.JS / SAREE-UI.JS / TALLY-MASTER.JS STEAL ESC!
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            window.jwtHandleEsc();
+            return;
+        }
+
+        // Accept prompt Y/N shortcuts
+        if (crAcceptOpen && (curView === 'create-worker' || curView === 'create-group')) {
+            if (e.key.toLowerCase() === 'y' || e.key === 'Enter') {
+                e.preventDefault(); e.stopImmediatePropagation();
+                if (curView === 'create-worker') window.jwtSaveNewWorker();
+                else window.jwtSaveNewGroup();
+            } else if (e.key.toLowerCase() === 'n') {
+                e.preventDefault(); e.stopImmediatePropagation();
+                window.jwtCancelCrAccept();
+            }
+            return;
+        }
+        if (billAcceptOpen && curView === 'bills' && billsTab === 'new') {
+            if (e.key.toLowerCase() === 'y' || e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); window.jwtSaveNewBill(); }
+            else if (e.key.toLowerCase() === 'n') { e.preventDefault(); e.stopImmediatePropagation(); window.jwtCancelBillAccept(); }
+            return;
+        }
+
+        // Ctrl+Enter quick submit inside forms
+        if (e.ctrlKey && e.key === 'Enter') {
+            if (curView === 'create-worker') { e.preventDefault(); window.jwtAskCrAccept(); return; }
+            if (curView === 'jw-voucher' && vchBatch.length) { e.preventDefault(); commitVchBatch(false); return; }
+            if (curView === 'final-out' && foBatch.length) { e.preventDefault(); commitFinalOutBatch(false); return; }
+            if (curView === 'bills' && billsTab === 'new') { e.preventDefault(); window.jwtAskBillAccept(); return; }
+        }
+
+        const tag = (document.activeElement && document.activeElement.tagName) || '';
+        const typing = (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA');
+
+        // Bills tabs [1 / 2 / 3] when not typing
+        if (curView === 'bills' && !typing && ['1', '2', '3'].includes(e.key)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (e.key === '1') window.jwtOpenBills('new');
+            else if (e.key === '2') window.jwtOpenBills('pending');
+            else if (e.key === '3') window.jwtOpenBills('paid');
+            return;
+        }
+
+        // Quick '/' to focus search box in list views
+        if (!typing && e.key === '/') {
+            const sBox = sec.querySelector('input[id$="-search"]');
+            if (sBox) { e.preventDefault(); sBox.focus(); sBox.select(); return; }
+        }
+
+        // Pure Tally Menu & Table Arrow Navigation (↑ ↓ + Enter)
+        const navViews = [
+            'gateway', 'create-menu', 'alter-menu', 'alter-worker-list', 'alter-group-list',
+            'jw-groups', 'jw-workers', 'jw-worker-menu', 'owner-menu', 'owner-workers',
+            'owner-godam', 'stock-list'
+        ];
+        const isBillsTable = (curView === 'bills' && billsTab !== 'new' && !activeBillId);
+
+        if ((navViews.includes(curView) || isBillsTable) && !typing) {
+            const rows = Array.from(sec.querySelectorAll('.jwt-menu-item, tbody tr.jwt-row'));
+            if (rows.length > 0) {
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    rows[menuIdx]?.classList.remove('active');
+                    menuIdx = (menuIdx + 1) % rows.length;
+                    rows[menuIdx]?.classList.add('active');
+                    rows[menuIdx]?.scrollIntoView({ block: 'nearest' });
+                    return;
+                }
+                if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    rows[menuIdx]?.classList.remove('active');
+                    menuIdx = (menuIdx - 1 + rows.length) % rows.length;
+                    rows[menuIdx]?.classList.add('active');
+                    rows[menuIdx]?.scrollIntoView({ block: 'nearest' });
+                    return;
+                }
+                if (e.key === 'Enter' && !isNavGuarded()) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    rows[menuIdx]?.click();
+                    return;
+                }
+            }
+
+            // Gateway single-letter shortcuts
+            if (curView === 'gateway' && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                const k = e.key.toLowerCase();
+                const match = Array.from(sec.querySelectorAll('.jwt-menu-item')).find((b) => b.dataset.key === k);
+                if (match) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    match.click();
+                }
+            }
+        }
+    };
+
+    /* ========================================================================
+       14. ENTRY POINTS & LEGACY ERP BRIDGE
+    ======================================================================== */
+    const openModuleAt = (startView) => {
         ensureSectionDOM();
-        window.__jwtReturnFromLegacy = false;
         document.querySelectorAll('.module-section').forEach((s) => { s.style.display = 'none'; });
         const dView = document.getElementById('dashboard-view');
         if (dView) dView.style.display = 'none';
         const sec = document.getElementById('jw-trail-section');
         if (sec) sec.style.display = 'block';
-        window.jwtOpenScreen(startScreen);
+        window.jwtGo(startView || 'gateway');
     };
 
-    // Bridge into Gateway & Stock Summary
-    window.openJobWorkModule = () => openUnifiedModule('gateway');
-    window.openSareeModule = () => openUnifiedModule('stock');
+    window.openJobWorkModule = () => openModuleAt('gateway');
+    window.openSareeModule = () => openModuleAt('stock-list');
 
-    // Bridge showJobWorkHub so returning from Dukan/Billing comes back to our new Gateway
-    const origShowJobWorkHub = window.showJobWorkHub;
-    window.showJobWorkHub = () => {
-        if (window.__jwtReturnFromLegacy) {
-            window.__jwtReturnFromLegacy = false;
-            openUnifiedModule('gateway');
-            return;
-        }
-        if (typeof origShowJobWorkHub === 'function') origShowJobWorkHub();
-    };
-
-    // Refresh automatically when Karkhana changes or Supabase realtime updates arrive
-    const origTriggerRefresh = window.triggerActiveSectionRefresh;
-    window.triggerActiveSectionRefresh = () => {
-        if (typeof origTriggerRefresh === 'function') origTriggerRefresh();
-        const sec = document.getElementById('jw-trail-section');
-        if (sec && sec.style.display !== 'none') {
-            cachedSnapshot = null;
-            renderCurrent();
-        }
-    };
-
-    // Sync Dynamic Work Groups into core/tally-master.js Create screen (#tm-group-list)
+    // Sync dynamic groups with core/tally-master.js [C] Create screen
     const syncTallyMasterGroups = () => {
         const listBox = document.getElementById('tm-group-list');
         if (!listBox) return;
@@ -2120,9 +3181,7 @@
         window.tmPickGroup = (grp, openSheetOrFocus) => {
             origTmPickGroup(grp, openSheetOrFocus);
             const inp = document.getElementById('tm-group');
-            if (inp && grp && grp !== 'kariger') {
-                inp.value = grpLabel(grp);
-            }
+            if (inp && grp && grp !== 'kariger') inp.value = grpLabel(grp);
         };
     }
 
@@ -2134,52 +3193,19 @@
         };
     }
 
-    /* ========================================================================
-       10. SCOPED KEYBOARD SHORTCUTS (NO CONFLICT WITH OTHER MODULES)
-    ======================================================================== */
-    document.addEventListener('keydown', (e) => {
+    const origTriggerRefresh = window.triggerActiveSectionRefresh;
+    window.triggerActiveSectionRefresh = () => {
+        if (typeof origTriggerRefresh === 'function') origTriggerRefresh();
         const sec = document.getElementById('jw-trail-section');
-        if (!sec || sec.style.display === 'none') return;
-
-        const anyModal = Array.from(document.querySelectorAll('.modal-overlay')).some((m) => m.style.display && m.style.display !== 'none');
-        if (anyModal) return;
-
-        const tag = (document.activeElement && document.activeElement.tagName) || '';
-        const typing = (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA');
-
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            window.jwtHandleEsc();
-            return;
+        if (sec && sec.style.display !== 'none') {
+            cachedSnapshot = null;
+            renderScreen();
         }
+    };
 
-        if (curScreen === 'gateway' && !typing) {
-            const items = Array.from(document.querySelectorAll('#jwt-scr-gateway .jwt-gw-item'));
-            if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                items[gwIdx]?.classList.remove('active');
-                gwIdx = (gwIdx + 1) % items.length;
-                items[gwIdx]?.classList.add('active');
-            } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                items[gwIdx]?.classList.remove('active');
-                gwIdx = (gwIdx - 1 + items.length) % items.length;
-                items[gwIdx]?.classList.add('active');
-            } else if (e.key === 'Enter') {
-                e.preventDefault();
-                items[gwIdx]?.click();
-            } else if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
-                const k = e.key.toLowerCase();
-                if (k === 'm') window.jwtOpenScreen('malik');
-                else if (k === 's') window.jwtOpenScreen('stock');
-                else if (k === 'j') window.jwtOpenScreen('jobwork');
-                else if (k === 'c') window.jwtOpenScreen('create');
-                else if (k === 'd') window.jwtOpenLegacySub('dukan');
-                else if (k === 'b') window.jwtOpenLegacySub('billing');
-            }
-        }
-    });
+    // Capture-phase listener guarantees Esc & Arrows NEVER bleed into old jobwork.js/saree-ui.js
+    window.removeEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('keydown', handleKeyDown, true);
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => { ensureSectionDOM(); syncTallyMasterGroups(); });
