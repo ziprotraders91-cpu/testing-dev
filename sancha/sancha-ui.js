@@ -14,6 +14,7 @@
     // View State: 'hub' (Tani vs Chukka) | 'list' (Items) | 'passbook' (Inline Ledger)
     let sanchaViewMode = 'hub';
     let sanchaHubActiveIdx = 0; // 0 = tani, 1 = chukka
+    let sanchaOpenedAt = 0;
 
     // Passbook Pagination & Cursor State
     let sanchaPassbookCurrentPage = 1;
@@ -526,6 +527,7 @@
             return;
         }
         if (sanchaViewMode === 'list') {
+            sanchaOpenedAt = performance.now();
             setSanchaViewMode('hub');
             renderSanchaHubTotals();
             return;
@@ -543,6 +545,7 @@
        3. NAVIGATION & CATEGORY / BRANCH CONTROLLERS
        ======================================================================== */
     const openSanchaModule = () => {
+        sanchaOpenedAt = performance.now();
         ensureSanchaTallyStyles();
         setDisplay('dashboard-view', 'none');
         setDisplay('sancha-section', 'block');
@@ -554,6 +557,7 @@
     };
 
     const switchSanchaCategory = (cat) => {
+        sanchaOpenedAt = performance.now();
         ensureSanchaTallyStyles();
         window.currentSanchaCategory = String(cat || 'tani').toLowerCase() === 'chukka' ? 'chukka' : 'tani';
         sanchaHubActiveIdx = (window.currentSanchaCategory === 'chukka') ? 1 : 0;
@@ -1593,6 +1597,11 @@
 
         if (isTyping) return;
 
+        // Guard: Prevent Enter bleed-through right after opening Hub or switching to List
+        if (e.key === 'Enter' && (performance.now() - sanchaOpenedAt) < 200) {
+            return;
+        }
+
         // 4. Level 1: Hub View (Tani vs Chukka)
         if (sanchaViewMode === 'hub') {
             if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -1600,12 +1609,15 @@
                 highlightSanchaHubRow(sanchaHubActiveIdx + (e.key === 'ArrowDown' ? 1 : -1));
             } else if (e.key === 'Enter') {
                 e.preventDefault();
+                e.stopImmediatePropagation();
                 switchSanchaCategory(sanchaHubActiveIdx === 1 ? 'chukka' : 'tani');
             } else if (e.key === 't' || e.key === 'T' || e.key === '1') {
                 e.preventDefault();
+                e.stopImmediatePropagation();
                 switchSanchaCategory('tani');
             } else if (e.key === 'c' || e.key === 'C' || e.key === '2') {
                 e.preventDefault();
+                e.stopImmediatePropagation();
                 switchSanchaCategory('chukka');
             } else if (e.key === '+') {
                 e.preventDefault();
