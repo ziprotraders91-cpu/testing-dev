@@ -1,10 +1,10 @@
 /* ============================================================================
    SIMPLICITY ERP - HIGH-PERFORMANCE OFFLINE-FIRST PWA SERVICE WORKER
    File: sw.js • Developed by Farhan Jawed
-   Architecture: Network-First for Fresh Updates | Safe Offline Fallback (v11)
+   Architecture: Network-First for Fresh Updates | Safe Offline Fallback (v12)
 ============================================================================ */
 
-const CACHE_NAME = 'simplicity-cache-v11';
+const CACHE_NAME = 'simplicity-cache-v12';
 
 const ASSETS_TO_CACHE = [
   './',
