@@ -1,0 +1,1194 @@
+/* ============================================================================
+   SIMPLICITY ERP - JOBWORK TRAIL MODULE (PART 6/6: CONTROLLERS, KEYS & INIT)
+   File: jobwork-trail/jwt-controllers.js
+============================================================================ */
+
+(() => {
+    'use strict';
+
+    const J = (window._JWT = window._JWT || {});
+
+    /* ========================================================================
+       12. VOUCHER & FINAL OUT 2-STEP PICKER CONTROLLERS
+    ======================================================================== */
+    J.renderVchRightPanel = (sourceBatches) => {
+        const s = J.s;
+        const titleEl = document.getElementById('jwt-vch-r-title');
+        const cntEl = document.getElementById('jwt-vch-r-cnt');
+        const listEl = document.getElementById('jwt-vch-r-list');
+        if (!listEl) return;
+
+        const kQuery = document.getElementById('jwt-vch-kariger')?.value || '';
+        if (s.vchPickStep === 'kariger') {
+            s.vchRightItems = J.buildKarigerPickerList(sourceBatches, s.vchBatch, kQuery);
+            if (s.vchRightIdx >= s.vchRightItems.length) s.vchRightIdx = s.vchRightItems.length ? 0 : -1;
+            if (titleEl) titleEl.textContent = s.vchBatch.length && s.vchRightIdx < 0 ? '1. [↓] Kariger Chunein · [↵] Save' : '1. List of Karigers';
+            if (cntEl) cntEl.textContent = `${s.vchRightItems.length} Karigers`;
+
+            listEl.innerHTML = s.vchRightItems.length
+                ? s.vchRightItems.map((it, i) => `
+                    <div class="jwt-side-opt ${i === s.vchRightIdx ? 'active' : ''}" onmousedown="event.preventDefault(); jwtPickVchRight(${i})">
+                        <div><strong>${J.esc(it.maker)}</strong><div class="trail-muted">${it.stagesCount} Stage(s)</div></div>
+                        <strong style="white-space:nowrap;">${it.totalPcs} Pc</strong>
+                    </div>`).join('')
+                : `<div style="padding:16px; text-align:center; color:#6b7280; font-size:12px;">Koi available stock nahi hai.</div>`;
+        } else {
+            s.vchRightItems = J.buildStagePickerList(sourceBatches, s.vchSelectedMaker, s.vchBatch);
+            if (s.vchRightIdx >= s.vchRightItems.length || s.vchRightIdx < 0) s.vchRightIdx = 0;
+            if (titleEl) titleEl.textContent = `2. ${s.vchSelectedMaker} ke Stages`;
+            if (cntEl) cntEl.textContent = `${s.vchRightItems.length} Batches`;
+
+            listEl.innerHTML = s.vchRightItems.length
+                ? s.vchRightItems.map((b, i) => `
+                    <div class="jwt-side-opt ${i === s.vchRightIdx ? 'active' : ''}" onmousedown="event.preventDefault(); jwtPickVchRight(${i})">
+                        <div>
+                            <div><strong>${J.esc(b.saree)}</strong></div>
+                            <div class="trail" style="font-size:11px;">${J.esc(J.formatTrail(b.doneStages, 'unfinished'))}</div>
+                            <div class="trail-muted" style="font-size:10.5px;">${J.esc(b.godamName)}</div>
+                        </div>
+                        <strong style="white-space:nowrap;">${b.availPcs} Pc</strong>
+                    </div>`).join('')
+                : `<div style="padding:16px; text-align:center; color:#6b7280; font-size:12px;">Aur stock nahi bacha.</div>`;
+        }
+        listEl.querySelector('.jwt-side-opt.active')?.scrollIntoView({ block: 'nearest' });
+    };
+
+    window.jwtPickVchRight = (idx) => {
+        const s = J.s;
+        const snap = J.getSnapshot();
+        const w = snap.workers.find((x) => x.id === s.activeWorkerId);
+        const sourceBatches = (s.vchDir === 'out') ? snap.godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0) : (w ? w.pendingItems : []);
+        const item = s.vchRightItems[idx];
+        if (!item) return;
+
+        if (s.vchPickStep === 'kariger') {
+            s.vchSelectedMaker = item.maker;
+            const kInp = document.getElementById('jwt-vch-kariger');
+            if (kInp) kInp.value = item.maker;
+            s.vchPickStep = 'stage';
+            s.vchRightIdx = 0;
+            J.renderVchRightPanel(sourceBatches);
+            setTimeout(() => document.getElementById('jwt-vch-stage')?.focus(), 20);
+        } else {
+            s.vchSelectedBatchKey = item.key;
+            const sInp = document.getElementById('jwt-vch-stage');
+            const qInp = document.getElementById('jwt-vch-qty');
+            if (sInp) sInp.value = `${item.saree} [${J.formatTrail(item.doneStages, 'unfinished')}] — ${item.availPcs} Pc`;
+            if (qInp) qInp.value = item.availPcs;
+            setTimeout(() => {
+                if (s.vchDir === 'in') document.getElementById('jwt-vch-dest')?.focus();
+                else { qInp?.focus(); qInp?.select(); }
+            }, 20);
+        }
+    };
+
+    window.jwtAddVchItem = () => {
+        const s = J.s;
+        J.syncVchMetaFromDom();
+        const snap = J.getSnapshot();
+        const w = snap.workers.find((x) => x.id === s.activeWorkerId);
+        const sourceBatches = (s.vchDir === 'out') ? snap.godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0) : (w ? w.pendingItems : []);
+        const batch = sourceBatches.find((b) => b.key === s.vchSelectedBatchKey);
+        if (!batch) return J.toast('Pehle Kariger aur Stage Batch chunein!', true);
+
+        const avail = batch.pcs - J.getBatchUsedQty(s.vchBatch, batch.key);
+        const qty = J.safeInt(document.getElementById('jwt-vch-qty')?.value);
+        if (qty <= 0 || qty > avail) return J.toast(`Sahi Pcs daalein (Max ${avail} Pcs)!`, true);
+
+        const dest = (s.vchDir === 'in') ? (document.getElementById('jwt-vch-dest')?.value || 'godam') : 'out';
+        s.vchBatch.push({
+            batchKey: batch.key, saree: batch.saree, maker: batch.maker,
+            karkhanaId: batch.karkhanaId, doneStages: [...batch.doneStages], dest, qty
+        });
+
+        s.vchPickStep = 'kariger';
+        s.vchSelectedMaker = null;
+        s.vchSelectedBatchKey = null;
+        s.vchRightIdx = -1;
+        J.renderScreen();
+    };
+
+    window.jwtRemoveVchItem = (idx) => {
+        J.syncVchMetaFromDom();
+        J.s.vchBatch.splice(idx, 1);
+        J.s.vchRightIdx = J.s.vchBatch.length ? -1 : 0;
+        J.renderScreen();
+    };
+    window.jwtCommitVch = (printType) => J.commitVchBatch(printType);
+
+    window.jwtAskVchAccept = () => {
+        if (!J.s.vchBatch.length) return J.toast('Batch khali hai!', true);
+        J.s.vchAcceptOpen = true;
+        const bar = document.getElementById('jwt-vch-accept');
+        if (bar) bar.style.display = 'flex';
+        setTimeout(() => document.getElementById('jwt-vch-yes')?.focus(), 20);
+    };
+
+    window.jwtCancelVchAccept = () => {
+        J.s.vchAcceptOpen = false;
+        const bar = document.getElementById('jwt-vch-accept');
+        if (bar) bar.style.display = 'none';
+        document.getElementById('jwt-vch-kariger')?.focus();
+    };
+
+    J.bindVchVoucherKeys = (sourceBatches, isOutstationOut) => {
+        const s = J.s;
+        const kInp = document.getElementById('jwt-vch-kariger');
+        const sInp = document.getElementById('jwt-vch-stage');
+        const dSel = document.getElementById('jwt-vch-dest');
+        const qInp = document.getElementById('jwt-vch-qty');
+        const yesBtn = document.getElementById('jwt-vch-yes');
+
+        const metaChain = isOutstationOut
+            ? ['jwt-vch-date', 'jwt-vch-jwno', 'jwt-vch-trans', 'jwt-vch-lr', 'jwt-vch-design', 'jwt-vch-kariger']
+            : ['jwt-vch-date', 'jwt-vch-kariger'];
+
+        metaChain.forEach((id, i) => {
+            if (id === 'jwt-vch-kariger') return;
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.addEventListener('input', J.syncVchMetaFromDom);
+            el.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.ctrlKey) {
+                    e.preventDefault();
+                    J.syncVchMetaFromDom();
+                    document.getElementById(metaChain[i + 1])?.focus();
+                }
+            });
+        });
+
+        if (kInp) {
+            kInp.addEventListener('focus', () => {
+                s.vchPickStep = 'kariger';
+                s.vchRightIdx = (s.vchBatch.length > 0 && !kInp.value.trim()) ? -1 : 0;
+                J.renderVchRightPanel(sourceBatches);
+            });
+            kInp.addEventListener('input', () => {
+                s.vchPickStep = 'kariger';
+                s.vchRightIdx = (!kInp.value.trim() && s.vchBatch.length > 0) ? -1 : 0;
+                J.renderVchRightPanel(sourceBatches);
+            });
+            kInp.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    if (s.vchRightItems.length) {
+                        e.preventDefault();
+                        if (s.vchRightIdx < 0) s.vchRightIdx = (e.key === 'ArrowDown') ? 0 : (s.vchRightItems.length - 1);
+                        else s.vchRightIdx = e.key === 'ArrowDown' ? (s.vchRightIdx + 1) % s.vchRightItems.length : (s.vchRightIdx - 1 + s.vchRightItems.length) % s.vchRightItems.length;
+                        J.renderVchRightPanel(sourceBatches);
+                    }
+                    return;
+                }
+                if (e.key === 'Enter' && !e.ctrlKey) {
+                    e.preventDefault();
+                    if (!kInp.value.trim() && s.vchBatch.length > 0 && s.vchRightIdx < 0) {
+                        s.vchAcceptOpen = true;
+                        const bar = document.getElementById('jwt-vch-accept');
+                        if (bar) bar.style.display = 'flex';
+                        setTimeout(() => document.getElementById('jwt-vch-yes')?.focus(), 20);
+                        return;
+                    }
+                    if (s.vchRightIdx >= 0 && s.vchRightItems[s.vchRightIdx]) window.jwtPickVchRight(s.vchRightIdx);
+                }
+            });
+        }
+        if (sInp) {
+            sInp.addEventListener('focus', () => { if (s.vchSelectedMaker) { s.vchPickStep = 'stage'; J.renderVchRightPanel(sourceBatches); } });
+            sInp.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    if (s.vchRightItems.length) {
+                        e.preventDefault();
+                        s.vchRightIdx = e.key === 'ArrowDown' ? (s.vchRightIdx + 1) % s.vchRightItems.length : (s.vchRightIdx - 1 + s.vchRightItems.length) % s.vchRightItems.length;
+                        J.renderVchRightPanel(sourceBatches);
+                    }
+                    return;
+                }
+                if (e.key === 'Enter' && !e.ctrlKey && s.vchRightItems[s.vchRightIdx]) {
+                    e.preventDefault();
+                    window.jwtPickVchRight(s.vchRightIdx);
+                }
+            });
+        }
+        if (dSel) dSel.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); qInp?.focus(); qInp?.select(); } });
+        if (qInp) qInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); window.jwtAddVchItem(); } });
+        if (yesBtn) {
+            yesBtn.addEventListener('keydown', (e) => {
+                if (e.key === 'y' || e.key === 'Y' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); J.commitVchBatch(''); }
+                else if (e.key === 'p' || e.key === 'P') { e.preventDefault(); e.stopPropagation(); J.commitVchBatch('challan'); }
+                else if ((e.key === 'l' || e.key === 'L') && isOutstationOut) { e.preventDefault(); e.stopPropagation(); J.commitVchBatch('slip'); }
+                else if ((e.key === 'b' || e.key === 'B') && isOutstationOut) { e.preventDefault(); e.stopPropagation(); J.commitVchBatch('both'); }
+                else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); e.stopPropagation(); window.jwtCancelVchAccept(); }
+            });
+        }
+    };
+
+    J.renderFoRightPanel = (allBatches) => {
+        const s = J.s;
+        const titleEl = document.getElementById('jwt-fo-r-title');
+        const cntEl = document.getElementById('jwt-fo-r-cnt');
+        const listEl = document.getElementById('jwt-fo-r-list');
+        if (!listEl) return;
+
+        const kQuery = document.getElementById('jwt-fo-kariger')?.value || '';
+        if (s.foPickStep === 'kariger') {
+            s.foRightItems = J.buildKarigerPickerList(allBatches, s.foBatch, kQuery);
+            if (s.foRightIdx >= s.foRightItems.length) s.foRightIdx = s.foRightItems.length ? 0 : -1;
+            if (titleEl) titleEl.textContent = s.foBatch.length && s.foRightIdx < 0 ? '1. [↓] Kariger Chunein · [↵] Save' : '1. List of Karigers';
+            if (cntEl) cntEl.textContent = `${s.foRightItems.length} Karigers`;
+
+            listEl.innerHTML = s.foRightItems.length
+                ? s.foRightItems.map((it, i) => `
+                    <div class="jwt-side-opt ${i === s.foRightIdx ? 'active' : ''}" onmousedown="event.preventDefault(); jwtPickFoRight(${i})">
+                        <div><strong>${J.esc(it.maker)}</strong><div class="trail-muted">${it.stagesCount} Stage(s)</div></div>
+                        <strong style="white-space:nowrap;">${it.totalPcs} Pc</strong>
+                    </div>`).join('')
+                : `<div style="padding:16px; text-align:center; color:#6b7280; font-size:12px;">Godam me stock nahi hai.</div>`;
+        } else {
+            s.foRightItems = J.buildStagePickerList(allBatches, s.foSelectedMaker, s.foBatch);
+            if (s.foRightIdx >= s.foRightItems.length || s.foRightIdx < 0) s.foRightIdx = 0;
+            if (titleEl) titleEl.textContent = `2. ${s.foSelectedMaker} ke Stages`;
+            if (cntEl) cntEl.textContent = `${s.foRightItems.length} Stages`;
+
+            listEl.innerHTML = s.foRightItems.length
+                ? s.foRightItems.map((b, i) => `
+                    <div class="jwt-side-opt ${i === s.foRightIdx ? 'active' : ''}" onmousedown="event.preventDefault(); jwtPickFoRight(${i})">
+                        <div>
+                            <div><strong>${J.esc(b.saree)}</strong></div>
+                            <div class="${b.bucket === 'finished' ? 'trail-done' : 'trail'}" style="font-size:11px;">${J.esc(J.formatTrail(b.doneStages, b.bucket))}</div>
+                            <div class="trail-muted" style="font-size:10.5px;">${J.esc(b.godamName)}</div>
+                        </div>
+                        <strong style="white-space:nowrap;">${b.availPcs} Pc</strong>
+                    </div>`).join('')
+                : `<div style="padding:16px; text-align:center; color:#6b7280; font-size:12px;">Aur stock nahi bacha.</div>`;
+        }
+        listEl.querySelector('.jwt-side-opt.active')?.scrollIntoView({ block: 'nearest' });
+    };
+
+    window.jwtPickFoRight = (idx) => {
+        const s = J.s;
+        const allBatches = J.getSnapshot().godamBatches.filter((b) => b.bucket !== 'lott' && b.pcs > 0);
+        const item = s.foRightItems[idx];
+        if (!item) return;
+
+        if (s.foPickStep === 'kariger') {
+            s.foSelectedMaker = item.maker;
+            const kInp = document.getElementById('jwt-fo-kariger');
+            if (kInp) kInp.value = item.maker;
+            s.foPickStep = 'stage';
+            s.foRightIdx = 0;
+            J.renderFoRightPanel(allBatches);
+            setTimeout(() => document.getElementById('jwt-fo-stage')?.focus(), 20);
+        } else {
+            s.foSelectedBatchKey = item.key;
+            const sInp = document.getElementById('jwt-fo-stage');
+            const qInp = document.getElementById('jwt-fo-qty');
+            if (sInp) sInp.value = `${item.saree} [${J.formatTrail(item.doneStages, item.bucket)}] — ${item.availPcs} Pc`;
+            if (qInp) qInp.value = item.availPcs;
+            setTimeout(() => { qInp?.focus(); qInp?.select(); }, 20);
+        }
+    };
+
+    window.jwtAddFoItem = () => {
+        const s = J.s;
+        const allBatches = J.getSnapshot().godamBatches.filter((b) => b.bucket !== 'lott' && b.pcs > 0);
+        const batch = allBatches.find((b) => b.key === s.foSelectedBatchKey);
+        if (!batch) return J.toast('Pehle Kariger aur Stage chunein!', true);
+
+        const avail = batch.pcs - J.getBatchUsedQty(s.foBatch, batch.key);
+        const qty = J.safeInt(document.getElementById('jwt-fo-qty')?.value);
+        if (qty <= 0 || qty > avail) return J.toast(`Sahi Pcs daalein (Max ${avail} Pcs)!`, true);
+
+        s.foBatch.push({
+            batchKey: batch.key, saree: batch.saree, maker: batch.maker,
+            karkhanaId: batch.karkhanaId, doneStages: [...batch.doneStages], bucket: batch.bucket, qty
+        });
+
+        s.foPickStep = 'kariger';
+        s.foSelectedMaker = null;
+        s.foSelectedBatchKey = null;
+        s.foRightIdx = -1;
+        J.renderScreen();
+    };
+
+    window.jwtRemoveFoItem = (idx) => {
+        J.s.foBatch.splice(idx, 1);
+        J.s.foRightIdx = J.s.foBatch.length ? -1 : 0;
+        J.renderScreen();
+    };
+    window.jwtCommitFo = (doPrint) => J.commitFinalOutBatch(doPrint);
+
+    window.jwtAskFoAccept = () => {
+        if (!J.s.foBatch.length) return J.toast('Batch khali hai!', true);
+        J.s.foAcceptOpen = true;
+        const bar = document.getElementById('jwt-fo-accept');
+        if (bar) bar.style.display = 'flex';
+        setTimeout(() => document.getElementById('jwt-fo-yes')?.focus(), 20);
+    };
+
+    window.jwtCancelFoAccept = () => {
+        J.s.foAcceptOpen = false;
+        const bar = document.getElementById('jwt-fo-accept');
+        if (bar) bar.style.display = 'none';
+        document.getElementById('jwt-fo-kariger')?.focus();
+    };
+
+    J.bindFinalOutKeys = (allBatches) => {
+        const s = J.s;
+        const kInp = document.getElementById('jwt-fo-kariger');
+        const sInp = document.getElementById('jwt-fo-stage');
+        const qInp = document.getElementById('jwt-fo-qty');
+        const yesBtn = document.getElementById('jwt-fo-yes');
+
+        if (kInp) {
+            kInp.addEventListener('focus', () => {
+                s.foPickStep = 'kariger';
+                s.foRightIdx = (s.foBatch.length > 0 && !kInp.value.trim()) ? -1 : 0;
+                J.renderFoRightPanel(allBatches);
+            });
+            kInp.addEventListener('input', () => {
+                s.foPickStep = 'kariger';
+                s.foRightIdx = (!kInp.value.trim() && s.foBatch.length > 0) ? -1 : 0;
+                J.renderFoRightPanel(allBatches);
+            });
+            kInp.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    if (s.foRightItems.length) {
+                        e.preventDefault();
+                        if (s.foRightIdx < 0) s.foRightIdx = (e.key === 'ArrowDown') ? 0 : (s.foRightItems.length - 1);
+                        else s.foRightIdx = e.key === 'ArrowDown' ? (s.foRightIdx + 1) % s.foRightItems.length : (s.foRightIdx - 1 + s.foRightItems.length) % s.foRightItems.length;
+                        J.renderFoRightPanel(allBatches);
+                    }
+                    return;
+                }
+                if (e.key === 'Enter' && !e.ctrlKey) {
+                    e.preventDefault();
+                    if (!kInp.value.trim() && s.foBatch.length > 0 && s.foRightIdx < 0) {
+                        s.foAcceptOpen = true;
+                        const bar = document.getElementById('jwt-fo-accept');
+                        if (bar) bar.style.display = 'flex';
+                        setTimeout(() => document.getElementById('jwt-fo-yes')?.focus(), 20);
+                        return;
+                    }
+                    if (s.foRightIdx >= 0 && s.foRightItems[s.foRightIdx]) window.jwtPickFoRight(s.foRightIdx);
+                }
+            });
+        }
+        if (sInp) {
+            sInp.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    if (s.foRightItems.length) {
+                        e.preventDefault();
+                        s.foRightIdx = e.key === 'ArrowDown' ? (s.foRightIdx + 1) % s.foRightItems.length : (s.foRightIdx - 1 + s.foRightItems.length) % s.foRightItems.length;
+                        J.renderFoRightPanel(allBatches);
+                    }
+                    return;
+                }
+                if (e.key === 'Enter' && !e.ctrlKey && s.foRightItems[s.foRightIdx]) {
+                    e.preventDefault();
+                    window.jwtPickFoRight(s.foRightIdx);
+                }
+            });
+        }
+        if (qInp) qInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); window.jwtAddFoItem(); } });
+        if (yesBtn) {
+            yesBtn.addEventListener('keydown', (e) => {
+                if (e.key === 'y' || e.key === 'Y' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); J.commitFinalOutBatch(false); }
+                else if (e.key === 'p' || e.key === 'P') { e.preventDefault(); e.stopPropagation(); J.commitFinalOutBatch(true); }
+                else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); e.stopPropagation(); window.jwtCancelFoAccept(); }
+            });
+        }
+    };
+
+    /* ========================================================================
+       13. CREATE, ALTER, FIRM, REGISTER, STOCK, BILLS CONTROLLERS
+    ======================================================================== */
+    window.jwtSetMenuIdx = (idx) => { J.s.menuIdx = J.safeInt(idx, 0); };
+
+    window.jwtOpenCreateWorker = () => {
+        J.s.selectedCreateGroupKey = J.getWorkGroups()[0]?.key || 'cutting';
+        window.jwtGo('create-worker');
+    };
+    window.jwtOpenCreateGroup = () => window.jwtGo('create-group');
+
+    window.jwtSaveFirmProfile = () => {
+        const name = J.normText(document.getElementById('jwt-fm-name')?.value, 'INDIAN FABRICS');
+        const address = String(document.getElementById('jwt-fm-addr')?.value || '').trim();
+        const mobile = String(document.getElementById('jwt-fm-mob')?.value || '').trim();
+        const gst = String(document.getElementById('jwt-fm-gst')?.value || '').trim().toUpperCase();
+        J.setStoreSafe(J.FIRM_STORE_KEY, { name, address, mobile, gst });
+        J.s.crAcceptOpen = false;
+        J.toast(`✅ Firm [${name}] save ho gayi!`);
+        window.jwtHandleEsc();
+    };
+
+    window.jwtPickCwGroup = (idx) => {
+        const groups = J.getWorkGroups();
+        if (!groups[idx]) return;
+        J.s.createSideIdx = idx;
+        J.s.selectedCreateGroupKey = groups[idx].key;
+        const gInp = document.getElementById('jwt-cw-grp');
+        if (gInp) gInp.value = groups[idx].label;
+        document.querySelectorAll('#jwt-cw-side-list .jwt-side-opt').forEach((el, i) => el.classList.toggle('active', i === idx));
+        document.getElementById('jwt-cw-mob')?.focus();
+    };
+
+    window.jwtAskCrAccept = () => {
+        J.s.crAcceptOpen = true;
+        const bar = document.getElementById('jwt-cr-accept');
+        if (bar) bar.style.display = 'flex';
+        setTimeout(() => document.getElementById('jwt-cr-yes')?.focus(), 20);
+    };
+    window.jwtCancelCrAccept = () => {
+        J.s.crAcceptOpen = false;
+        const bar = document.getElementById('jwt-cr-accept');
+        if (bar) bar.style.display = 'none';
+    };
+
+    J.bindCreateWorkerKeys = () => {
+        const order = ['jwt-cw-name', 'jwt-cw-grp', 'jwt-cw-mob', 'jwt-cw-addr', 'jwt-cw-gst', 'jwt-cw-date'];
+        order.forEach((id, i) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.addEventListener('keydown', (e) => {
+                if (id === 'jwt-cw-grp' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                    e.preventDefault();
+                    const groups = J.getWorkGroups();
+                    if (!groups.length) return;
+                    J.s.createSideIdx = e.key === 'ArrowDown' ? (J.s.createSideIdx + 1) % groups.length : (J.s.createSideIdx - 1 + groups.length) % groups.length;
+                    J.s.selectedCreateGroupKey = groups[J.s.createSideIdx].key;
+                    el.value = groups[J.s.createSideIdx].label;
+                    document.querySelectorAll('#jwt-cw-side-list .jwt-side-opt').forEach((opt, idx) => opt.classList.toggle('active', idx === J.s.createSideIdx));
+                    return;
+                }
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (i < order.length - 1) document.getElementById(order[i + 1])?.focus();
+                    else window.jwtAskCrAccept();
+                }
+            });
+        });
+    };
+
+    window.jwtSaveNewWorker = () => {
+        const name = J.normText(document.getElementById('jwt-cw-name')?.value);
+        const mobile = String(document.getElementById('jwt-cw-mob')?.value || '').trim();
+        const address = String(document.getElementById('jwt-cw-addr')?.value || '').trim();
+        const gst = String(document.getElementById('jwt-cw-gst')?.value || '').trim().toUpperCase();
+        const joinDate = J.toIsoDate(document.getElementById('jwt-cw-date')?.value) || J.getTodayIso();
+        if (!name) return J.toast('Worker Name zaroori hai!', true);
+
+        const list = J.safeArr(J.getStoreSafe('jobwork_workers')).slice();
+        list.push({ id: `jw_${Date.now()}`, type: J.s.selectedCreateGroupKey, date: joinDate, name, address, mobile, gst });
+        J.setStoreSafe('jobwork_workers', list);
+        J.invalidateAllCaches();
+        J.toast(`✅ Worker [${name}] (${J.grpLabel(J.s.selectedCreateGroupKey)}) save ho gaya!`);
+        window.jwtGo('create-worker');
+    };
+
+    window.jwtSaveNewGroup = () => {
+        const raw = String(document.getElementById('jwt-cg-name')?.value || '').trim();
+        const outstation = Boolean(document.getElementById('jwt-cg-outstation')?.checked);
+        if (!raw) return J.toast('Work Group Name likhein!', true);
+        const key = raw.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+        if (!key || key === 'all' || key === 'kariger') return J.toast('Yeh naam reserve hai!', true);
+
+        const groups = J.getWorkGroups();
+        if (groups.some((g) => g.key === key)) return J.toast('Yeh Work Group pehle se maujood hai!', true);
+        groups.push({ key, label: raw, outstation });
+        J.setStoreSafe(J.GROUPS_STORE_KEY, groups);
+        J.s.selectedCreateGroupKey = key;
+        J.invalidateAllCaches();
+        J.syncTallyMasterGroups();
+        J.toast(`✅ Work Group [${raw}] add ho gaya!`);
+        J.jwtBackTo('create-menu');
+    };
+
+    window.jwtOpenAlterWorkerEdit = (wId) => { J.s.alterEditWorkerId = wId; window.jwtGo('alter-worker-edit'); };
+    window.jwtUpdateWorker = (wId) => {
+        const name = J.normText(document.getElementById('jwt-ew-name')?.value);
+        const type = document.getElementById('jwt-ew-grp')?.value || 'cutting';
+        const mobile = String(document.getElementById('jwt-ew-mob')?.value || '').trim();
+        const address = String(document.getElementById('jwt-ew-addr')?.value || '').trim();
+        const gst = String(document.getElementById('jwt-ew-gst')?.value || '').trim().toUpperCase();
+        const date = J.toIsoDate(document.getElementById('jwt-ew-date')?.value) || J.getTodayIso();
+        if (!name) return J.toast('Worker Name zaroori hai!', true);
+
+        const list = J.safeArr(J.getStoreSafe('jobwork_workers')).map((w) => {
+            if (String(w.id) !== String(wId)) return w;
+            return { ...w, name, type, mobile, address, gst, date };
+        });
+        J.setStoreSafe('jobwork_workers', list);
+        J.invalidateAllCaches(wId);
+        J.toast(`✅ [${name}] update ho gaya!`);
+        J.jwtBackTo('alter-worker-list');
+    };
+
+    window.jwtDeleteWorker = (wId) => {
+        const snap = J.getSnapshot();
+        const w = snap.workers.find((x) => x.id === wId);
+        if (w && w.pending > 0) return J.toast(`Is worker ke paas abhi ${w.pending} Pcs pending hai! Pehle wapas lein.`, true);
+        if (!confirm(`Kya worker [${w?.name || ''}] ko delete karna chahte hain?`)) return;
+        const list = J.safeArr(J.getStoreSafe('jobwork_workers')).filter((x) => String(x.id) !== String(wId));
+        J.setStoreSafe('jobwork_workers', list);
+        J.invalidateAllCaches(wId);
+        J.toast('Worker delete ho gaya!');
+        J.jwtBackTo('alter-worker-list');
+    };
+
+    window.jwtOpenAlterGroupEdit = (gKey) => { J.s.alterEditGroupKey = gKey; window.jwtGo('alter-group-edit'); };
+    window.jwtUpdateGroup = (gKey) => {
+        const raw = String(document.getElementById('jwt-eg-name')?.value || '').trim();
+        const outstation = Boolean(document.getElementById('jwt-eg-outstation')?.checked);
+        if (!raw) return J.toast('Group Name likhein!', true);
+        const groups = J.getWorkGroups().map((g) => (g.key === gKey ? { ...g, label: raw, outstation } : g));
+        J.setStoreSafe(J.GROUPS_STORE_KEY, groups);
+        J.invalidateAllCaches();
+        J.syncTallyMasterGroups();
+        J.toast(`✅ Group [${raw}] update ho gaya!`);
+        J.jwtBackTo('alter-group-list');
+    };
+
+    window.jwtDeleteGroup = (gKey) => {
+        const snap = J.getSnapshot();
+        const wc = snap.workers.filter((w) => w.group === gKey).length;
+        if (wc > 0) return J.toast(`Is group me abhi ${wc} workers hain! Pehle unhe delete/shift karein.`, true);
+        if (!confirm(`Kya Work Group [${J.grpLabel(gKey)}] ko delete karna chahte hain?`)) return;
+        const groups = J.getWorkGroups().filter((g) => g.key !== gKey);
+        J.setStoreSafe(J.GROUPS_STORE_KEY, groups);
+        J.invalidateAllCaches();
+        J.syncTallyMasterGroups();
+        J.toast('Work Group delete ho gaya!');
+        J.jwtBackTo('alter-group-list');
+    };
+
+    window.jwtSelectJwGroup = (gKey) => { J.s.activeGroupKey = gKey; window.jwtGo('jw-workers'); };
+    window.jwtSelectWorker = (wId) => { J.s.activeWorkerId = wId; window.jwtGo('jw-worker-menu'); };
+
+    window.jwtOpenWorkerVoucher = (dir) => {
+        const s = J.s;
+        s.vchDir = dir;
+        s.vchBatch = [];
+        s.vchAcceptOpen = false;
+        s.vchPickStep = 'kariger';
+        s.vchSelectedMaker = null;
+        s.vchSelectedBatchKey = null;
+        s.vchRightIdx = 0;
+        const w = J.getSnapshot().workers.find((x) => x.id === s.activeWorkerId);
+        const isOutst = (dir === 'out' && w && J.getGroupObj(w.group).outstation);
+        s.vchMeta = { date: J.getTodayIso(), jwNo: isOutst ? J.getNextChallanNo() : '', transport: '', lrNo: '', designNote: '' };
+        window.jwtGo('jw-voucher');
+    };
+
+    window.jwtOpenWorkerHist = () => {
+        J.s.editWorkerRowInfo = null;
+        J.s.regPrintRowInfo = null;
+        J.s.regDateFrom = '';
+        J.s.regDateTo = '';
+        window.jwtGo('jw-worker-hist');
+    };
+
+    window.jwtEditWorkerRow = (sheetId, rowId) => {
+        J.s.regPrintRowInfo = null;
+        J.s.editWorkerRowInfo = { sheetId, rowId };
+        J.renderScreen();
+    };
+
+    window.jwtCancelEditWorkerRow = () => {
+        J.s.editWorkerRowInfo = null;
+        J.renderScreen();
+    };
+
+    window.jwtAskRegPrint = (sheetId, rowId) => {
+        J.s.editWorkerRowInfo = null;
+        J.s.regPrintRowInfo = { sheetId, rowId };
+        J.renderScreen();
+    };
+
+    window.jwtCloseRegPrint = () => {
+        J.s.regPrintRowInfo = null;
+        J.renderScreen();
+    };
+
+    window.jwtApplyRegDates = () => {
+        J.s.regDateFrom = J.toIsoDate(document.getElementById('jwt-reg-from')?.value || '');
+        J.s.regDateTo = J.toIsoDate(document.getElementById('jwt-reg-to')?.value || '');
+        J.s.menuIdx = 0;
+        J.renderScreen();
+    };
+
+    window.jwtClearRegDates = () => {
+        J.s.regDateFrom = '';
+        J.s.regDateTo = '';
+        J.s.menuIdx = 0;
+        J.renderScreen();
+    };
+
+    window.jwtOpenOwnerWorkerDetail = (wId) => { J.s.ownerWorkerId = wId; window.jwtGo('owner-worker-detail'); };
+    window.jwtOpenOwnerGodamDetail = (encKey) => { J.s.ownerGodamSummaryKey = decodeURIComponent(encKey || ''); window.jwtGo('owner-godam-detail'); };
+
+    window.jwtSetStockBucket = (b) => { J.s.stockBucketFilter = b; J.s.menuIdx = 0; J.renderScreen(); };
+    window.jwtOpenStockDetail = (encKey) => { J.s.stockDetailKey = decodeURIComponent(encKey || ''); window.jwtGo('stock-detail'); };
+    window.jwtToggleInward = () => {
+        J.s.stockInwardOpen = !J.s.stockInwardOpen;
+        const b = document.getElementById('jwt-inw-box');
+        if (b) b.style.display = J.s.stockInwardOpen ? 'block' : 'none';
+        if (J.s.stockInwardOpen) setTimeout(() => document.getElementById('jwt-inw-saree')?.focus(), 20);
+    };
+    window.jwtSaveInward = () => {
+        const dDate = J.toIsoDate(document.getElementById('jwt-inw-date')?.value) || J.getTodayIso();
+        const saree = J.normText(document.getElementById('jwt-inw-saree')?.value);
+        const maker = J.normText(document.getElementById('jwt-inw-maker')?.value, 'DIRECT INWARD');
+        const pcs = J.safeInt(document.getElementById('jwt-inw-pcs')?.value);
+        const stage = document.getElementById('jwt-inw-stage')?.value || 'fresh';
+        if (!saree || pcs <= 0) return J.toast('Saree Design aur Sahi Pcs bharein!', true);
+
+        const activeG = J.getActiveGodam();
+        const kid = (activeG && activeG !== 'all') ? activeG : 'k_main';
+        const bucket = (stage === 'finished') ? 'finished' : (stage === 'lott' ? 'lott' : 'unfinished');
+        const doneStages = (stage === 'fresh' || stage === 'lott') ? [] : (stage === 'finished' ? ['calender'] : [stage]);
+
+        const sH = J.safeArr(J.getStoreSafe('saree_history')).slice();
+        sH.push({
+            id: J.genId('saree_man'), date: dDate, sareeName: saree, karigerName: maker, kariger: maker,
+            partyName: maker, karkhanaId: kid, type: stage,
+            typeLabel: `Direct Godown Inward (${J.formatTrail(doneStages, bucket)})`,
+            aai: pcs, gai: 0, isOut: false, doneStages, stageBucket: bucket, note: 'Direct Inward', timestamp: Date.now()
+        });
+        J.setStoreSafe('saree_history', sH);
+        J.s.stockInwardOpen = false;
+        J.invalidateAllCaches();
+        J.toast(`✅ ${pcs} Pcs [${saree}] jama ho gayi!`);
+        J.renderScreen();
+    };
+
+    window.jwtOpenFinalOut = () => {
+        const s = J.s;
+        s.foBatch = []; s.foAcceptOpen = false; s.foPickStep = 'kariger';
+        s.foSelectedMaker = null; s.foSelectedBatchKey = null; s.foRightIdx = 0; s.editFoId = null;
+        window.jwtGo('final-out');
+    };
+
+    window.jwtEditFinalOut = (entryId) => { J.s.editFoId = entryId; J.renderScreen(); };
+    window.jwtCancelFinalOutEdit = () => { J.s.editFoId = null; J.renderScreen(); };
+
+    window.jwtOpenBillNew = () => { J.s.billSelectedWorkerId = null; J.s.billWorkerIdx = 0; window.jwtGo('bills-new'); };
+    window.jwtOpenBillsList = (mode) => { J.s.billsListMode = mode || 'pending'; window.jwtGo('bills-list'); };
+    window.jwtOpenBillDetail = (bId) => { J.s.activeBillId = bId; window.jwtGo('bill-detail'); };
+
+    J.renderBillWorkerList = (q) => {
+        const box = document.getElementById('jwt-b-wlist');
+        if (!box) return;
+        const query = String(q || '').trim().toLowerCase();
+        J.s.billWorkerItems = J.getSnapshot().workers.filter((w) => !query || `${w.name} ${J.grpLabel(w.group)}`.toLowerCase().includes(query));
+        if (J.s.billWorkerIdx >= J.s.billWorkerItems.length) J.s.billWorkerIdx = 0;
+        box.innerHTML = J.s.billWorkerItems.length
+            ? J.s.billWorkerItems.map((w, i) => `
+                <div class="jwt-side-opt ${i === J.s.billWorkerIdx ? 'active' : ''}" onmousedown="event.preventDefault(); jwtPickBillWorker(${i})">
+                    <span>${J.esc(w.name)}</span><small>${J.esc(J.grpLabel(w.group))}</small>
+                </div>`).join('')
+            : `<div style="padding:14px; text-align:center; color:#6b7280; font-size:12px;">Koi worker nahi mila.</div>`;
+        box.querySelector('.jwt-side-opt.active')?.scrollIntoView({ block: 'nearest' });
+    };
+
+    window.jwtPickBillWorker = (idx) => {
+        const w = J.s.billWorkerItems[idx];
+        if (!w) return;
+        J.s.billSelectedWorkerId = w.id;
+        const inp = document.getElementById('jwt-b-worker');
+        if (inp) inp.value = w.name;
+        document.getElementById('jwt-b-no')?.focus();
+    };
+
+    window.jwtAskBillAccept = () => {
+        J.s.billAcceptOpen = true;
+        const bar = document.getElementById('jwt-b-accept');
+        if (bar) bar.style.display = 'flex';
+        setTimeout(() => document.getElementById('jwt-b-yes')?.focus(), 20);
+    };
+    window.jwtCancelBillAccept = () => {
+        J.s.billAcceptOpen = false;
+        const bar = document.getElementById('jwt-b-accept');
+        if (bar) bar.style.display = 'none';
+    };
+
+    J.bindBillNewKeys = () => {
+        const wInp = document.getElementById('jwt-b-worker');
+        const order = ['jwt-b-date', 'jwt-b-worker', 'jwt-b-no', 'jwt-b-pcs', 'jwt-b-amt', 'jwt-b-paid', 'jwt-b-mode', 'jwt-b-note'];
+        if (wInp) {
+            wInp.addEventListener('input', () => { J.s.billWorkerIdx = 0; J.renderBillWorkerList(wInp.value); });
+            wInp.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    if (J.s.billWorkerItems.length) {
+                        e.preventDefault();
+                        J.s.billWorkerIdx = e.key === 'ArrowDown' ? (J.s.billWorkerIdx + 1) % J.s.billWorkerItems.length : (J.s.billWorkerIdx - 1 + J.s.billWorkerItems.length) % J.s.billWorkerItems.length;
+                        J.renderBillWorkerList(wInp.value);
+                    }
+                    return;
+                }
+                if (e.key === 'Enter' && J.s.billWorkerItems[J.s.billWorkerIdx]) { e.preventDefault(); window.jwtPickBillWorker(J.s.billWorkerIdx); }
+            });
+        }
+        order.forEach((id, i) => {
+            if (id === 'jwt-b-worker') return;
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (i < order.length - 1) { const nxt = document.getElementById(order[i + 1]); nxt?.focus(); if (nxt?.select) nxt.select(); }
+                    else window.jwtAskBillAccept();
+                }
+            });
+        });
+    };
+
+    window.jwtSaveNewBill = () => {
+        const dDate = J.toIsoDate(document.getElementById('jwt-b-date')?.value) || J.getTodayIso();
+        const billNo = String(document.getElementById('jwt-b-no')?.value || '-').trim();
+        const pcs = J.safeInt(document.getElementById('jwt-b-pcs')?.value);
+        const amt = J.safeNum(document.getElementById('jwt-b-amt')?.value);
+        const paidNow = Math.max(0, J.safeNum(document.getElementById('jwt-b-paid')?.value, 0));
+        const mode = document.getElementById('jwt-b-mode')?.value || 'Cash';
+        const note = String(document.getElementById('jwt-b-note')?.value || billNo).trim();
+        const worker = J.getSnapshot().workers.find((w) => w.id === J.s.billSelectedWorkerId);
+
+        if (!worker || amt <= 0) return J.toast('Worker aur Total Bill Amount (₹) bharein!', true);
+        if (paidNow > amt) return J.toast('Paid Amount Total Bill se zyada nahi ho sakta!', true);
+
+        const billId = `bill_${Date.now()}`;
+        const bills = J.safeArr(J.getStoreSafe('jw_bills_list')).slice();
+        bills.push({ id: billId, billNo, date: dDate, workerId: worker.id, workerName: worker.name, workType: worker.group, pcs, billAmt: amt, paidAmt: paidNow, note });
+        J.setStoreSafe('jw_bills_list', bills);
+
+        if (paidNow > 0) {
+            const pays = J.safeArr(J.getStoreSafe('jw_payments_list')).slice();
+            pays.push({ id: `pay_${Date.now()}`, billId, billNo, date: dDate, workerName: worker.name, amount: paidNow, mode, note: note || `Bill #${billNo} Payment` });
+            J.setStoreSafe('jw_payments_list', pays);
+        }
+
+        J.invalidateAllCaches();
+        const isPaidFull = (paidNow >= amt);
+        J.toast(isPaidFull ? `✅ Bill #${billNo} Paid Bill me save ho gaya!` : `✅ Bill #${billNo} Pending Bill me save ho gaya!`);
+        J.s.billsListMode = isPaidFull ? 'paid' : 'pending';
+        J.jwtBackTo('bills-menu');
+    };
+
+    window.jwtAskBpAccept = () => {
+        J.s.billPayAcceptOpen = true;
+        const bar = document.getElementById('jwt-bp-accept');
+        if (bar) bar.style.display = 'flex';
+        setTimeout(() => document.getElementById('jwt-bp-yes')?.focus(), 20);
+    };
+    window.jwtCancelBpAccept = () => {
+        J.s.billPayAcceptOpen = false;
+        const bar = document.getElementById('jwt-bp-accept');
+        if (bar) bar.style.display = 'none';
+    };
+
+    J.bindBillPayKeys = () => {
+        const order = ['jwt-bp-date', 'jwt-bp-amt', 'jwt-bp-mode', 'jwt-bp-note'];
+        order.forEach((id, i) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (i < order.length - 1) { const nxt = document.getElementById(order[i + 1]); nxt?.focus(); if (nxt?.select) nxt.select(); }
+                    else window.jwtAskBpAccept();
+                }
+            });
+        });
+    };
+
+    window.jwtSaveBillPayment = (billId) => {
+        const dDate = J.toIsoDate(document.getElementById('jwt-bp-date')?.value) || J.getTodayIso();
+        const amt = J.safeNum(document.getElementById('jwt-bp-amt')?.value);
+        const mode = document.getElementById('jwt-bp-mode')?.value || 'Cash';
+        const note = String(document.getElementById('jwt-bp-note')?.value || '').trim();
+        if (amt <= 0) return J.toast('Sahi Amount daalein!', true);
+
+        let targetBill = null;
+        const bills = J.safeArr(J.getStoreSafe('jw_bills_list')).map((b) => {
+            if (String(b.id) !== String(billId)) return b;
+            targetBill = { ...b, paidAmt: J.safeNum(b.paidAmt) + amt };
+            return targetBill;
+        });
+        if (!targetBill) return;
+
+        const pays = J.safeArr(J.getStoreSafe('jw_payments_list')).slice();
+        pays.push({ id: `pay_${Date.now()}`, billId, billNo: targetBill.billNo || '-', date: dDate, workerName: targetBill.workerName, amount: amt, mode, note });
+        J.setStoreSafe('jw_bills_list', bills);
+        J.setStoreSafe('jw_payments_list', pays);
+        J.invalidateAllCaches();
+        J.toast(`✅ ₹ ${amt.toFixed(2)} Payment save ho gaya!`);
+        J.renderScreen();
+    };
+
+    window.jwtDeleteBillPay = (payId, billId) => {
+        if (!confirm('Is payment ko delete karein?')) return;
+        const pays = J.safeArr(J.getStoreSafe('jw_payments_list'));
+        const targetP = pays.find((p) => String(p.id) === String(payId));
+        if (!targetP) return;
+
+        const bills = J.safeArr(J.getStoreSafe('jw_bills_list')).map((b) => {
+            if (String(b.id) !== String(billId)) return b;
+            return { ...b, paidAmt: Math.max(0, J.safeNum(b.paidAmt) - J.safeNum(targetP.amount)) };
+        });
+        J.setStoreSafe('jw_bills_list', bills);
+        J.setStoreSafe('jw_payments_list', pays.filter((p) => String(p.id) !== String(payId)));
+        J.invalidateAllCaches();
+        J.toast('Payment delete ho gaya!');
+        J.renderScreen();
+    };
+
+    window.jwtDeleteBill = (billId) => {
+        if (!confirm('Kya is Bill ko delete karna chahte hain?')) return;
+        const bills = J.safeArr(J.getStoreSafe('jw_bills_list')).filter((b) => String(b.id) !== String(billId));
+        const pays = J.safeArr(J.getStoreSafe('jw_payments_list')).filter((p) => String(p.billId) !== String(billId));
+        J.setStoreSafe('jw_bills_list', bills);
+        J.setStoreSafe('jw_payments_list', pays);
+        J.s.activeBillId = null;
+        J.invalidateAllCaches();
+        J.toast('Bill delete ho gaya!');
+        J.jwtBackTo('bills-list');
+    };
+
+    window.jwtFilterList = () => {
+        const active = document.activeElement;
+        const aId = active?.id;
+        const aVal = active?.value || '';
+        const pos = active?.selectionStart || aVal.length;
+        J.s.menuIdx = 0;
+        J.renderScreen();
+        if (aId) {
+            const el = document.getElementById(aId);
+            if (el) {
+                el.value = aVal;
+                el.focus();
+                try { el.setSelectionRange(pos, pos); } catch (_) {}
+            }
+        }
+    };
+
+    J.bindSearchKey = (id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowDown' || e.key === 'Enter') { e.preventDefault(); el.blur(); }
+        });
+    };
+
+    /* ========================================================================
+       14. STRICT HIERARCHICAL ESC & TALLY KEYBOARD ENGINE
+    ======================================================================== */
+    window.jwtHandleEsc = () => {
+        const s = J.s;
+        if (s.curView === 'jw-voucher') {
+            if (s.vchAcceptOpen) { window.jwtCancelVchAccept(); return; }
+            if (s.vchPickStep === 'stage') {
+                s.vchPickStep = 'kariger';
+                s.vchSelectedMaker = null;
+                s.vchRightIdx = 0;
+                const kInp = document.getElementById('jwt-vch-kariger');
+                const sInp = document.getElementById('jwt-vch-stage');
+                if (kInp) kInp.value = '';
+                if (sInp) sInp.value = '';
+                const snap = J.getSnapshot();
+                const w = snap.workers.find((x) => x.id === s.activeWorkerId);
+                const src = (s.vchDir === 'out') ? snap.godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0) : (w ? w.pendingItems : []);
+                J.renderVchRightPanel(src);
+                kInp?.focus();
+                return;
+            }
+            J.jwtBackTo('jw-worker-menu');
+            return;
+        }
+        if (s.curView === 'final-out') {
+            if (s.editFoId) { s.editFoId = null; J.renderScreen(); return; }
+            if (s.foAcceptOpen) { window.jwtCancelFoAccept(); return; }
+            if (s.foPickStep === 'stage') {
+                s.foPickStep = 'kariger';
+                s.foSelectedMaker = null;
+                s.foRightIdx = 0;
+                const kInp = document.getElementById('jwt-fo-kariger');
+                const sInp = document.getElementById('jwt-fo-stage');
+                if (kInp) kInp.value = '';
+                if (sInp) sInp.value = '';
+                J.renderFoRightPanel(J.getSnapshot().godamBatches.filter((b) => b.bucket !== 'lott' && b.pcs > 0));
+                kInp?.focus();
+                return;
+            }
+            J.jwtBackTo('gateway');
+            return;
+        }
+        if (s.curView === 'bill-detail') {
+            if (s.billPayAcceptOpen) { window.jwtCancelBpAccept(); return; }
+            J.jwtBackTo('bills-list');
+            return;
+        }
+        if (s.curView === 'bills-new') {
+            if (s.billAcceptOpen) { window.jwtCancelBillAccept(); return; }
+            J.jwtBackTo('bills-menu');
+            return;
+        }
+        if (s.curView === 'bills-list') { J.jwtBackTo('bills-menu'); return; }
+        if (s.curView === 'bills-menu') { J.jwtBackTo('gateway'); return; }
+
+        if (s.curView === 'firm-profile') {
+            if (s.crAcceptOpen) { window.jwtCancelCrAccept(); return; }
+            J.jwtBackTo('create-menu');
+            return;
+        }
+        if (s.curView === 'create-worker' || s.curView === 'create-group') {
+            if (s.crAcceptOpen) { window.jwtCancelCrAccept(); return; }
+            J.jwtBackTo('create-menu');
+            return;
+        }
+        if (s.curView === 'alter-worker-edit') {
+            if (s.crAcceptOpen) { window.jwtCancelCrAccept(); return; }
+            J.jwtBackTo('alter-worker-list');
+            return;
+        }
+        if (s.curView === 'alter-group-edit') {
+            if (s.crAcceptOpen) { window.jwtCancelCrAccept(); return; }
+            J.jwtBackTo('alter-group-list');
+            return;
+        }
+        if (s.curView === 'alter-worker-list' || s.curView === 'alter-group-list') { J.jwtBackTo('alter-menu'); return; }
+        if (s.curView === 'create-menu' || s.curView === 'alter-menu') { J.jwtBackTo('gateway'); return; }
+
+        if (s.curView === 'jw-worker-hist') {
+            if (s.regPrintRowInfo) { s.regPrintRowInfo = null; J.renderScreen(); return; }
+            if (s.editWorkerRowInfo) { s.editWorkerRowInfo = null; J.renderScreen(); return; }
+            J.jwtBackTo('jw-worker-menu');
+            return;
+        }
+        if (s.curView === 'jw-worker-menu') { J.jwtBackTo('jw-workers'); return; }
+        if (s.curView === 'jw-workers') { J.jwtBackTo('jw-groups'); return; }
+        if (s.curView === 'jw-groups') { J.jwtBackTo('gateway'); return; }
+
+        if (s.curView === 'owner-worker-detail') { J.jwtBackTo('owner-workers'); return; }
+        if (s.curView === 'owner-godam-detail') { J.jwtBackTo('owner-godam'); return; }
+        if (s.curView === 'owner-workers' || s.curView === 'owner-godam') { J.jwtBackTo('owner-menu'); return; }
+        if (s.curView === 'owner-menu') { J.jwtBackTo('gateway'); return; }
+
+        if (s.curView === 'stock-detail') { J.jwtBackTo('stock-list'); return; }
+        if (s.curView === 'stock-list') {
+            if (s.stockInwardOpen) { window.jwtToggleInward(); return; }
+            J.jwtBackTo('gateway');
+            return;
+        }
+
+        if (typeof window.backToDashboard === 'function') window.backToDashboard();
+    };
+
+    J.handleKeyDown = (e) => {
+        const s = J.s;
+        const sec = document.getElementById('jw-trail-section');
+        if (!sec || sec.style.display === 'none') return;
+
+        const anyModal = Array.from(document.querySelectorAll('.modal-overlay')).some((m) => m.style.display && m.style.display !== 'none');
+        if (anyModal) return;
+
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            window.jwtHandleEsc();
+            return;
+        }
+
+        if (e.altKey && (e.key === 'p' || e.key === 'P')) {
+            e.preventDefault(); e.stopImmediatePropagation();
+            window.jwtPrintCurrentScreen();
+            return;
+        }
+        if (e.altKey && (e.key === 'l' || e.key === 'L')) {
+            e.preventDefault(); e.stopImmediatePropagation();
+            window.jwtPrintLastPackingSlip();
+            return;
+        }
+
+        if (s.crAcceptOpen && ['create-worker', 'create-group', 'alter-worker-edit', 'alter-group-edit', 'firm-profile'].includes(s.curView)) {
+            if (e.key.toLowerCase() === 'y' || e.key === 'Enter') {
+                e.preventDefault(); e.stopImmediatePropagation();
+                document.getElementById('jwt-cr-yes')?.click();
+            } else if (e.key.toLowerCase() === 'n') {
+                e.preventDefault(); e.stopImmediatePropagation();
+                window.jwtCancelCrAccept();
+            }
+            return;
+        }
+        if (s.billAcceptOpen && s.curView === 'bills-new') {
+            if (e.key.toLowerCase() === 'y' || e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); window.jwtSaveNewBill(); }
+            else if (e.key.toLowerCase() === 'n') { e.preventDefault(); e.stopImmediatePropagation(); window.jwtCancelBillAccept(); }
+            return;
+        }
+        if (s.billPayAcceptOpen && s.curView === 'bill-detail') {
+            if (e.key.toLowerCase() === 'y' || e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); document.getElementById('jwt-bp-yes')?.click(); }
+            else if (e.key.toLowerCase() === 'n') { e.preventDefault(); e.stopImmediatePropagation(); window.jwtCancelBpAccept(); }
+            return;
+        }
+
+        if (s.curView === 'jw-worker-hist' && s.regPrintRowInfo) {
+            const k = e.key.toLowerCase();
+            if (k === 'p') { e.preventDefault(); e.stopImmediatePropagation(); window.jwtPrintWorkerRow(s.regPrintRowInfo.sheetId, s.regPrintRowInfo.rowId, 'challan'); return; }
+            if (k === 'l') { e.preventDefault(); e.stopImmediatePropagation(); window.jwtPrintWorkerRow(s.regPrintRowInfo.sheetId, s.regPrintRowInfo.rowId, 'slip'); return; }
+            if (k === 'b') { e.preventDefault(); e.stopImmediatePropagation(); window.jwtPrintWorkerRow(s.regPrintRowInfo.sheetId, s.regPrintRowInfo.rowId, 'both'); return; }
+            if (k === 'n') { e.preventDefault(); e.stopImmediatePropagation(); window.jwtCloseRegPrint(); return; }
+        }
+
+        if (e.ctrlKey && e.key === 'Enter') {
+            if (['create-worker', 'alter-worker-edit', 'firm-profile'].includes(s.curView)) { e.preventDefault(); window.jwtAskCrAccept(); return; }
+            if (s.curView === 'jw-voucher' && s.vchBatch.length) { e.preventDefault(); J.commitVchBatch(''); return; }
+            if (s.curView === 'final-out' && s.foBatch.length) { e.preventDefault(); J.commitFinalOutBatch(false); return; }
+            if (s.curView === 'bills-new') { e.preventDefault(); window.jwtAskBillAccept(); return; }
+            if (s.curView === 'bill-detail') { e.preventDefault(); window.jwtAskBpAccept(); return; }
+        }
+
+        const tag = (document.activeElement && document.activeElement.tagName) || '';
+        const typing = (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA');
+
+        if (!typing && e.key === '/') {
+            const sBox = sec.querySelector('input[id$="-search"]');
+            if (sBox) { e.preventDefault(); sBox.focus(); sBox.select(); return; }
+        }
+
+        if (s.curView === 'jw-worker-hist' && !s.editWorkerRowInfo && !s.regPrintRowInfo && !typing) {
+            const rows = Array.from(sec.querySelectorAll('tbody tr.jwt-row'));
+            const activeRow = rows[s.menuIdx];
+            if (activeRow) {
+                if (e.key === 'e' || e.key === 'E') {
+                    e.preventDefault();
+                    window.jwtEditWorkerRow(activeRow.dataset.shid, activeRow.dataset.rid);
+                    return;
+                }
+                if (e.key === 'p' || e.key === 'P') {
+                    e.preventDefault();
+                    if (activeRow.dataset.outst === '1') window.jwtAskRegPrint(activeRow.dataset.shid, activeRow.dataset.rid);
+                    else window.jwtPrintWorkerRow(activeRow.dataset.shid, activeRow.dataset.rid, 'challan');
+                    return;
+                }
+                if (e.key === 'l' || e.key === 'L') {
+                    e.preventDefault();
+                    window.jwtPrintWorkerRow(activeRow.dataset.shid, activeRow.dataset.rid, 'slip');
+                    return;
+                }
+                if ((e.key === 'b' || e.key === 'B') && activeRow.dataset.outst === '1') {
+                    e.preventDefault();
+                    window.jwtPrintWorkerRow(activeRow.dataset.shid, activeRow.dataset.rid, 'both');
+                    return;
+                }
+            }
+        }
+
+        const navViews = [
+            'gateway', 'create-menu', 'alter-menu', 'alter-worker-list', 'alter-group-list',
+            'jw-groups', 'jw-workers', 'jw-worker-menu', 'jw-worker-hist',
+            'owner-menu', 'owner-workers', 'owner-godam', 'stock-list',
+            'bills-menu', 'bills-list'
+        ];
+
+        if (navViews.includes(s.curView) && !typing) {
+            const rows = Array.from(sec.querySelectorAll('.jwt-menu-item, tbody tr.jwt-row'));
+            if (rows.length > 0) {
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault(); e.stopImmediatePropagation();
+                    rows[s.menuIdx]?.classList.remove('active');
+                    s.menuIdx = (s.menuIdx + 1) % rows.length;
+                    rows[s.menuIdx]?.classList.add('active');
+                    rows[s.menuIdx]?.scrollIntoView({ block: 'nearest' });
+                    return;
+                }
+                if (e.key === 'ArrowUp') {
+                    e.preventDefault(); e.stopImmediatePropagation();
+                    rows[s.menuIdx]?.classList.remove('active');
+                    s.menuIdx = (s.menuIdx - 1 + rows.length) % rows.length;
+                    rows[s.menuIdx]?.classList.add('active');
+                    rows[s.menuIdx]?.scrollIntoView({ block: 'nearest' });
+                    return;
+                }
+                if (e.key === 'Enter' && !J.isNavGuarded() && s.curView !== 'jw-worker-hist') {
+                    e.preventDefault(); e.stopImmediatePropagation();
+                    rows[s.menuIdx]?.click();
+                    return;
+                }
+            }
+
+            if (s.curView === 'gateway' && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                const k = e.key.toLowerCase();
+                const match = Array.from(sec.querySelectorAll('.jwt-menu-item')).find((b) => b.dataset.key === k);
+                if (match) { e.preventDefault(); e.stopImmediatePropagation(); match.click(); }
+            }
+        }
+    };
+
+    /* ========================================================================
+       15. ENTRY POINTS & LEGACY ERP BRIDGE
+    ======================================================================== */
+    J.openModuleAt = (startView) => {
+        J.ensureSectionDOM();
+        document.querySelectorAll('.module-section').forEach((secEl) => { secEl.style.display = 'none'; });
+        const dView = document.getElementById('dashboard-view');
+        if (dView) dView.style.display = 'none';
+        const sec = document.getElementById('jw-trail-section');
+        if (sec) sec.style.display = 'block';
+        window.jwtGo(startView || 'gateway');
+    };
+
+    window.openJobWorkModule = () => J.openModuleAt('gateway');
+    window.openSareeModule = () => J.openModuleAt('stock-list');
+
+    J.syncTallyMasterGroups = () => {
+        const listBox = document.getElementById('tm-group-list');
+        if (!listBox) return;
+        const groups = J.getWorkGroups();
+        const existing = Array.from(listBox.querySelectorAll('.tm-group-opt')).map((x) => x.dataset.grp);
+        groups.forEach((g) => {
+            if (!existing.includes(g.key)) {
+                const div = document.createElement('div');
+                div.className = 'tm-group-opt';
+                div.dataset.grp = g.key;
+                div.dataset.label = g.label;
+                div.onclick = () => window.tmPickGroup && window.tmPickGroup(g.key, true);
+                div.innerHTML = `<span>${J.esc(g.label)}</span><small>JobWork</small>`;
+                listBox.appendChild(div);
+            }
+        });
+    };
+
+    const origTmPickGroup = window.tmPickGroup;
+    if (typeof origTmPickGroup === 'function') {
+        window.tmPickGroup = (grp, openSheetOrFocus) => {
+            origTmPickGroup(grp, openSheetOrFocus);
+            const inp = document.getElementById('tm-group');
+            if (inp && grp && grp !== 'kariger') inp.value = J.grpLabel(grp);
+        };
+    }
+
+    const origOpenTallyCreate = window.openTallyCreateModule;
+    if (typeof origOpenTallyCreate === 'function') {
+        window.openTallyCreateModule = () => {
+            origOpenTallyCreate();
+            J.syncTallyMasterGroups();
+        };
+    }
+
+    const origTriggerRefresh = window.triggerActiveSectionRefresh;
+    window.triggerActiveSectionRefresh = () => {
+        if (typeof origTriggerRefresh === 'function') origTriggerRefresh();
+        const sec = document.getElementById('jw-trail-section');
+        if (sec && sec.style.display !== 'none') {
+            J.s.cachedSnapshot = null;
+            J.renderScreen();
+        }
+    };
+
+    window.removeEventListener('keydown', J.handleKeyDown, true);
+    window.addEventListener('keydown', J.handleKeyDown, true);
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => { J.ensureSectionDOM(); J.syncTallyMasterGroups(); });
+    } else {
+        J.ensureSectionDOM();
+        J.syncTallyMasterGroups();
+    }
+})();
