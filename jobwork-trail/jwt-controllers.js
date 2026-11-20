@@ -399,7 +399,7 @@
     };
 
     /* ========================================================================
-       13. CREATE, ALTER, FIRM, REGISTER, STOCK, BILLS CONTROLLERS
+       13. CREATE, ALTER, FIRM, REGISTER, STOCK, FINAL OUT, BILLS CONTROLLERS
     ======================================================================== */
     window.jwtSetMenuIdx = (idx) => { J.s.menuIdx = J.safeInt(idx, 0); };
 
@@ -661,10 +661,33 @@
     };
 
     window.jwtOpenFinalOut = () => {
+        window.jwtGo('final-out-menu');
+    };
+
+    window.jwtOpenFinalOutEntry = () => {
         const s = J.s;
         s.foBatch = []; s.foAcceptOpen = false; s.foPickStep = 'kariger';
         s.foSelectedMaker = null; s.foSelectedBatchKey = null; s.foRightIdx = 0; s.editFoId = null;
         window.jwtGo('final-out');
+    };
+
+    window.jwtOpenFinalOutReg = () => {
+        J.s.editFoId = null;
+        J.s.foRegDateFrom = '';
+        J.s.foRegDateTo = '';
+        window.jwtGo('final-out-reg');
+    };
+
+    window.jwtApplyFoRegDates = () => {
+        J.s.foRegDateFrom = J.toIsoDate(document.getElementById('jwt-foreg-from')?.value || '');
+        J.s.foRegDateTo = J.toIsoDate(document.getElementById('jwt-foreg-to')?.value || '');
+        J.renderScreen();
+    };
+
+    window.jwtClearFoRegDates = () => {
+        J.s.foRegDateFrom = '';
+        J.s.foRegDateTo = '';
+        J.renderScreen();
     };
 
     window.jwtEditFinalOut = (entryId) => { J.s.editFoId = entryId; J.renderScreen(); };
@@ -903,7 +926,6 @@
             return;
         }
         if (s.curView === 'final-out') {
-            if (s.editFoId) { s.editFoId = null; J.renderScreen(); return; }
             if (s.foAcceptOpen) { window.jwtCancelFoAccept(); return; }
             if (s.foPickStep === 'stage') {
                 s.foPickStep = 'kariger';
@@ -917,6 +939,15 @@
                 kInp?.focus();
                 return;
             }
+            J.jwtBackTo('final-out-menu');
+            return;
+        }
+        if (s.curView === 'final-out-reg') {
+            if (s.editFoId) { s.editFoId = null; J.renderScreen(); return; }
+            J.jwtBackTo('final-out-menu');
+            return;
+        }
+        if (s.curView === 'final-out-menu') {
             J.jwtBackTo('gateway');
             return;
         }
@@ -969,7 +1000,20 @@
         if (s.curView === 'owner-worker-detail') { J.jwtBackTo('owner-workers'); return; }
         if (s.curView === 'owner-godam-detail') { J.jwtBackTo('owner-godam'); return; }
         if (s.curView === 'owner-workers' || s.curView === 'owner-godam') { J.jwtBackTo('owner-menu'); return; }
-        if (s.curView === 'owner-menu') { J.jwtBackTo('gateway'); return; }
+        if (s.curView === 'owner-menu') {
+            if (s.entryRoot === 'external') {
+                s.entryRoot = 'gateway';
+                if (window.__slReturnToStockSummary && typeof window.openStockSummaryModule === 'function') {
+                    window.__slReturnToStockSummary = false;
+                    window.openStockSummaryModule();
+                } else if (typeof window.backToDashboard === 'function') {
+                    window.backToDashboard();
+                }
+                return;
+            }
+            J.jwtBackTo('gateway');
+            return;
+        }
 
         if (s.curView === 'stock-detail') { J.jwtBackTo('stock-list'); return; }
         if (s.curView === 'stock-list') {
@@ -1086,7 +1130,7 @@
             'gateway', 'create-menu', 'alter-menu', 'alter-worker-list', 'alter-group-list',
             'jw-groups', 'jw-workers', 'jw-worker-menu', 'jw-worker-hist',
             'owner-menu', 'owner-workers', 'owner-godam', 'stock-list',
-            'bills-menu', 'bills-list'
+            'final-out-menu', 'bills-menu', 'bills-list'
         ];
 
         if (navViews.includes(s.curView) && !typing) {
@@ -1126,8 +1170,9 @@
     /* ========================================================================
        15. ENTRY POINTS & LEGACY ERP BRIDGE
     ======================================================================== */
-    J.openModuleAt = (startView) => {
+    J.openModuleAt = (startView, entryRoot = 'gateway') => {
         J.s.cachedSnapshot = null;
+        J.s.entryRoot = entryRoot;
         J.ensureSectionDOM();
         document.querySelectorAll('.module-section').forEach((secEl) => { secEl.style.display = 'none'; });
         const dView = document.getElementById('dashboard-view');
@@ -1137,8 +1182,8 @@
         window.jwtGo(startView || 'gateway');
     };
 
-    window.openJobWorkModule = () => J.openModuleAt('gateway');
-    window.openSareeModule = () => J.openModuleAt('stock-list');
+    window.openJobWorkModule = () => J.openModuleAt('gateway', 'gateway');
+    window.openSareeModule = () => J.openModuleAt('owner-menu', 'external');
 
     J.syncTallyMasterGroups = () => {
         const listBox = document.getElementById('tm-group-list');
