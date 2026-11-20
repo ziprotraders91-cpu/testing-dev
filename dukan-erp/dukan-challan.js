@@ -1,5 +1,5 @@
 /* ============================================================================
-   CHALLAN & PACKING SLIP (Fresh Stock Auto-Minus + Privacy Parcel Print)
+   CHALLAN & PACKING SLIP (Tally Batch Entry + Fresh Stock Minus + Privacy Slip)
    File: dukan-erp/dukan-challan.js
 ============================================================================ */
 (() => {
@@ -11,11 +11,9 @@
     D.openChallan = () => {
         D.screen = 'challan';
         D.onEsc = null;
-        const parties = D.get('dukan_parties');
-        if (!selPartyId && parties[0]) selPartyId = parties[0].id;
-        linkedOrderId = '';
+        selPartyId = ''; linkedOrderId = '';
         chItems = [{ name: '', qty: '', rate: '' }];
-        render();
+        render('ch-party');
     };
 
     D.loadOrderInChallan = (partyId, orderId) => {
@@ -25,74 +23,129 @@
         linkedOrderId = orderId;
         const ord = D.get('dukan_orders').find((o) => o.id === orderId);
         chItems = ord ? ord.items.map((i) => ({ name: i.name, qty: i.qty, rate: i.rate })) : [{ name: '', qty: '', rate: '' }];
-        render();
+        render('ch-no');
     };
 
-    function render() {
+    function render(focusId = 'ch-party') {
         const parties = D.get('dukan_parties');
         const orders = D.get('dukan_orders');
         const designs = D.get('dukan_designs');
         const challans = D.get('dukan_challans');
         const p = parties.find((x) => x.id === selPartyId) || {};
-        const pPending = orders.filter((o) => o.partyId === selPartyId && o.status !== 'Complete');
+        const ordObj = linkedOrderId ? orders.find((o) => o.id === linkedOrderId) : null;
 
         const left = `
-            <div class="dk-row"><label>Party Name :</label><input id="ch-party" value="${D.esc(p.name || '')}" readonly></div>
+            <div class="dk-row"><label>Party Name :</label><input id="ch-party" value="${D.esc(p.name || '')}" placeholder="Type karein ya Side List chunein..." autocomplete="off"></div>
+            <div class="dk-row"><label>Load Order # :</label><input id="ch-ord" value="${D.esc(ordObj ? `#${ordObj.no}` : '')}" placeholder="Side List se Pending Order chunein (optional)" autocomplete="off"></div>
             <div class="dk-row"><label>Address / City :</label><input id="ch-addr" value="${D.esc([p.address, p.city].filter(Boolean).join(', '))}"></div>
-            <div class="dk-row"><label>Mobile / GST :</label><div style="display:flex;gap:8px;"><input id="ch-mob" value="${D.esc(p.mob || '')}"><input id="ch-gst" value="${D.esc(p.gst || '')}"></div></div>
-            <div class="dk-row"><label>Challan # / Marka :</label><div style="display:flex;gap:8px;"><input id="ch-no" value="CH-${101 + challans.length}"><input id="ch-marka" value="${D.esc(p.marka || '')}"></div></div>
+            <div class="dk-row"><label>Mobile / GST :</label><div style="display:flex;gap:8px;"><input id="ch-mob" value="${D.esc(p.mob || '')}" placeholder="Mobile"><input id="ch-gst" value="${D.esc(p.gst || '')}" placeholder="GSTIN"></div></div>
+            <div class="dk-row"><label>Challan # / Marka :</label><div style="display:flex;gap:8px;"><input id="ch-no" value="CH-${101 + challans.length}"><input id="ch-marka" value="${D.esc(p.marka || '')}" placeholder="Marka"></div></div>
             <div class="dk-row"><label>Bale No. (Slip) :</label><input id="ch-bale" value="BALE-${String(challans.length + 1).padStart(2, '0')}"></div>
 
-            <div class="dk-sec">Challan Items (Save par Fresh Saree Stock Auto-Minus hoga)</div>
+            <div class="dk-sec">Batch Items (Rate par Enter = Nayi Line | Khali Design par Enter = Finish)</div>
             <table class="dk-tbl">
-                <thead><tr><th>Design</th><th>Fresh Avail</th><th>Challan Qty</th><th>Rate</th></tr></thead>
+                <thead><tr><th>#</th><th>Design</th><th>Fresh Avail</th><th>Challan Qty</th><th>Rate</th></tr></thead>
                 <tbody>${chItems.map((it, i) => {
                     const ds = designs.find((d) => String(d.design || '').toUpperCase() === String(it.name || '').toUpperCase());
                     return `<tr>
-                        <td><input value="${D.esc(it.name)}" onchange="DukanERP.chUpd(${i},'name',this.value)" style="width:100%;padding:4px;border:1px solid #d1d5db;"></td>
+                        <td>${i + 1}</td>
+                        <td><input id="ch-it-${i}-name" value="${D.esc(it.name)}" oninput="DukanERP.chUpd(${i},'name',this.value)" placeholder="Design..." autocomplete="off"></td>
                         <td style="color:#15803d;font-weight:700;">${ds ? D.num(ds.freshQty) : 0} Pc</td>
-                        <td><input type="number" value="${it.qty}" onchange="DukanERP.chUpd(${i},'qty',this.value)" style="width:70px;padding:4px;border:1px solid #d1d5db;"></td>
-                        <td><input type="number" value="${it.rate}" onchange="DukanERP.chUpd(${i},'rate',this.value)" style="width:70px;padding:4px;border:1px solid #d1d5db;"></td>
+                        <td><input id="ch-it-${i}-qty" type="number" value="${it.qty}" oninput="DukanERP.chUpd(${i},'qty',this.value)" placeholder="0"></td>
+                        <td><input id="ch-it-${i}-rate" type="number" value="${it.rate}" oninput="DukanERP.chUpd(${i},'rate',this.value)" placeholder="0"></td>
                     </tr>`;
                 }).join('')}</tbody>
             </table>
-            <div style="display:flex; justify-content:space-between; margin-top:10px; flex-wrap:wrap; gap:8px;">
-                <button type="button" class="dk-btn" onclick="DukanERP.chAddRow()">+ Add Row</button>
-                <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                    <button type="button" class="dk-btn-gold" onclick="DukanERP.saveChallan()">💾 Save &amp; Minus Stock</button>
-                    <button type="button" class="dk-btn" onclick="DukanERP.printChallan()">🖨️ Print Challan</button>
-                    <button type="button" class="dk-btn" onclick="DukanERP.printPackingSlip()">📦 Privacy Packing Slip</button>
+
+            <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:10px;">
+                <button type="button" class="dk-btn" onclick="DukanERP.printChallan()">🖨️ Print Challan</button>
+                <button type="button" class="dk-btn" onclick="DukanERP.printPackingSlip()">📦 Privacy Packing Slip</button>
+            </div>
+
+            <div class="dk-accept" id="dk-accept-box">
+                <strong>Save Challan &amp; Minus Fresh Stock?</strong>
+                <div style="display:flex; gap:8px;">
+                    <button type="button" class="dk-btn-gold" id="dk-accept-yes" onclick="DukanERP.saveChallan()">Yes (Y)</button>
+                    <button type="button" class="dk-btn" id="dk-accept-no" onclick="document.getElementById('dk-accept-box').style.display='none'; DukanERP.focusField('ch-bale');">No (N)</button>
                 </div>
             </div>
         `;
 
         D.renderShell(`<h2>Challan &amp; Packing Slip</h2>`, left, 'Privacy Slip par Party Name / Mobile print nahi hoga');
 
-        // Bagal me: Pehle Party switch, phir us Party ke Pending Orders load karne ka option
-        const sideArr = [
-            ...pPending.map((o) => ({
-                label: `Load Order #${o.no}`,
-                meta: (o.items || []).map((i) => `${i.name}:${i.qty}`).join(', '),
-                active: o.id === linkedOrderId,
-                ordId: o.id
-            })),
-            ...parties.slice(0, 40).map((x) => ({
-                label: `Party: ${x.name}`, meta: x.city || '', pid: x.id
-            }))
-        ];
-        D.setSide(`${p.name || 'Select Party'} — Orders`, `${pPending.length} Pending`, sideArr, (it) => {
-            if (it.ordId) D.loadOrderInChallan(selPartyId, it.ordId);
-            else if (it.pid) { selPartyId = it.pid; linkedOrderId = ''; chItems = [{ name: '', qty: '', rate: '' }]; render(); }
-        }, 'ch-party');
+        const focusOrder = ['ch-party', 'ch-ord', 'ch-addr', 'ch-mob', 'ch-gst', 'ch-no', 'ch-marka', 'ch-bale'];
+        const sideBindings = {
+            'ch-party': {
+                title: 'List of Parties',
+                allowCustom: false,
+                getItems: (q) => parties.filter((x) => !q || `${x.name} ${x.city} ${x.marka}`.toLowerCase().includes(q.toLowerCase()))
+                    .slice(0, 60).map((x) => ({ id: x.id, label: x.name, meta: `${x.city || ''} · ${x.marka || ''}` })),
+                onPick: (it) => { selPartyId = it.id; linkedOrderId = ''; render('ch-ord'); }
+            },
+            'ch-ord': {
+                title: `${p.name || 'Party'} — Pending Orders`,
+                allowCustom: true,
+                getItems: (q) => orders
+                    .filter((o) => (!selPartyId || o.partyId === selPartyId) && o.status !== 'Complete' && (!q || String(o.no).includes(q)))
+                    .map((o) => ({ id: o.id, pid: o.partyId, label: `Order #${o.no}`, meta: (o.items || []).map((i) => `${i.name}:${i.qty}`).join(', ') })),
+                onPick: (it) => D.loadOrderInChallan(it.pid, it.id)
+            }
+        };
+
+        chItems.forEach((_, i) => {
+            focusOrder.push(`ch-it-${i}-name`, `ch-it-${i}-qty`, `ch-it-${i}-rate`);
+            sideBindings[`ch-it-${i}-name`] = {
+                title: 'List of Designs (Fresh Stock)',
+                allowCustom: true,
+                getItems: (q) => designs.filter((d) => !q || d.design.toLowerCase().includes(q.toLowerCase()))
+                    .slice(0, 60).map((d) => ({ label: d.design, meta: `${D.num(d.freshQty)} Pc` })),
+                onPick: (it) => {
+                    chItems[i].name = it.label;
+                    const inp = document.getElementById(`ch-it-${i}-name`);
+                    if (inp) inp.value = it.label;
+                    D.focusField(`ch-it-${i}-qty`);
+                },
+                onCustomEnter: (val) => {
+                    if (!String(val || '').trim()) { D.askAccept(() => D.saveChallan()); return true; }
+                    return false;
+                }
+            };
+        });
+
+        const lastRateId = `ch-it-${chItems.length - 1}-rate`;
+        const lastRateEl = document.getElementById(lastRateId);
+        if (lastRateEl) {
+            lastRateEl.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault(); e.stopImmediatePropagation();
+                    if (String(chItems[chItems.length - 1].name || '').trim()) {
+                        chItems.push({ name: '', qty: '', rate: '' });
+                        render(`ch-it-${chItems.length - 1}-name`);
+                    } else {
+                        D.askAccept(() => D.saveChallan());
+                    }
+                }
+            });
+        }
+
+        D.bindFormControls({
+            focusOrder,
+            sideBindings,
+            defaultSide: () => D.renderSide('Challan Summary', `${chItems.filter(x => x.name).length} Items`, chItems.filter(x => x.name).map((x) => ({
+                label: x.name, meta: `${x.qty || 0} Pc`
+            })), false),
+            onFinishForm: () => D.askAccept(() => D.saveChallan())
+        });
+
+        D.focusField(focusId);
     }
 
-    D.chUpd = (i, k, v) => { chItems[i][k] = k === 'name' ? v.toUpperCase() : v; render(); };
-    D.chAddRow = () => { chItems.push({ name: '', qty: '', rate: '' }); render(); };
+    D.chUpd = (i, k, v) => { chItems[i][k] = k === 'name' ? v.toUpperCase() : v; };
 
     D.saveChallan = () => {
-        if (!selPartyId) return alert('Party chunein!');
+        if (!selPartyId) return alert('Pehle Party chunein!');
         const valid = chItems.filter((r) => String(r.name || '').trim() && D.num(r.qty) > 0);
-        if (!valid.length) return alert('Challan item bharein!');
+        if (!valid.length) return alert('Challan item & qty bharein!');
 
         const p = D.get('dukan_parties').find((x) => x.id === selPartyId) || {};
         const challans = D.get('dukan_challans');
@@ -114,17 +167,15 @@
         challans.push(rec);
         D.set('dukan_challans', challans);
 
-        // Fresh Stock Auto-Minus
         rec.items.forEach((it) => D.adjustFreshStock(it.name, -D.num(it.qty)));
 
-        // Mark linked order Complete
         if (linkedOrderId) {
             const ords = D.get('dukan_orders');
             const ord = ords.find((o) => o.id === linkedOrderId);
             if (ord) { ord.status = 'Complete'; D.set('dukan_orders', ords); }
         }
         alert(`✅ Challan ${rec.no} save hua aur Fresh Stock minus ho gaya!`);
-        render();
+        D.openChallan();
     };
 
     D.printChallan = () => {
@@ -140,7 +191,6 @@
         w.document.close(); w.print();
     };
 
-    // Competition-Safe Packing Slip (NO Party Name / Mobile!)
     D.printPackingSlip = () => {
         const p = D.get('dukan_parties').find((x) => x.id === selPartyId) || {};
         const firm = (D.get('dukan_firms')[0] || {}).name || 'INDIAN FABRICS';
