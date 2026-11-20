@@ -1,0 +1,323 @@
+/* ============================================================================
+   SIMPLICITY ERP (THE TALLY BRIDGE) - DUKAN CORE & GATEWAY
+   File: dukan-erp/dukan-core.js
+============================================================================ */
+(() => {
+    'use strict';
+
+    const D = window.DukanERP = {
+        screen: 'gateway', // 'gateway' | 'create' | 'party-reg' | 'barcode' | 'order' | 'challan' | 'pending' | 'complete'
+        gwIdx: 0,
+        pageSize: 25,
+        sideItems: [],
+        sideIdx: 0,
+        sideHandler: null,
+        activeSideInput: null
+    };
+
+    D.esc = (s) => String(s ?? '').replace(/[&<>"']/g, (m) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[m]));
+
+    D.num = (v) => {
+        const n = parseFloat(String(v ?? '').replace(/,/g, ''));
+        return isNaN(n) || !isFinite(n) ? 0 : n;
+    };
+
+    D.today = () => (typeof window.getTodayDate === 'function')
+        ? window.getTodayDate()
+        : new Date().toISOString().split('T')[0];
+
+    D.get = (key) => {
+        try {
+            if (typeof window.getStore === 'function') {
+                const res = window.getStore(key);
+                return Array.isArray(res) ? res : [];
+            }
+            const raw = localStorage.getItem(key);
+            const parsed = raw ? JSON.parse(raw) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (_) { return []; }
+    };
+
+    D.set = (key, arr) => {
+        const list = Array.isArray(arr) ? arr : [];
+        try {
+            if (typeof window.setStore === 'function') window.setStore(key, list);
+            else localStorage.setItem(key, JSON.stringify(list));
+        } catch (_) {}
+    };
+
+    D.paginate = (arr, page = 1, size = D.pageSize) => {
+        const total = arr.length;
+        const pages = Math.max(1, Math.ceil(total / size));
+        const p = Math.max(1, Math.min(page, pages));
+        const start = (p - 1) * size;
+        return { rows: arr.slice(start, start + size), page: p, pages, total, start };
+    };
+
+    D.pagerHTML = (pg, fnName) => `
+        <div class="dk-pager">
+            <span>Showing ${pg.total ? pg.start + 1 : 0}-${Math.min(pg.start + D.pageSize, pg.total)} of ${pg.total} (25/Page)</span>
+            <div style="display:flex; gap:6px;">
+                <button type="button" class="dk-btn" ${pg.page <= 1 ? 'disabled' : ''} onclick="${fnName}(${pg.page - 1})">◀ Prev</button>
+                <span style="padding:5px 8px;">Page ${pg.page}/${pg.pages}</span>
+                <button type="button" class="dk-btn" ${pg.page >= pg.pages ? 'disabled' : ''} onclick="${fnName}(${pg.page + 1})">Next ▶</button>
+            </div>
+        </div>
+    `;
+
+    // Fresh Saree Stock Deduction Hook (Row-safe for existing saree_stock)
+    D.adjustFreshStock = (designName, deltaQty) => {
+        const nm = String(designName || '').trim().toUpperCase();
+        if (!nm || !deltaQty) return;
+        const designs = D.get('dukan_designs');
+        const d = designs.find((x) => String(x.design || '').toUpperCase() === nm);
+        if (d) {
+            d.freshQty = Math.max(0, D.num(d.freshQty) + deltaQty);
+            D.set('dukan_designs', designs);
+        }
+        const sStock = D.get('saree_stock');
+        if (sStock.length) {
+            const match = sStock.find((x) => {
+                const cat = String(x?.category || x?.status || 'fresh').toLowerCase();
+                const xName = String(x?.name || x?.design || '').trim().toUpperCase();
+                return cat === 'fresh' && xName === nm;
+            });
+            if (match) {
+                if (match.pcs !== undefined) match.pcs = Math.max(0, D.num(match.pcs) + deltaQty);
+                else if (match.qty !== undefined) match.qty = Math.max(0, D.num(match.qty) + deltaQty);
+                D.set('saree_stock', sStock);
+            }
+        }
+        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+    };
+
+    // Offline Code39 SVG Barcode
+    const C39 = {
+        '0':'nnnwwnwnn','1':'wnnwnnnnw','2':'nnwwnnnnw','3':'wnwwnnnnn','4':'nnnwwnnnw','5':'wnnwwnnnn',
+        '6':'nnwwwnnnn','7':'nnnwnnwnw','8':'wnnwnnwnn','9':'nnwwnnwnn','A':'wnnnnwnnw','B':'nnwnnwnnw',
+        'C':'wnwnnwnnn','D':'nnnnwwnnw','E':'wnnnwwnnn','F':'nnwnwwnnn','G':'nnnnnwwnw','H':'wnnnnwwnn',
+        'I':'nnwnnwwnn','J':'nnnnwwwnn','K':'wnnnnnnww','L':'nnwnnnnww','M':'wnwnnnnwn','N':'nnnnwnnww',
+        'O':'wnnnwnnwn','P':'nnwnwnnwn','Q':'nnnnnnwww','R':'wnnnnnwwn','S':'nnwnnnwwn','T':'nnnnwnwwn',
+        'U':'wwnnnnnnw','V':'nwwnnnnnw','W':'wwwnnnnnn','X':'nwnnwnnnw','Y':'wwnnwnnnn','Z':'nwwnwnnnn',
+        '-':'nwnnnnwnw','.':'wwnnnnwnn',' ':'nwwnnnwnn','*':'nwnnwnwnn'
+    };
+    D.barcodeSVG = (txt, h = 38) => {
+        const clean = `*${String(txt || 'SAREE').toUpperCase().replace(/[^0-9A-Z\-. ]/g, '')}*`;
+        let x = 2; const bars = [];
+        for (let i = 0; i < clean.length; i++) {
+            const p = C39[clean[i]] || C39['-'];
+            for (let j = 0; j < 9; j++) {
+                const w = p[j] === 'w' ? 2.8 : 1.1;
+                if (j % 2 === 0) bars.push(`<rect x="${x}" y="1" width="${w}" height="${h}" fill="#111827"/>`);
+                x += w;
+            }
+            x += 1.4;
+        }
+        return `<svg viewBox="0 0 ${Math.ceil(x + 2)} ${h + 2}" width="100%" height="${h}" preserveAspectRatio="none">${bars.join('')}</svg>`;
+    };
+
+    D.ensureStyles = () => {
+        if (document.getElementById('dk-tally-styles')) return;
+        const st = document.createElement('style');
+        st.id = 'dk-tally-styles';
+        st.textContent = `
+            #dukan-section { padding:0 !important; background:transparent !important; box-shadow:none !important; border:none !important; font-family:'Inter',system-ui,sans-serif; }
+            .dk-gw-card { max-width:490px; margin:12px auto; background:#fff; border:1px solid #e5d5a7; border-radius:10px; box-shadow:0 12px 30px rgba(0,0,0,0.08); overflow:hidden; }
+            .dk-gw-head { background:#fdf6e2; border-bottom:1px solid #e5d5a7; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; font-weight:800; font-size:14.5px; }
+            .dk-gw-sec { font-size:10px; font-weight:800; text-transform:uppercase; color:#92400e; padding:10px 16px 4px; letter-spacing:0.5px; }
+            .dk-gw-row { width:100%; border:none; background:transparent; padding:9px 16px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; font-size:13.5px; font-weight:600; color:#1f2937; text-align:left; }
+            .dk-gw-row:hover { background:#fef9ea; }
+            .dk-gw-row.active { background:#eab01e; color:#fff; font-weight:700; }
+            .dk-gw-row small { font-size:11px; color:#6b7280; font-weight:600; }
+            .dk-gw-row.active small { color:#fef9ea; }
+            .dk-gw-key { text-decoration:underline; font-weight:800; color:#b45309; }
+            .dk-gw-row.active .dk-gw-key { color:#fff; }
+            .dk-card { width:100%; max-width:1040px; margin:6px auto; background:rgba(255,255,255,0.96); border:1px solid #e5e7eb; border-radius:10px; box-shadow:0 12px 32px rgba(0,0,0,0.08); overflow:hidden; }
+            .dk-head { padding:12px 18px; border-bottom:1px solid #eceff3; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; }
+            .dk-head-l { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+            .dk-head h2 { margin:0; font-size:16.5px; font-weight:800; color:#1f2937; }
+            .dk-tab { border:1px solid #d1d5db; background:#fff; color:#374151; padding:5px 12px; border-radius:999px; font-size:11.5px; font-weight:700; cursor:pointer; }
+            .dk-tab.active { background:#eab01e; border-color:#d99b07; color:#fff; }
+            .dk-btn { border:1px solid #d1d5db; background:#f9fafb; color:#374151; padding:6px 12px; border-radius:6px; font-size:12px; font-weight:700; cursor:pointer; }
+            .dk-btn:hover:not(:disabled) { border-color:#d99b07; background:#fef9ea; }
+            .dk-btn:disabled { opacity:0.45; cursor:not-allowed; }
+            .dk-btn-gold { background:#eab01e; border:1px solid #d99b07; color:#fff; padding:7px 16px; border-radius:6px; font-size:12.5px; font-weight:800; cursor:pointer; }
+            .dk-body { display:grid; grid-template-columns:1.45fr 0.95fr; gap:18px; padding:16px 20px; align-items:start; }
+            .dk-row { display:grid; grid-template-columns:145px 1fr; align-items:center; gap:10px; margin-bottom:9px; }
+            .dk-row label { font-size:12.5px; font-weight:700; color:#374151; }
+            .dk-row input, .dk-row select { width:100%; padding:7px 10px; border:1px solid #d1d5db; border-radius:5px; font-size:12.5px; font-weight:600; outline:none; background:#fff; }
+            .dk-row input:focus, .dk-row select:focus { border-color:#eab01e; box-shadow:0 0 0 2px rgba(234,176,30,0.2); }
+            .dk-sec { font-size:10.5px; font-weight:800; color:#92400e; text-transform:uppercase; letter-spacing:0.4px; margin:12px 0 8px; padding-top:8px; border-top:1px dashed #e5e7eb; }
+            .dk-side-box { background:#fff; border:1px solid #e5e7eb; border-radius:6px; overflow:hidden; }
+            .dk-side-head { padding:9px 14px; font-size:12.5px; font-weight:800; border-bottom:1px solid #e5e7eb; background:#fafafa; display:flex; justify-content:space-between; }
+            .dk-side-head small { color:#6b7280; font-weight:600; }
+            .dk-side-list { max-height:390px; overflow-y:auto; }
+            .dk-side-opt { padding:8px 13px; border-bottom:1px solid #f3f4f6; cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12.5px; font-weight:600; }
+            .dk-side-opt:hover { background:#fef9ea; }
+            .dk-side-opt.selected { background:#eab01e; color:#fff; font-weight:700; }
+            .dk-side-opt small { font-size:11px; color:#9ca3af; font-weight:600; }
+            .dk-side-opt.selected small { color:#fff; }
+            .dk-tbl { width:100%; border-collapse:collapse; margin-top:8px; border:1px solid #e5e7eb; font-size:12px; background:#fff; }
+            .dk-tbl th { background:#fdf6e2; padding:7px 8px; text-align:left; font-weight:800; border-bottom:1px solid #e5d5a7; }
+            .dk-tbl td { padding:7px 8px; border-bottom:1px solid #f3f4f6; }
+            .dk-tbl tr.click-row { cursor:pointer; }
+            .dk-tbl tr.click-row:hover { background:#fef9ea; }
+            .dk-tbl tr.click-row.active { background:#eab01e; color:#fff; font-weight:700; }
+            .dk-pager { display:flex; justify-content:space-between; align-items:center; margin-top:10px; font-size:11.5px; font-weight:700; color:#6b7280; flex-wrap:wrap; gap:8px; }
+            .dk-foot { padding:9px 18px; border-top:1px solid #eceff3; background:#fafafa; display:flex; justify-content:space-between; font-size:11px; color:#6b7280; font-weight:600; }
+            .dk-sticker { width:240px; border:1.5px dashed #d9b86c; border-radius:8px; padding:10px 12px; background:#fff; text-align:center; }
+            @media (max-width:860px) { .dk-body { grid-template-columns:1fr; } .dk-row { grid-template-columns:1fr; gap:4px; } }
+        `;
+        document.head.appendChild(st);
+    };
+
+    D.setSide = (title, sub, items, onPick, focusInputId = null) => {
+        D.sideItems = items || [];
+        D.sideHandler = onPick;
+        D.activeSideInput = focusInputId;
+        const activeIdx = D.sideItems.findIndex((x) => x.active);
+        D.sideIdx = activeIdx >= 0 ? activeIdx : 0;
+
+        const tEl = document.getElementById('dk-side-title');
+        const sEl = document.getElementById('dk-side-sub');
+        const lEl = document.getElementById('dk-side-items');
+        if (!tEl || !lEl) return;
+
+        tEl.textContent = title;
+        if (sEl) sEl.textContent = sub;
+        if (!D.sideItems.length) {
+            lEl.innerHTML = `<div style="padding:16px; text-align:center; color:#9ca3af; font-size:12px;">Koi record nahi mila</div>`;
+            return;
+        }
+        lEl.innerHTML = D.sideItems.map((it, i) => `
+            <div class="dk-side-opt ${i === D.sideIdx ? 'selected' : ''}" data-sidx="${i}" onmousedown="event.preventDefault(); DukanERP.pickSide(${i})">
+                <span>${D.esc(it.label)}</span>
+                <small>${D.esc(it.meta || '')}</small>
+            </div>
+        `).join('');
+    };
+
+    D.pickSide = (idx) => {
+        if (!D.sideItems[idx] || typeof D.sideHandler !== 'function') return;
+        D.sideIdx = idx;
+        D.sideHandler(D.sideItems[idx], idx);
+    };
+
+    D.renderShell = (headLeftHTML, leftBodyHTML, footLeft = 'Simplicity · The Tally Bridge') => {
+        const sec = document.getElementById('dukan-section');
+        if (!sec) return;
+        sec.innerHTML = `
+            <div class="dk-card">
+                <div class="dk-head">
+                    <div class="dk-head-l">${headLeftHTML}</div>
+                    <button type="button" class="dk-btn" onclick="openDukanGateway()">← [Esc] Dukan Gateway</button>
+                </div>
+                <div class="dk-body">
+                    <div id="dk-left">${leftBodyHTML}</div>
+                    <div class="dk-side-box">
+                        <div class="dk-side-head"><span id="dk-side-title">List</span><small id="dk-side-sub">Select</small></div>
+                        <div class="dk-side-list" id="dk-side-items"></div>
+                    </div>
+                </div>
+                <div class="dk-foot">
+                    <span>${D.esc(footLeft)}</span>
+                    <span>Simplicity · The Tally Bridge</span>
+                </div>
+            </div>
+        `;
+    };
+
+    const GW_ITEMS = [
+        { k: 'c', label: '<span class="dk-gw-key">C</span>reate (Firm / Party / Alter)', meta: 'Master Setup', fn: () => D.openCreate() },
+        { k: 'p', label: '<span class="dk-gw-key">P</span>arty Register', meta: 'Pending / Complete', fn: () => D.openPartyRegister() },
+        { k: 'n', label: '<span class="dk-gw-key">N</span>aming &amp; Barcoding', meta: 'Sticker Print', fn: () => D.openBarcode() },
+        { k: 'o', label: '<span class="dk-gw-key">O</span>rder Form', meta: 'Book Format', fn: () => D.openOrderForm() },
+        { k: 'h', label: 'C<span class="dk-gw-key">h</span>allan &amp; Packing Slip', meta: 'Stock Minus', fn: () => D.openChallan() },
+        { k: 'd', label: 'Pen<span class="dk-gw-key">d</span>ing Order (All)', meta: 'All Parties', fn: () => D.openAllOrders('Pending') },
+        { k: 'l', label: 'Comp<span class="dk-gw-key">l</span>ete Order (All)', meta: 'All Parties', fn: () => D.openAllOrders('Complete') }
+    ];
+
+    window.openDukanGateway = function () {
+        D.ensureStyles();
+        document.querySelectorAll('.module-section').forEach((s) => s.style.display = 'none');
+        const dView = document.getElementById('dashboard-view');
+        if (dView) dView.style.display = 'none';
+        const sec = document.getElementById('dukan-section');
+        if (!sec) return;
+        sec.style.display = 'block';
+        D.screen = 'gateway';
+
+        const ords = D.get('dukan_orders');
+        const pendC = ords.filter((o) => o.status !== 'Complete').length;
+        const compC = ords.filter((o) => o.status === 'Complete').length;
+        GW_ITEMS[5].meta = `${pendC} Pending`;
+        GW_ITEMS[6].meta = `${compC} Complete`;
+
+        sec.innerHTML = `
+            <div class="dk-gw-card">
+                <div class="dk-gw-head">
+                    <span>Gateway of Dukan Management</span>
+                    <button type="button" class="dk-btn" onclick="backToDashboard()">← [Esc] Main Gateway</button>
+                </div>
+                <div class="dk-gw-sec">Masters</div>
+                ${renderGwRow(0)}
+                <div class="dk-gw-sec">Registers &amp; Barcoding</div>
+                ${renderGwRow(1)}${renderGwRow(2)}
+                <div class="dk-gw-sec">Orders &amp; Dispatch</div>
+                ${renderGwRow(3)}${renderGwRow(4)}
+                <div class="dk-gw-sec">Reports (All Parties)</div>
+                ${renderGwRow(5)}${renderGwRow(6)}
+                <div class="dk-gw-head" style="border-top:1px solid #e5d5a7; border-bottom:none; font-size:11px; color:#92400e; font-weight:700;">
+                    <span>↑ ↓ Arrow · [Enter] Kholein · [Esc] Back</span>
+                    <span>The Tally Bridge</span>
+                </div>
+            </div>
+        `;
+    };
+
+    function renderGwRow(i) {
+        const it = GW_ITEMS[i];
+        return `<button type="button" class="dk-gw-row ${i === D.gwIdx ? 'active' : ''}" onclick="DukanERP.runGw(${i})"><span>${it.label}</span><small>${D.esc(it.meta)}</small></button>`;
+    }
+
+    D.runGw = (i) => {
+        D.gwIdx = i;
+        if (GW_ITEMS[i]) GW_ITEMS[i].fn();
+    };
+
+    document.addEventListener('keydown', (e) => {
+        const sec = document.getElementById('dukan-section');
+        if (!sec || sec.style.display === 'none') return;
+
+        if (D.screen === 'gateway') {
+            if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); window.backToDashboard(); return; }
+            if (e.key === 'ArrowDown') { e.preventDefault(); D.gwIdx = (D.gwIdx + 1) % GW_ITEMS.length; window.openDukanGateway(); return; }
+            if (e.key === 'ArrowUp') { e.preventDefault(); D.gwIdx = (D.gwIdx - 1 + GW_ITEMS.length) % GW_ITEMS.length; window.openDukanGateway(); return; }
+            if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); D.runGw(D.gwIdx); return; }
+            if (!e.ctrlKey && !e.altKey && e.key.length === 1) {
+                const idx = GW_ITEMS.findIndex((x) => x.k === e.key.toLowerCase());
+                if (idx >= 0) { e.preventDefault(); e.stopImmediatePropagation(); D.runGw(idx); }
+            }
+            return;
+        }
+
+        if (e.key === 'Escape') {
+            e.preventDefault(); e.stopImmediatePropagation();
+            if (typeof D.onEsc === 'function') D.onEsc();
+            else window.openDukanGateway();
+            return;
+        }
+
+        if (D.activeSideInput && document.activeElement?.id === D.activeSideInput && D.sideItems.length) {
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                D.sideIdx = e.key === 'ArrowDown' ? (D.sideIdx + 1) % D.sideItems.length : (D.sideIdx - 1 + D.sideItems.length) % D.sideItems.length;
+                document.querySelectorAll('#dk-side-items .dk-side-opt').forEach((el, i) => el.classList.toggle('selected', i === D.sideIdx));
+                return;
+            }
+            if (e.key === 'Enter') { e.preventDefault(); D.pickSide(D.sideIdx); }
+        }
+    });
+})();
