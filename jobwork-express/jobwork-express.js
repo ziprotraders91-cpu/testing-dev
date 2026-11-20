@@ -1,6 +1,6 @@
 /* ============================================================================
    SIMPLICITY ERP - JOBWORK EXPRESS VOUCHER (UNIFIED TRAIL & DYNAMIC GROUPS)
-   File: jobwork-express/jobwork-express.js (v3.3 - Fixed Worker Picker & Sync)
+   File: jobwork-express/jobwork-express.js (v3.4 - Fresh Complete Build)
    100% Synced with: jobwork-trail, saree_history, jobwork_workers,
    jobwork_groups, jobwork_firm_profile, jw_challan_seq,
    jobwork_sheets_*, dukan_transfer_history
@@ -889,6 +889,7 @@
                 movementType = item.data;
                 resetCurrentBatchPickerFields();
                 updateMovementUI();
+                renderExpressBatchGrid();
             }
             focusFirstField('jw-exp-worker-input');
         } else if (jwPickerMode === 'worker') {
@@ -1651,6 +1652,7 @@
                 }
             }
 
+            if (window._JWT && window._JWT.s) window._JWT.s.cachedSnapshot = null;
             if (typeof window.invalidateJobWorkCache === 'function') window.invalidateJobWorkCache(isDukan ? null : workerId);
             if (typeof window.invalidateSareeCalcCache === 'function') window.invalidateSareeCalcCache();
             if (typeof window.updateJobWorkHubBadges === 'function') window.updateJobWorkHubBadges();
@@ -1791,7 +1793,7 @@
                     <div><strong>Transport:</strong> ${esc(c.transport)}</div>
                     <div><strong>L.R. / Bale:</strong> ${esc(c.lrNo)}</div>
                 </div>
-                <div class="tot">TOTAL: ${c.totalPcs} PCS</div>
+                <div class="stot">TOTAL: ${c.totalPcs} PCS</div>
                 <div class="sdbox">DESIGN: ${esc(c.designNote)}</div>
             </div>
         `;
