@@ -1,8 +1,8 @@
 /* ============================================================================
    SIMPLICITY ERP - JOBWORK EXPRESS VOUCHER (UNIFIED TRAIL & DYNAMIC GROUPS)
-   File: jobwork-express/jobwork-express.js (v3.2 - Outstation Bill & Slip)
-   100% Synced with: jobwork-trail/jobwork-trail.js, saree_history,
-   jobwork_workers, jobwork_groups, jobwork_firm_profile, jw_challan_seq,
+   File: jobwork-express/jobwork-express.js (v3.3 - Fixed Worker Picker & Sync)
+   100% Synced with: jobwork-trail, saree_history, jobwork_workers,
+   jobwork_groups, jobwork_firm_profile, jw_challan_seq,
    jobwork_sheets_*, dukan_transfer_history
 ============================================================================ */
 
@@ -444,6 +444,18 @@
         return getWorkerPendingBatches(wId);
     };
 
+    const resetCurrentBatchPickerFields = () => {
+        selectedMaker = null;
+        selectedBatchKey = null;
+        jwMakerArrowUsed = false;
+        const mInp = document.getElementById('jw-exp-maker-input');
+        const sInp = document.getElementById('jw-exp-stage-input');
+        const qInp = document.getElementById('jw-exp-qty-input');
+        if (mInp) mInp.value = '';
+        if (sInp) sInp.value = '';
+        if (qInp) qInp.value = '';
+    };
+
     const ensureTallyJobWorkStyles = () => {
         const old = document.getElementById('jw-tally-styles');
         if (old) old.remove();
@@ -875,13 +887,20 @@
             if (item.data !== movementType) {
                 if (!confirmClearBatchIfNeeded('Len-Den')) return;
                 movementType = item.data;
+                resetCurrentBatchPickerFields();
                 updateMovementUI();
             }
             focusFirstField('jw-exp-worker-input');
         } else if (jwPickerMode === 'worker') {
             const wSel = document.getElementById('jw-exp-worker');
             const wInp = document.getElementById('jw-exp-worker-input');
-            if (wSel) wSel.value = item.data.id;
+            const prevWorkerId = wSel ? wSel.value : '';
+            const nextWorkerId = String(item.data.id || '');
+            if (prevWorkerId && nextWorkerId !== prevWorkerId && movementType === 'aayi' && activeCategory !== 'dukan') {
+                if (!confirmClearBatchIfNeeded('Worker')) return;
+            }
+            if (nextWorkerId !== prevWorkerId) resetCurrentBatchPickerFields();
+            if (wSel) wSel.value = nextWorkerId;
             if (wInp) wInp.value = item.data.label;
             focusFirstField('jw-exp-date');
         } else if (jwPickerMode === 'kariger') {
@@ -959,6 +978,7 @@
             </div>
         `;
         bar.style.display = 'flex';
+        bar.scrollIntoView({ block: 'nearest' });
         setTimeout(() => document.getElementById('jw-exp-accept-yes')?.focus(), 20);
     };
 
@@ -971,7 +991,7 @@
         const isDukan = (activeCategory === 'dukan');
         const workerId = document.getElementById('jw-exp-worker')?.value;
         if (!isDukan && !workerId) {
-            alert('Kripya Worker chunein!');
+            alert('Kripya list me se Worker chunein!');
             focusFirstField('jw-exp-worker-input');
             return;
         }
@@ -999,9 +1019,18 @@
 
         const attachPicker = (el, modeName, filterable) => {
             if (!el) return;
-            el.addEventListener('focus', () => showJwRightPicker(modeName, filterable ? el.value : ''));
+            el.addEventListener('focus', () => showJwRightPicker(modeName, ''));
             if (filterable) {
-                el.addEventListener('input', () => { jwPickerActiveIdx = 0; showJwRightPicker(modeName, el.value); });
+                el.addEventListener('input', () => {
+                    if (modeName === 'worker') {
+                        const wSel = document.getElementById('jw-exp-worker');
+                        const typed = el.value.trim().toLowerCase();
+                        const exact = getWorkerPickerList('').find((w) => w.label.toLowerCase() === typed);
+                        if (wSel) wSel.value = exact ? exact.id : '';
+                    }
+                    jwPickerActiveIdx = 0;
+                    showJwRightPicker(modeName, el.value);
+                });
             }
             el.addEventListener('keydown', (e) => {
                 if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -1192,12 +1221,12 @@
             if (!confirmClearBatchIfNeeded('Process')) return false;
             activeCategory = cat;
             movementType = 'gayi';
-            selectedMaker = null;
-            selectedBatchKey = null;
             expMeta = { jwNo: '', transport: '', lrNo: '', designNote: '' };
+            resetCurrentBatchPickerFields();
             updateCategoryUI();
             populateExpressWorkers();
             updateMovementUI();
+            renderExpressBatchGrid();
         }
         if (advanceFocus) {
             focusFirstField(activeCategory === 'dukan' ? 'jw-exp-worker-input' : 'jw-exp-movement-input');
@@ -1209,9 +1238,9 @@
         if (activeCategory === 'dukan') return;
         if (!confirmClearBatchIfNeeded('Len-Den')) return;
         movementType = (movementType === 'gayi') ? 'aayi' : 'gayi';
-        selectedMaker = null;
-        selectedBatchKey = null;
+        resetCurrentBatchPickerFields();
         updateMovementUI();
+        renderExpressBatchGrid();
         if (advanceFocus) focusFirstField('jw-exp-worker-input');
     };
 
@@ -1323,16 +1352,8 @@
             qty
         });
 
-        selectedMaker = null;
-        selectedBatchKey = null;
+        resetCurrentBatchPickerFields();
         jwPickerActiveIdx = -1;
-        jwMakerArrowUsed = false;
-        const mInp = document.getElementById('jw-exp-maker-input');
-        const sInp = document.getElementById('jw-exp-stage-input');
-        const qInp = document.getElementById('jw-exp-qty-input');
-        if (mInp) mInp.value = '';
-        if (sInp) sInp.value = '';
-        if (qInp) qInp.value = '';
 
         renderExpressBatchGrid();
         focusFirstField('jw-exp-maker-input');
@@ -1393,7 +1414,7 @@
         const dDate = toIsoDate(document.getElementById('jw-exp-date')?.value) || getToday();
 
         if (!isDukan && !workerId) {
-            alert('Kripya Worker chunein!');
+            alert('Kripya list me se Worker chunein!');
             focusFirstField('jw-exp-worker-input');
             return;
         }
@@ -1457,6 +1478,7 @@
                     date: dDate,
                     items: expressBatchItems.map((x) => ({ maker: x.maker, saree: x.saree, trail: formatTrail(x.doneStages, x.bucket), qty: x.qty }))
                 };
+                if (typeof window.renderDukanTransferTable === 'function') { try { window.renderDukanTransferTable(); } catch (_) {} }
             } else {
                 const worker = safeArr(getFromStore('jobwork_workers')).find((w) => String(w.id) === String(workerId));
                 const wName = worker ? worker.name : workerNameInput;
@@ -1629,7 +1651,7 @@
                 }
             }
 
-            if (typeof window.invalidateJobWorkCache === 'function') window.invalidateJobWorkCache(workerId);
+            if (typeof window.invalidateJobWorkCache === 'function') window.invalidateJobWorkCache(isDukan ? null : workerId);
             if (typeof window.invalidateSareeCalcCache === 'function') window.invalidateSareeCalcCache();
             if (typeof window.updateJobWorkHubBadges === 'function') window.updateJobWorkHubBadges();
             if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
@@ -1645,8 +1667,7 @@
             }
 
             expressBatchItems = [];
-            selectedMaker = null;
-            selectedBatchKey = null;
+            resetCurrentBatchPickerFields();
             jwPickerActiveIdx = 0;
             expMeta = {
                 jwNo: isOutstOut ? getNextChallanNo() : '',
@@ -1770,7 +1791,7 @@
                     <div><strong>Transport:</strong> ${esc(c.transport)}</div>
                     <div><strong>L.R. / Bale:</strong> ${esc(c.lrNo)}</div>
                 </div>
-                <div class="stot">TOTAL: ${c.totalPcs} PCS</div>
+                <div class="tot">TOTAL: ${c.totalPcs} PCS</div>
                 <div class="sdbox">DESIGN: ${esc(c.designNote)}</div>
             </div>
         `;
