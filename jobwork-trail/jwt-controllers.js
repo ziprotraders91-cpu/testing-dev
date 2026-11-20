@@ -983,6 +983,8 @@
 
     J.handleKeyDown = (e) => {
         const s = J.s;
+        if (document.getElementById('master-jobwork-express-modal')) return;
+
         const sec = document.getElementById('jw-trail-section');
         if (!sec || sec.style.display === 'none') return;
 
@@ -1125,6 +1127,7 @@
        15. ENTRY POINTS & LEGACY ERP BRIDGE
     ======================================================================== */
     J.openModuleAt = (startView) => {
+        J.s.cachedSnapshot = null;
         J.ensureSectionDOM();
         document.querySelectorAll('.module-section').forEach((secEl) => { secEl.style.display = 'none'; });
         const dView = document.getElementById('dashboard-view');
@@ -1172,12 +1175,24 @@
         };
     }
 
+    const origInvalidateJw = window.invalidateJobWorkCache;
+    window.invalidateJobWorkCache = (workerId) => {
+        J.s.cachedSnapshot = null;
+        if (typeof origInvalidateJw === 'function') origInvalidateJw(workerId);
+    };
+
+    const origInvalidateSaree = window.invalidateSareeCalcCache;
+    window.invalidateSareeCalcCache = () => {
+        J.s.cachedSnapshot = null;
+        if (typeof origInvalidateSaree === 'function') origInvalidateSaree();
+    };
+
     const origTriggerRefresh = window.triggerActiveSectionRefresh;
     window.triggerActiveSectionRefresh = () => {
+        J.s.cachedSnapshot = null;
         if (typeof origTriggerRefresh === 'function') origTriggerRefresh();
         const sec = document.getElementById('jw-trail-section');
         if (sec && sec.style.display !== 'none') {
-            J.s.cachedSnapshot = null;
             J.renderScreen();
         }
     };
