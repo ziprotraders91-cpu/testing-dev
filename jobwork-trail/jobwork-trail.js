@@ -2032,12 +2032,16 @@
                             </div>
                         </div>
 
-                        ${lastChallanObj && lastChallanObj.isOutstation ? `
-                            <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;">
-                                <button type="button" tabindex="-1" class="jwt-esc" onclick="jwtPrintLastChallan()">Last Challan [Alt+P]</button>
-                                <button type="button" tabindex="-1" class="jwt-esc" onclick="jwtPrintLastPackingSlip()">Last Packing Slip [Alt+L]</button>
+                        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap;">
+                            <span class="trail-muted">${vchBatch.length ? 'Khali Kariger par Enter ya Save dabayein' : 'Kariger ➔ Stage ➔ Pcs add karein'}</span>
+                            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                                ${lastChallanObj && lastChallanObj.isOutstation ? `
+                                    <button type="button" tabindex="-1" class="jwt-esc" onclick="jwtPrintLastChallan()">Last Challan [Alt+P]</button>
+                                    <button type="button" tabindex="-1" class="jwt-esc" onclick="jwtPrintLastPackingSlip()">Last Slip [Alt+L]</button>
+                                ` : ''}
+                                ${vchBatch.length ? `<button type="button" class="jwt-save" onclick="jwtAskVchAccept()">Save Batch [Ctrl+Enter]</button>` : ''}
                             </div>
-                        ` : ''}
+                        </div>
 
                         <div id="jwt-vch-accept" class="jwt-accept-bar" style="display:${vchAcceptOpen ? 'flex' : 'none'};">
                             <strong style="font-size:12px;">Accept? Batch Save Karein?</strong>
@@ -2472,6 +2476,11 @@
                                 </div>
                             </div>
 
+                            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap;">
+                                <span class="trail-muted">${foBatch.length ? 'Khali Kariger par Enter ya Save dabayein' : 'Kariger ➔ Stage ➔ Pcs add karein'}</span>
+                                ${foBatch.length ? `<button type="button" class="jwt-save" onclick="jwtAskFoAccept()">Save Final Out [Ctrl+Enter]</button>` : ''}
+                            </div>
+
                             <div id="jwt-fo-accept" class="jwt-accept-bar" style="display:${foAcceptOpen ? 'flex' : 'none'};">
                                 <strong style="font-size:12px;">Accept? Final Out Save Karein?</strong>
                                 <div style="display:flex; gap:6px;">
@@ -2802,6 +2811,15 @@
 
     window.jwtRemoveVchItem = (idx) => { syncVchMetaFromDom(); vchBatch.splice(idx, 1); vchRightIdx = vchBatch.length ? -1 : 0; renderScreen(); };
     window.jwtCommitVch = (printType) => commitVchBatch(printType);
+
+    window.jwtAskVchAccept = () => {
+        if (!vchBatch.length) return toast('Batch khali hai!', true);
+        vchAcceptOpen = true;
+        const bar = document.getElementById('jwt-vch-accept');
+        if (bar) bar.style.display = 'flex';
+        setTimeout(() => document.getElementById('jwt-vch-yes')?.focus(), 20);
+    };
+
     window.jwtCancelVchAccept = () => {
         vchAcceptOpen = false;
         const bar = document.getElementById('jwt-vch-accept');
@@ -2842,7 +2860,7 @@
             });
             kInp.addEventListener('input', () => {
                 vchPickStep = 'kariger';
-                vchRightIdx = 0;
+                vchRightIdx = (!kInp.value.trim() && vchBatch.length > 0) ? -1 : 0;
                 renderVchRightPanel(sourceBatches);
             });
             kInp.addEventListener('keydown', (e) => {
@@ -2984,6 +3002,15 @@
 
     window.jwtRemoveFoItem = (idx) => { foBatch.splice(idx, 1); foRightIdx = foBatch.length ? -1 : 0; renderScreen(); };
     window.jwtCommitFo = (doPrint) => commitFinalOutBatch(doPrint);
+
+    window.jwtAskFoAccept = () => {
+        if (!foBatch.length) return toast('Batch khali hai!', true);
+        foAcceptOpen = true;
+        const bar = document.getElementById('jwt-fo-accept');
+        if (bar) bar.style.display = 'flex';
+        setTimeout(() => document.getElementById('jwt-fo-yes')?.focus(), 20);
+    };
+
     window.jwtCancelFoAccept = () => {
         foAcceptOpen = false;
         const bar = document.getElementById('jwt-fo-accept');
@@ -3005,7 +3032,7 @@
             });
             kInp.addEventListener('input', () => {
                 foPickStep = 'kariger';
-                foRightIdx = 0;
+                foRightIdx = (!kInp.value.trim() && foBatch.length > 0) ? -1 : 0;
                 renderFoRightPanel(allBatches);
             });
             kInp.addEventListener('keydown', (e) => {
