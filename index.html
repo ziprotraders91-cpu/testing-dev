@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Welcome to Simplicity - ERP by Farhan Jawed</title>
+    <title>Simplicity ERP - The Tally Bridge</title>
 
     <!-- PWA & Mobile Meta Tags -->
     <link rel="manifest" href="manifest.json?v=3.3">
@@ -42,7 +42,7 @@
                 <a href="landing.html" class="sl-brand-top">
                     <span class="sl-logo-badge">S</span>
                     <span class="sl-brand-title">Simplicity</span>
-                    <span class="sl-brand-by">by Farhan Jawed</span>
+                    <span class="sl-brand-by">The Tally Bridge</span>
                 </a>
 
                 <div class="sl-form-slot">
@@ -171,7 +171,7 @@
                 <span class="nav-gold-mark">S</span>
                 <div>
                     <h2>Simplicity</h2>
-                    <p>by Farhan Jawed</p>
+                    <p>The Tally Bridge</p>
                 </div>
             </div>
 
@@ -327,8 +327,9 @@
                             <button type="button" class="gw-item" data-gw-key="w" onclick="slGwClick(this, openJobWorkModule)"><span>Job <span class="gw-key">W</span>ork Hub</span><span class="gw-val" id="btn-total-jobwork">Workers: 0</span></button>
                             <button type="button" class="gw-item" data-gw-key="d" onclick="slGwClick(this, openDayBookModule)"><span>Rozana <span class="gw-key">D</span>ay-Book</span><span class="gw-val">Daily Register</span></button>
                             <button type="button" class="gw-item" data-gw-key="o" onclick="slGwClick(this, openTaniOrderModule)"><span>Tani <span class="gw-key">O</span>rder &amp; Rangai</span><span class="gw-val" id="btn-total-tani-orders">0 Parchi</span></button>
+                            <button type="button" class="gw-item" data-gw-key="r" onclick="slGwClick(this, openDukanGateway)"><span>Mo<span class="gw-key">r</span>e (Dukan Management)</span><span class="gw-val">Order, Challan, Slip</span></button>
                         </div>
-                        <div class="gateway-footer-tip">[C] Create · [A] Alter · [U] Stock · ↑ ↓ Arrow · [Enter] Kholein</div>
+                        <div class="gateway-footer-tip">[C] Create · [A] Alter · [U] Stock · [R] More · ↑ ↓ Arrow · [Enter]</div>
                     </aside>
                 </div>
             </section>
@@ -338,6 +339,9 @@
 
             <!-- MODULE 0B: TALLY STOCK SUMMARY HUB (Loaded cleanly from core/tally-master.js) -->
             <section id="stock-summary-section" class="module-section" style="display:none;"></section>
+
+            <!-- MODULE 0C: DUKAN MANAGEMENT GATEWAY & MODULES (Loaded from dukan-erp/*.js) -->
+            <section id="dukan-section" class="module-section" style="display:none;"></section>
 
             <!-- MODULE: ROZANA DAY-BOOK -->
             <section id="daybook-section" class="module-section" style="display:none;">
@@ -476,7 +480,7 @@
                     <div class="form-row-3">
                         <div class="input-group"><label style="color:#059669;">RET BANA</label><input type="number" step="0.01" id="row-retbana" placeholder="0.00"></div>
                         <div class="input-group"><label style="color:#ea580c;">RET ZARI</label><input type="number" step="0.01" id="row-retzari" placeholder="0.00"></div>
-                        <div style="display:flex; align-items:flex-end;"><button type="button" id="row-submit-btn" class="add-btn" style="width:100%; padding:10px; font-weight:800;" onclick="saveTaniRow()">+ Line Jodein & Stock Minus</button></div>
+                        <div style="display:flex; align-items:flex-end;"><button type="button" id="row-submit-btn" class="add-btn" style="width:100%; padding:10px; font-weight:800;" onclick="saveTaniRow()">+ Line Jodein &amp; Stock Minus</button></div>
                     </div>
                 </div>
                 <div class="table-responsive">
@@ -572,7 +576,7 @@
 
             <!-- MODULE 5: PAYMENTS -->
             <section id="payment-section" class="module-section" style="display:none;">
-                <div class="module-header"><button type="button" class="back-btn" onclick="backToDashboard()">← Dashboard</button><h2 style="color:#7c3aed;">💳 Payments & Bakaya</h2></div>
+                <div class="module-header"><button type="button" class="back-btn" onclick="backToDashboard()">← Dashboard</button><h2 style="color:#7c3aed;">💳 Payments &amp; Bakaya</h2></div>
                 <div id="payment-karkhana-tabs-bar" class="sheet-tabs-bar" style="margin-bottom:12px;"></div>
                 <div style="display:flex; gap:12px; margin-bottom:14px;">
                     <div style="flex:1; background:white; padding:12px; border-radius:10px; text-align:center; border:1px solid #e2e8f0;">Paid: <h3 id="total-paid-display" style="color:#059669;">₹ 0</h3></div>
@@ -585,7 +589,7 @@
 
             <!-- MODULE 6: SANCHA (TANI & CHUKKA TABS + KG STOCK) -->
             <section id="sancha-section" class="module-section" style="display:none;">
-                <div class="module-header"><button type="button" class="back-btn" onclick="backToDashboard()">← Dashboard</button><h2 style="color:#0284c7;">⚙️ Sancha Stock (Tani & Chukka)</h2><button type="button" class="add-btn" style="background:#0284c7;" onclick="toggleAddSanchaForm()">+ Naya Sancha</button></div>
+                <div class="module-header"><button type="button" class="back-btn" onclick="backToDashboard()">← Dashboard</button><h2 style="color:#0284c7;">⚙️ Sancha Stock (Tani &amp; Chukka)</h2><button type="button" class="add-btn" style="background:#0284c7;" onclick="toggleAddSanchaForm()">+ Naya Sancha</button></div>
                 <div class="sheet-tabs-bar" style="margin-bottom:12px;"><div style="display:flex; gap:8px;"><button type="button" class="sheet-tab active" id="tab-sancha-tani" onclick="switchSanchaCategory('tani')">🧵 1. Tani Stock</button><button type="button" class="sheet-tab" id="tab-sancha-chukka" onclick="switchSanchaCategory('chukka')">⚙️ 2. Chukka Stock</button></div></div>
                 <div id="sancha-karkhana-tabs-bar" class="sheet-tabs-bar" style="margin-bottom:12px;"></div>
                 <div id="sancha-opening-box" class="summary-box" style="margin-bottom:14px; text-align:left; background:#f0f9ff;"><h3 id="sancha-opening-val" style="color:#0284c7;">0.00 Kg Bacha</h3></div>
@@ -606,7 +610,7 @@
 
             <!-- MODULE 14: TANI ORDER & RANGAI REGISTER SECTION -->
             <section id="tani-order-section" class="module-section" style="display:none;">
-                <div class="module-header"><button type="button" class="back-btn" onclick="backToDashboard()">← Dashboard</button><h2 style="color:#b45309; font-size:19px;">📜 Tani Order & Rangai Register</h2><button type="button" class="add-btn" style="background:#d97706;" onclick="toggleTaniOrderForm()">+ Nayi Tani Parchi</button></div>
+                <div class="module-header"><button type="button" class="back-btn" onclick="backToDashboard()">← Dashboard</button><h2 style="color:#b45309; font-size:19px;">📜 Tani Order &amp; Rangai Register</h2><button type="button" class="add-btn" style="background:#d97706;" onclick="toggleTaniOrderForm()">+ Nayi Tani Parchi</button></div>
                 <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:10px; margin-bottom:14px;">
                     <div style="background:white; border:1px solid #fed7aa; padding:10px; border-radius:8px; text-align:center;"><small style="color:#b45309; font-weight:700;">Kul Parchi</small><h4 id="tani-stat-total" style="color:#b45309; margin-top:2px;">0</h4></div>
                     <div style="background:white; border:1px solid #fef08a; padding:10px; border-radius:8px; text-align:center;"><small style="color:#ca8a04; font-weight:700;">🟡 Sancha Par</small><h4 id="tani-stat-sancha" style="color:#ca8a04; margin-top:2px;">0</h4></div>
@@ -771,10 +775,18 @@
     <!-- 🏛️ TALLY DASHBOARD, GATEWAY SHORTCUTS & CREATE/ALTER MASTER -->
     <script src="core/tally-master.js?v=3.5"></script>
     <script src="jobwork-trail/jwt-core.js"></script>
-<script src="jobwork-trail/jwt-engine.js"></script>
-<script src="jobwork-trail/jwt-print.js"></script>
-<script src="jobwork-trail/jwt-screens-1.js"></script>
-<script src="jobwork-trail/jwt-screens-2.js"></script>
-<script src="jobwork-trail/jwt-controllers.js"></script>
+    <script src="jobwork-trail/jwt-engine.js"></script>
+    <script src="jobwork-trail/jwt-print.js"></script>
+    <script src="jobwork-trail/jwt-screens-1.js"></script>
+    <script src="jobwork-trail/jwt-screens-2.js"></script>
+    <script src="jobwork-trail/jwt-controllers.js"></script>
+
+    <!-- 🏬 DUKAN MANAGEMENT MODULES (More -> Gateway of Dukan Management) -->
+    <script src="dukan-erp/dukan-core.js?v=1.0"></script>
+    <script src="dukan-erp/dukan-master.js?v=1.0"></script>
+    <script src="dukan-erp/dukan-party-reg.js?v=1.0"></script>
+    <script src="dukan-erp/dukan-barcode.js?v=1.0"></script>
+    <script src="dukan-erp/dukan-order.js?v=1.0"></script>
+    <script src="dukan-erp/dukan-challan.js?v=1.0"></script>
 </body>
 </html>
