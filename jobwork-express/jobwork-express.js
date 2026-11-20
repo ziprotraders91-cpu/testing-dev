@@ -1,24 +1,29 @@
 /* ============================================================================
    SIMPLICITY ERP - JOBWORK EXPRESS VOUCHER (UNIFIED TRAIL & DYNAMIC GROUPS)
-   File: jobwork-express/jobwork-express.js (v3.1)
+   File: jobwork-express/jobwork-express.js (v3.2 - Outstation Bill & Slip)
    100% Synced with: jobwork-trail/jobwork-trail.js, saree_history,
-   jobwork_workers, jobwork_groups, jobwork_sheets_*, dukan_transfer_history
+   jobwork_workers, jobwork_groups, jobwork_firm_profile, jw_challan_seq,
+   jobwork_sheets_*, dukan_transfer_history
 ============================================================================ */
 
 (() => {
     'use strict';
 
     const GROUPS_STORE_KEY = 'jobwork_groups';
+    const FIRM_STORE_KEY = 'jobwork_firm_profile';
+    const SEQ_STORE_KEY = 'jw_challan_seq';
+
     const DEFAULT_GROUPS = [
-        { key: 'cutting', label: 'Cutting' },
-        { key: 'embroidery', label: 'Embroidery' },
-        { key: 'calender', label: 'Calender' }
+        { key: 'cutting', label: 'Cutting', outstation: false },
+        { key: 'embroidery', label: 'Embroidery', outstation: false },
+        { key: 'calender', label: 'Calender', outstation: false }
     ];
 
     let activeCategory = 'cutting';
     let movementType = 'gayi';
     let expressBatchItems = [];
     let lastSavedExpressBatch = null;
+    let expMeta = { jwNo: '', transport: '', lrNo: '', designNote: '' };
 
     let jwPickerMode = 'process';
     let jwPickerItems = [];
@@ -113,6 +118,19 @@
 
     const genId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
+    const getFirmProfile = () => {
+        const raw = getFromStore(FIRM_STORE_KEY);
+        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+            return {
+                name: String(raw.name || 'INDIAN FABRICS').trim(),
+                address: String(raw.address || '').trim(),
+                mobile: String(raw.mobile || '').trim(),
+                gst: String(raw.gst || '').trim()
+            };
+        }
+        return { name: 'INDIAN FABRICS', address: '', mobile: '', gst: '' };
+    };
+
     const getWorkGroups = () => {
         const stored = safeArr(getFromStore(GROUPS_STORE_KEY));
         const workers = safeArr(getFromStore('jobwork_workers'));
@@ -122,28 +140,69 @@
             stored.forEach((g) => {
                 if (!g || !g.key) return;
                 const k = String(g.key).trim().toLowerCase();
-                if (k) map.set(k, { key: k, label: String(g.label || k).trim() });
+                if (k) map.set(k, { key: k, label: String(g.label || k).trim(), outstation: Boolean(g.outstation) });
             });
         } else {
-            DEFAULT_GROUPS.forEach((g) => map.set(g.key, { key: g.key, label: g.label }));
+            DEFAULT_GROUPS.forEach((g) => map.set(g.key, { ...g }));
         }
 
         workers.forEach((w) => {
             if (!w || !w.type) return;
             const k = String(w.type).trim().toLowerCase();
             if (k && !map.has(k)) {
-                map.set(k, { key: k, label: k.charAt(0).toUpperCase() + k.slice(1) });
+                map.set(k, { key: k, label: k.charAt(0).toUpperCase() + k.slice(1), outstation: false });
             }
         });
 
         return Array.from(map.values());
     };
 
+    const getGroupObj = (key) => {
+        const k = String(key || '').trim().toLowerCase();
+        return getWorkGroups().find((g) => g.key === k) || { key: k, label: k ? k.charAt(0).toUpperCase() + k.slice(1) : 'JobWork', outstation: false };
+    };
+
     const grpLabel = (key) => {
         if (key === 'dukan') return 'Final Out (Dukan)';
-        const k = String(key || '').trim().toLowerCase();
-        const f = getWorkGroups().find((g) => g.key === k);
-        return f ? f.label : (k ? k.charAt(0).toUpperCase() + k.slice(1) : 'JobWork');
+        return getGroupObj(key).label;
+    };
+
+    const isOutstationOutActive = () => (activeCategory !== 'dukan' && movementType === 'gayi' && Boolean(getGroupObj(activeCategory).outstation));
+
+    const getNextChallanNo = () => {
+        const storedSeq = safeInt(getFromStore(SEQ_STORE_KEY), 0);
+        let maxSeq = storedSeq;
+        safeArr(getFromStore('jobwork_workers')).forEach((w) => {
+            safeArr(getFromStore(`jobwork_sheets_${w.id}`)).forEach((sh) => {
+                safeArr(sh?.rows).forEach((r) => {
+                    const m = String(r?.jwNo || '').match(/(\d+)$/);
+                    if (m) {
+                        const n = parseInt(m[1], 10);
+                        if (n > maxSeq) maxSeq = n;
+                    }
+                });
+            });
+        });
+        return `JW-${String(maxSeq + 1).padStart(3, '0')}`;
+    };
+
+    const bumpChallanSeq = (jwNoStr) => {
+        const m = String(jwNoStr || '').match(/(\d+)$/);
+        if (!m) return;
+        const n = parseInt(m[1], 10);
+        const cur = safeInt(getFromStore(SEQ_STORE_KEY), 0);
+        if (n > cur) setToStore(SEQ_STORE_KEY, n);
+    };
+
+    const syncExpMetaFromDom = () => {
+        const jEl = document.getElementById('jw-exp-jwno');
+        const tEl = document.getElementById('jw-exp-trans');
+        const lEl = document.getElementById('jw-exp-lr');
+        const nEl = document.getElementById('jw-exp-design');
+        if (jEl) expMeta.jwNo = jEl.value;
+        if (tEl) expMeta.transport = tEl.value;
+        if (lEl) expMeta.lrNo = lEl.value;
+        if (nEl) expMeta.designNote = nEl.value;
     };
 
     const inferBucket = (t) => {
@@ -490,7 +549,7 @@
             .jw-btn-sec:hover { border-color: #d9a425; background: #fef9ea; }
             .jw-accept-bar {
                 background: #fdf6e2; border: 1.5px solid #d9a425; border-radius: 5px;
-                padding: 7px 12px; display: flex; justify-content: space-between; align-items: center; gap: 10px;
+                padding: 7px 12px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
             }
             .jw-footer {
                 background: #fdf6e2; border-top: 1px solid #e5d5a7; padding: 7px 18px;
@@ -511,6 +570,7 @@
         movementType = 'gayi';
         expressBatchItems = [];
         lastSavedExpressBatch = null;
+        expMeta = { jwNo: '', transport: '', lrNo: '', designNote: '' };
         jwPickerMode = 'process';
         jwPickerItems = [];
         jwPickerActiveIdx = 0;
@@ -520,10 +580,11 @@
 
         const today = getToday();
         const godamName = getGodamLabel(getEffectiveGodown());
+        const firm = getFirmProfile();
 
         const catBtnsHtml = groups.map((g, i) => `
             <button type="button" tabindex="-1" id="jw-exp-cat-${esc(g.key)}" class="jw-pill-btn ${i === 0 ? 'active' : ''}" onclick="switchJobWorkCategory('${esc(g.key)}')">
-                ${esc(g.label)}${i < 4 ? ` [F${i + 1}]` : ''}
+                ${esc(g.label)}${i < 4 ? ` [F${i + 1}]` : ''}${g.outstation ? ' ★' : ''}
             </button>
         `).join('') + `<button type="button" tabindex="-1" id="jw-exp-cat-dukan" class="jw-pill-btn" onclick="switchJobWorkCategory('dukan')">Final Out (Dukan)</button>`;
 
@@ -567,6 +628,29 @@
                             <div class="jw-row">
                                 <label class="jw-lbl">Date :</label>
                                 <input type="date" id="jw-exp-date" value="${today}" class="jw-inp">
+                            </div>
+
+                            <div id="jw-exp-outstation-box" style="display:none; background:#fdfcf7; border:1px solid #eadab0; border-radius:5px; padding:7px 9px; margin:6px 0;">
+                                <div class="jw-row">
+                                    <label class="jw-lbl">From (Firm) :</label>
+                                    <input type="text" id="jw-exp-firm" class="jw-inp" readonly value="${esc(firm.name)}${firm.gst ? ` (GST: ${esc(firm.gst)})` : ''}">
+                                </div>
+                                <div class="jw-row">
+                                    <label class="jw-lbl">JobWork No. :</label>
+                                    <input type="text" id="jw-exp-jwno" class="jw-inp" value="">
+                                </div>
+                                <div class="jw-row">
+                                    <label class="jw-lbl">Transport :</label>
+                                    <input type="text" id="jw-exp-trans" class="jw-inp" placeholder="e.g. Patel / VRL Transport">
+                                </div>
+                                <div class="jw-row">
+                                    <label class="jw-lbl">L.R. / Bale :</label>
+                                    <input type="text" id="jw-exp-lr" class="jw-inp" placeholder="e.g. 4589 / 1 Bale">
+                                </div>
+                                <div class="jw-row" style="margin-bottom:0;">
+                                    <label class="jw-lbl">Design / Work :</label>
+                                    <input type="text" id="jw-exp-design" class="jw-inp" placeholder="e.g. Swarovski D.No 402">
+                                </div>
                             </div>
 
                             <div class="jw-sec-title">2. Batch Entry (Kariger ➔ Stage ➔ Pcs)</div>
@@ -631,20 +715,14 @@
                         </div>
                     </div>
 
-                    <div id="jw-exp-accept-strip" class="jw-accept-bar" style="display:none;">
-                        <strong style="font-size:12.5px;">Accept? Batch Save &amp; Print Karein?</strong>
-                        <div style="display:flex; gap:8px;">
-                            <button type="button" class="jw-btn-save" onclick="submitMasterJobWorkExpress(true)">Save &amp; Print [P]</button>
-                            <button type="button" id="jw-exp-accept-yes" class="jw-btn-save" onclick="submitMasterJobWorkExpress(false)">Yes [Y / Enter]</button>
-                            <button type="button" class="jw-btn-sec" onclick="window.__jwCancelAccept()">No [N / Esc]</button>
-                        </div>
-                    </div>
+                    <div id="jw-exp-accept-strip" class="jw-accept-bar" style="display:none;"></div>
 
                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
                         <span id="jw-exp-status-msg" style="font-size:11.5px; color:#92400e; font-weight:700;">Kariger ➔ Stage ➔ Pcs · Khali Kariger Enter = Save</span>
-                        <div style="display:flex; gap:8px;">
-                            <button type="button" tabindex="-1" class="jw-btn-sec" onclick="printLastSavedJobWorkChallan()">A6 Challan [Alt+P]</button>
-                            <button type="button" id="jw-exp-submit-btn" class="jw-btn-save" onclick="submitMasterJobWorkExpress(false)">Save Batch [Ctrl+Enter]</button>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                            <button type="button" tabindex="-1" class="jw-btn-sec" onclick="printLastSavedJobWorkChallan()">Last Challan [Alt+P]</button>
+                            <button type="button" tabindex="-1" id="jw-exp-last-slip-btn" class="jw-btn-sec" style="display:none;" onclick="printLastSavedJobWorkPackingSlip()">Packing Slip [Alt+L]</button>
+                            <button type="button" id="jw-exp-submit-btn" class="jw-btn-save" onclick="askSaveMasterJobWorkExpress()">Save Batch [Ctrl+Enter]</button>
                         </div>
                     </div>
                 </div>
@@ -694,7 +772,7 @@
             if (hintEl) hintEl.textContent = '↑↓ + Enter';
             const groups = getWorkGroups();
             jwPickerItems = [
-                ...groups.map((g, i) => ({ label: `${i + 1}. ${g.label}`, sub: i < 4 ? `F${i + 1}` : 'Group', data: g.key })),
+                ...groups.map((g, i) => ({ label: `${i + 1}. ${g.label}`, sub: g.outstation ? 'Bill+Slip' : (i < 4 ? `F${i + 1}` : 'Group'), data: g.key })),
                 { label: `${groups.length + 1}. Final Out (Dukan)`, sub: 'Dispatch', data: 'dukan' }
             ];
             const idx = jwPickerItems.findIndex((x) => x.data === activeCategory);
@@ -833,6 +911,10 @@
             'jw-exp-movement-input',
             'jw-exp-worker-input',
             'jw-exp-date',
+            'jw-exp-jwno',
+            'jw-exp-trans',
+            'jw-exp-lr',
+            'jw-exp-design',
             'jw-exp-maker-input',
             'jw-exp-stage-input',
             'jw-exp-dest-select',
@@ -854,8 +936,46 @@
     const showJwAcceptPrompt = (show) => {
         const bar = document.getElementById('jw-exp-accept-strip');
         if (!bar) return;
-        bar.style.display = show ? 'flex' : 'none';
-        if (show) setTimeout(() => document.getElementById('jw-exp-accept-yes')?.focus(), 20);
+        if (!show) {
+            bar.style.display = 'none';
+            return;
+        }
+        const outst = isOutstationOutActive();
+        bar.innerHTML = outst ? `
+            <strong style="font-size:12.5px;">Save Karein — Kya Print Karna Hai?</strong>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                <button type="button" class="jw-btn-save" onclick="submitMasterJobWorkExpress('challan')">Print Challan [P]</button>
+                <button type="button" class="jw-btn-save" onclick="submitMasterJobWorkExpress('slip')">Packing Slip [L]</button>
+                <button type="button" class="jw-btn-save" onclick="submitMasterJobWorkExpress('both')">Both (Challan+Slip) [B]</button>
+                <button type="button" id="jw-exp-accept-yes" class="jw-btn-sec" onclick="submitMasterJobWorkExpress('')">Save Only [Y / Enter]</button>
+                <button type="button" class="jw-btn-sec" onclick="window.__jwCancelAccept()">No [N / Esc]</button>
+            </div>
+        ` : `
+            <strong style="font-size:12.5px;">Accept? Batch Save &amp; Print Karein?</strong>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button type="button" class="jw-btn-save" onclick="submitMasterJobWorkExpress('challan')">Save &amp; Print [P]</button>
+                <button type="button" id="jw-exp-accept-yes" class="jw-btn-save" onclick="submitMasterJobWorkExpress('')">Yes (Save Only) [Y / Enter]</button>
+                <button type="button" class="jw-btn-sec" onclick="window.__jwCancelAccept()">No [N / Esc]</button>
+            </div>
+        `;
+        bar.style.display = 'flex';
+        setTimeout(() => document.getElementById('jw-exp-accept-yes')?.focus(), 20);
+    };
+
+    window.askSaveMasterJobWorkExpress = () => {
+        if (!expressBatchItems.length) {
+            alert('Batch me kam se kam 1 Saree jodein!');
+            focusFirstField('jw-exp-maker-input');
+            return;
+        }
+        const isDukan = (activeCategory === 'dukan');
+        const workerId = document.getElementById('jw-exp-worker')?.value;
+        if (!isDukan && !workerId) {
+            alert('Kripya Worker chunein!');
+            focusFirstField('jw-exp-worker-input');
+            return;
+        }
+        showJwAcceptPrompt(true);
     };
 
     const bindJobWorkExpressEvents = () => {
@@ -864,19 +984,14 @@
             focusFirstField('jw-exp-maker-input');
         };
 
-        const yesBtn = document.getElementById('jw-exp-accept-yes');
-        if (yesBtn) {
-            yesBtn.addEventListener('keydown', (e) => {
-                if (e.key === 'y' || e.key === 'Y' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); submitMasterJobWorkExpress(false); }
-                else if (e.key === 'p' || e.key === 'P') { e.preventDefault(); e.stopPropagation(); submitMasterJobWorkExpress(true); }
-                else if (e.key === 'n' || e.key === 'N' || e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); window.__jwCancelAccept(); }
-            });
-        }
-
         const catInp = document.getElementById('jw-exp-cat-input');
         const movInp = document.getElementById('jw-exp-movement-input');
         const workerInp = document.getElementById('jw-exp-worker-input');
         const dateEl = document.getElementById('jw-exp-date');
+        const jwNoEl = document.getElementById('jw-exp-jwno');
+        const transEl = document.getElementById('jw-exp-trans');
+        const lrEl = document.getElementById('jw-exp-lr');
+        const designEl = document.getElementById('jw-exp-design');
         const makerInp = document.getElementById('jw-exp-maker-input');
         const stageInp = document.getElementById('jw-exp-stage-input');
         const destSel = document.getElementById('jw-exp-dest-select');
@@ -911,9 +1026,27 @@
         if (dateEl) {
             dateEl.addEventListener('focus', () => showJwRightPicker('summary', ''));
             dateEl.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && !e.ctrlKey) { e.preventDefault(); focusFirstField('jw-exp-maker-input'); }
+                if (e.key === 'Enter' && !e.ctrlKey) {
+                    e.preventDefault();
+                    focusFirstField(isOutstationOutActive() ? 'jw-exp-jwno' : 'jw-exp-maker-input');
+                }
             });
         }
+
+        const outstOrder = [jwNoEl, transEl, lrEl, designEl];
+        outstOrder.forEach((el, idx) => {
+            if (!el) return;
+            el.addEventListener('focus', () => showJwRightPicker('summary', ''));
+            el.addEventListener('input', syncExpMetaFromDom);
+            el.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.ctrlKey) {
+                    e.preventDefault();
+                    syncExpMetaFromDom();
+                    const nxt = outstOrder[idx + 1];
+                    focusFirstField(nxt ? nxt.id : 'jw-exp-maker-input');
+                }
+            });
+        });
 
         if (makerInp) {
             makerInp.addEventListener('focus', () => {
@@ -923,7 +1056,7 @@
             });
             makerInp.addEventListener('input', () => {
                 jwMakerArrowUsed = true;
-                jwPickerActiveIdx = 0;
+                jwPickerActiveIdx = (!makerInp.value.trim() && expressBatchItems.length > 0) ? -1 : 0;
                 showJwRightPicker('kariger', makerInp.value);
             });
             makerInp.addEventListener('keydown', (e) => {
@@ -940,7 +1073,7 @@
                 if (e.key === 'Enter' && !e.ctrlKey) {
                     e.preventDefault();
                     if (!makerInp.value.trim() && expressBatchItems.length > 0 && jwPickerActiveIdx < 0) {
-                        showJwAcceptPrompt(true);
+                        window.askSaveMasterJobWorkExpress();
                         return;
                     }
                     if (jwPickerActiveIdx >= 0 && jwPickerItems[jwPickerActiveIdx]) window.__jwPickItem(jwPickerActiveIdx);
@@ -987,6 +1120,21 @@
         const modal = document.getElementById('master-jobwork-express-modal');
         if (!modal || modal.style.display === 'none') return;
 
+        const acceptBar = document.getElementById('jw-exp-accept-strip');
+        const acceptOpen = Boolean(acceptBar && acceptBar.style.display !== 'none');
+
+        if (acceptOpen) {
+            const k = e.key.toLowerCase();
+            if (k === 'y') { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress(''); return; }
+            if (k === 'p') { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress('challan'); return; }
+            if (k === 'l' && isOutstationOutActive()) { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress('slip'); return; }
+            if (k === 'b' && isOutstationOutActive()) { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress('both'); return; }
+            if (k === 'n' || e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); window.__jwCancelAccept(); return; }
+            if (e.key === 'Enter' && document.activeElement?.id === 'jw-exp-accept-yes') {
+                e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress(''); return;
+            }
+        }
+
         if (e.key === 'Tab') {
             const list = getOrderedInputs();
             if (!list.length) return;
@@ -999,8 +1147,7 @@
 
         if (e.key === 'Escape') {
             e.preventDefault(); e.stopImmediatePropagation();
-            const acceptBar = document.getElementById('jw-exp-accept-strip');
-            if (acceptBar && acceptBar.style.display !== 'none') {
+            if (acceptOpen) {
                 window.__jwCancelAccept();
             } else if (document.activeElement?.id === 'jw-exp-stage-input') {
                 selectedMaker = null;
@@ -1022,8 +1169,9 @@
             return;
         }
         if (e.key === 'F5') { e.preventDefault(); e.stopImmediatePropagation(); toggleMovementType(true); return; }
-        if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress(false); return; }
-        if (e.altKey && (e.key === 'p' || e.key === 'P')) { e.preventDefault(); e.stopImmediatePropagation(); printLastSavedJobWorkChallan(); }
+        if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); window.askSaveMasterJobWorkExpress(); return; }
+        if (e.altKey && (e.key === 'p' || e.key === 'P')) { e.preventDefault(); e.stopImmediatePropagation(); printLastSavedJobWorkChallan(); return; }
+        if (e.altKey && (e.key === 'l' || e.key === 'L')) { e.preventDefault(); e.stopImmediatePropagation(); printLastSavedJobWorkPackingSlip(); }
     };
 
     window.closeJobWorkExpressModal = () => {
@@ -1046,6 +1194,7 @@
             movementType = 'gayi';
             selectedMaker = null;
             selectedBatchKey = null;
+            expMeta = { jwNo: '', transport: '', lrNo: '', designNote: '' };
             updateCategoryUI();
             populateExpressWorkers();
             updateMovementUI();
@@ -1083,9 +1232,31 @@
         const destRow = document.getElementById('jw-exp-dest-row');
         const destSel = document.getElementById('jw-exp-dest-select');
         const thDest = document.getElementById('jw-exp-th-dest');
+        const outstBox = document.getElementById('jw-exp-outstation-box');
+        const slipBtn = document.getElementById('jw-exp-last-slip-btn');
 
         if (movRow) movRow.style.display = activeCategory === 'dukan' ? 'none' : 'grid';
         if (movInp) movInp.value = movementType === 'gayi' ? `${grpLabel(activeCategory)} Out (Bhejein)` : `${grpLabel(activeCategory)} In (Wapas Lein)`;
+
+        const isOutst = isOutstationOutActive();
+        if (outstBox) {
+            outstBox.style.display = isOutst ? 'block' : 'none';
+            if (isOutst) {
+                const firm = getFirmProfile();
+                const fEl = document.getElementById('jw-exp-firm');
+                const jEl = document.getElementById('jw-exp-jwno');
+                const tEl = document.getElementById('jw-exp-trans');
+                const lEl = document.getElementById('jw-exp-lr');
+                const nEl = document.getElementById('jw-exp-design');
+                if (fEl) fEl.value = `${firm.name}${firm.gst ? ` (GST: ${firm.gst})` : ''}`;
+                if (!expMeta.jwNo) expMeta.jwNo = getNextChallanNo();
+                if (jEl) jEl.value = expMeta.jwNo;
+                if (tEl) tEl.value = expMeta.transport;
+                if (lEl) lEl.value = expMeta.lrNo;
+                if (nEl) nEl.value = expMeta.designNote;
+            }
+        }
+        if (slipBtn) slipBtn.style.display = (isOutst || lastSavedExpressBatch?.isOutstation) ? 'inline-block' : 'none';
 
         const isIn = (activeCategory !== 'dukan' && movementType === 'aayi');
         if (destRow) destRow.style.display = isIn ? 'grid' : 'none';
@@ -1204,9 +1375,11 @@
         if (cntEl) cntEl.textContent = `${expressBatchItems.length} Items`;
     };
 
-    window.submitMasterJobWorkExpress = (doPrint = false) => {
+    window.submitMasterJobWorkExpress = (printMode = '') => {
         if (isSubmitting) return;
         showJwAcceptPrompt(false);
+
+        const resolvedPrint = (printMode === true) ? 'challan' : (printMode || '');
 
         if (!expressBatchItems.length) {
             alert('Batch me kam se kam 1 Saree jodein!');
@@ -1224,6 +1397,9 @@
             focusFirstField('jw-exp-worker-input');
             return;
         }
+
+        syncExpMetaFromDom();
+        const isOutstOut = isOutstationOutActive();
 
         isSubmitting = true;
         try {
@@ -1275,6 +1451,7 @@
                 setToStore('dukan_transfer_history', dukanHist);
 
                 lastSavedExpressBatch = {
+                    isOutstation: false,
                     title: 'FINAL OUT (DISPATCH)',
                     party: partyNote,
                     date: dDate,
@@ -1286,6 +1463,11 @@
                 const gLabel = grpLabel(activeCategory);
                 const targetLabel = `${wName} (${gLabel})`;
                 const isGayi = (movementType === 'gayi');
+
+                const jwNo = isOutstOut ? (expMeta.jwNo || getNextChallanNo()).trim() : '';
+                const transport = isOutstOut ? (expMeta.transport || '').trim() : '';
+                const lrNo = isOutstOut ? (expMeta.lrNo || '').trim() : '';
+                const designNote = isOutstOut ? (expMeta.designNote || '').trim() : '';
 
                 let sheets = safeArr(getFromStore(`jobwork_sheets_${workerId}`)).slice();
                 if (!sheets.length) {
@@ -1318,7 +1500,7 @@
                             doneStages: [...it.doneStages],
                             stageBucket: 'unfinished',
                             workerId,
-                            note: `${gLabel} Out`,
+                            note: jwNo ? `${jwNo} (${gLabel} Out)` : `${gLabel} Out`,
                             timestamp: now + idx
                         });
                         shItems.push({
@@ -1373,7 +1555,7 @@
                     }
                 });
 
-                lastSh.rows.push({
+                const rowObj = {
                     id: txnId,
                     date: dDate,
                     gayiQty: isGayi ? totQty : 0,
@@ -1384,38 +1566,95 @@
                     damagePcs: isGayi ? 0 : totDmg,
                     damageAmt: 0,
                     isTrailV2: true
-                });
+                };
+                if (isOutstOut) {
+                    rowObj.isOutstation = true;
+                    rowObj.jwNo = jwNo;
+                    rowObj.transport = transport;
+                    rowObj.lrNo = lrNo;
+                    rowObj.designNote = designNote;
+                    if (jwNo) bumpChallanSeq(jwNo);
+                }
 
+                lastSh.rows.push(rowObj);
                 setToStore('saree_history', sH);
                 setToStore(`jobwork_sheets_${workerId}`, sheets);
 
-                lastSavedExpressBatch = {
-                    title: `${gLabel.toUpperCase()} ${isGayi ? 'OUT (GAYI)' : 'IN (AAYI)'}`,
-                    party: targetLabel,
-                    date: dDate,
-                    items: expressBatchItems.map((x) => ({
-                        maker: x.maker,
-                        saree: x.saree,
-                        trail: isGayi
-                            ? formatTrail(x.doneStages, 'unfinished')
-                            : formatTrail([...x.doneStages, ...(x.doneStages.includes(activeCategory) ? [] : [activeCategory])], x.dest === 'finished' ? 'finished' : (x.dest === 'lott' ? 'lott' : 'unfinished')),
-                        qty: x.qty
-                    }))
-                };
+                if (isOutstOut) {
+                    const sareeMap = new Map();
+                    shItems.forEach((it) => {
+                        const s = it.saree || 'GENERAL SAREE';
+                        sareeMap.set(s, (sareeMap.get(s) || 0) + safeInt(it.qty));
+                    });
+                    lastSavedExpressBatch = {
+                        isOutstation: true,
+                        title: 'JOB WORK CHALLAN',
+                        groupLabel: gLabel,
+                        firm: getFirmProfile(),
+                        worker: {
+                            name: wName,
+                            address: worker?.address || '',
+                            mobile: worker?.mobile || '',
+                            gst: worker?.gst || ''
+                        },
+                        jwNo: jwNo || getNextChallanNo(),
+                        date: dDate,
+                        transport: transport || '-',
+                        lrNo: lrNo || '-',
+                        designNote: designNote || '-',
+                        sareeRows: Array.from(sareeMap.entries()).map(([saree, pcs]) => ({ saree, pcs })),
+                        totalPcs: totQty,
+                        items: shItems.map((x) => ({
+                            maker: x.karigar || '-',
+                            saree: x.saree || 'Saree',
+                            trail: formatTrail(x.doneStages || [], 'unfinished'),
+                            qty: safeInt(x.qty)
+                        }))
+                    };
+                } else {
+                    lastSavedExpressBatch = {
+                        isOutstation: false,
+                        title: `${gLabel.toUpperCase()} ${isGayi ? 'OUT (GAYI)' : 'IN (AAYI)'}`,
+                        party: targetLabel,
+                        date: dDate,
+                        items: expressBatchItems.map((x) => ({
+                            maker: x.maker,
+                            saree: x.saree,
+                            trail: isGayi
+                                ? formatTrail(x.doneStages, 'unfinished')
+                                : formatTrail([...x.doneStages, ...(x.doneStages.includes(activeCategory) ? [] : [activeCategory])], x.dest === 'finished' ? 'finished' : (x.dest === 'lott' ? 'lott' : 'unfinished')),
+                            qty: x.qty
+                        }))
+                    };
+                }
             }
 
             if (typeof window.invalidateJobWorkCache === 'function') window.invalidateJobWorkCache(workerId);
             if (typeof window.invalidateSareeCalcCache === 'function') window.invalidateSareeCalcCache();
+            if (typeof window.updateJobWorkHubBadges === 'function') window.updateJobWorkHubBadges();
             if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
             if (typeof window.slSyncDashboardCharts === 'function') window.slSyncDashboardCharts();
             if (typeof window.triggerActiveSectionRefresh === 'function') window.triggerActiveSectionRefresh();
 
-            if (doPrint) printLastSavedJobWorkChallan();
+            if (resolvedPrint === 'both' && lastSavedExpressBatch?.isOutstation) {
+                printOutstationBoth(lastSavedExpressBatch);
+            } else if (resolvedPrint === 'slip' && lastSavedExpressBatch?.isOutstation) {
+                printOutstationPackingSlip(lastSavedExpressBatch);
+            } else if (resolvedPrint === 'challan' || resolvedPrint === 'both') {
+                printLastSavedJobWorkChallan();
+            }
 
             expressBatchItems = [];
             selectedMaker = null;
             selectedBatchKey = null;
             jwPickerActiveIdx = 0;
+            expMeta = {
+                jwNo: isOutstOut ? getNextChallanNo() : '',
+                transport: '',
+                lrNo: '',
+                designNote: ''
+            };
+            updateMovementUI();
             renderExpressBatchGrid();
 
             const statusEl = document.getElementById('jw-exp-status-msg');
@@ -1426,10 +1665,162 @@
         }
     };
 
+    const openPrintWin = (title, css, bodyHtml, w = 520, h = 680) => {
+        const pw = window.open('', '', `width=${w},height=${h}`);
+        if (!pw) return alert('Popup block hai! Kripya browser me allow karein.');
+        pw.document.write(`<html><head><title>${esc(title)}</title><style>${css}</style></head><body>${bodyHtml}<script>window.onload=function(){window.focus();window.print();setTimeout(()=>window.close(),600);};<\/script></body></html>`);
+        pw.document.close();
+    };
+
+    const buildOutstationChallanParts = (c) => {
+        const rowsHtml = c.sareeRows.map((r, i) => `
+            <tr>
+                <td style="width:42px;">${i + 1}</td>
+                <td><strong>${esc(r.saree)}</strong></td>
+                <td style="text-align:right; font-weight:800;">${r.pcs}</td>
+            </tr>`).join('');
+
+        const css = `
+            * { box-sizing: border-box; font-family: 'Segoe UI', Arial, sans-serif; }
+            .wrap { border: 2px solid #111; padding: 14px; color: #111; }
+            .head { display: flex; justify-content: space-between; border-bottom: 2px solid #111; padding-bottom: 6px; margin-bottom: 10px; }
+            .head h2 { margin: 0; font-size: 16px; font-weight: 900; }
+            .pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+            .pbox { border: 1.5px solid #111; padding: 7px 9px; font-size: 11.5px; line-height: 1.45; }
+            .pbox small { display: block; font-size: 9.5px; font-weight: 800; text-transform: uppercase; border-bottom: 1px dashed #888; margin-bottom: 3px; padding-bottom: 2px; }
+            .tr { border: 1.5px solid #111; background: #f9fafb; padding: 5px 9px; font-size: 11.5px; margin-bottom: 10px; display: flex; justify-content: space-between; }
+            .ch-tbl { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 10px; }
+            .ch-tbl th, .ch-tbl td { border: 1px solid #111; padding: 6px 7px; text-align: left; }
+            .ch-tbl th { background: #f3f4f6; font-size: 11px; text-transform: uppercase; }
+            .tot td { background: #f3f4f6; font-weight: 900; font-size: 13px; border-top: 2px solid #111; }
+            .dbox { border: 1.5px dashed #111; padding: 8px 10px; font-size: 12px; margin-bottom: 18px; }
+            .sign { display: flex; justify-content: space-between; margin-top: 26px; font-size: 11px; font-weight: 700; }
+        `;
+        const html = `
+            <div class="wrap">
+                <div class="head">
+                    <div><h2>JOB WORK CHALLAN</h2><small>${esc(c.groupLabel)} Dispatch</small></div>
+                    <div style="text-align:right; font-size:11.5px; line-height:1.45;">
+                        <div><strong>JobWork No.:</strong> ${esc(c.jwNo)}</div>
+                        <div><strong>Date:</strong> ${esc(formatDisplay(c.date))}</div>
+                    </div>
+                </div>
+                <div class="pgrid">
+                    <div class="pbox">
+                        <small>From (Sender)</small>
+                        <strong>${esc(c.firm.name)}</strong><br>
+                        ${c.firm.address ? `${esc(c.firm.address)}<br>` : ''}
+                        ${c.firm.mobile ? `Mob: ${esc(c.firm.mobile)}<br>` : ''}
+                        ${c.firm.gst ? `<strong>GSTIN:</strong> ${esc(c.firm.gst)}` : ''}
+                    </div>
+                    <div class="pbox">
+                        <small>To (Job Worker)</small>
+                        <strong>${esc(c.worker.name)}</strong><br>
+                        ${c.worker.address ? `${esc(c.worker.address)}<br>` : ''}
+                        ${c.worker.mobile ? `Mob: ${esc(c.worker.mobile)}<br>` : ''}
+                        ${c.worker.gst ? `<strong>GSTIN:</strong> ${esc(c.worker.gst)}` : ''}
+                    </div>
+                </div>
+                <div class="tr">
+                    <span><strong>Transport:</strong> ${esc(c.transport)}</span>
+                    <span><strong>L.R. / Bale:</strong> ${esc(c.lrNo)}</span>
+                </div>
+                <table class="ch-tbl">
+                    <thead><tr><th>Sr.</th><th>Saree Name / Quality</th><th style="text-align:right; width:85px;">Pcs</th></tr></thead>
+                    <tbody>
+                        ${rowsHtml}
+                        <tr class="tot"><td colspan="2" style="text-align:right;">TOTAL SAREE :</td><td style="text-align:right;">${c.totalPcs} Pcs</td></tr>
+                    </tbody>
+                </table>
+                <div class="dbox"><strong>Design / Work Detail:</strong><br>${esc(c.designNote)}</div>
+                <div class="sign"><span>Checked By: ___________</span><span>Receiver Sign: ___________</span></div>
+            </div>
+        `;
+        return { css, html };
+    };
+
+    const buildOutstationSlipParts = (c) => {
+        const css = `
+            .slip { font-family: monospace, sans-serif; font-size: 11.5px; color: #000; border: 2.5px dashed #000; padding: 10px; max-width: 92mm; margin: 0 auto; }
+            .shdr { text-align: center; border-bottom: 2px dashed #000; padding-bottom: 5px; margin-bottom: 8px; }
+            .shdr h3 { margin: 0; font-size: 15px; }
+            .tobox { border: 2px solid #000; padding: 7px; margin-bottom: 7px; font-size: 12px; line-height: 1.4; }
+            .frombox { border-bottom: 1px dashed #000; padding-bottom: 6px; margin-bottom: 7px; font-size: 11px; line-height: 1.4; }
+            .info { font-size: 11.5px; line-height: 1.55; margin-bottom: 7px; }
+            .stot { background: #eee; border: 2px solid #000; text-align: center; font-size: 16px; font-weight: 900; padding: 6px; margin: 8px 0; }
+            .sdbox { border: 1.5px solid #000; padding: 6px; font-size: 11.5px; font-weight: 700; }
+        `;
+        const html = `
+            <div class="slip">
+                <div class="shdr"><h3>PACKING SLIP</h3><div>${esc(c.groupLabel.toUpperCase())} PARCEL</div></div>
+                <div class="tobox">
+                    <div style="font-size:10px; font-weight:bold;">TO (DELIVERY):</div>
+                    <strong style="font-size:14px;">${esc(c.worker.name)}</strong><br>
+                    ${c.worker.address ? `${esc(c.worker.address)}<br>` : ''}
+                    ${c.worker.mobile ? `Mob: ${esc(c.worker.mobile)}<br>` : ''}
+                    ${c.worker.gst ? `GSTIN: ${esc(c.worker.gst)}` : ''}
+                </div>
+                <div class="frombox">
+                    <strong>FROM:</strong> ${esc(c.firm.name)}${c.firm.address ? `, ${esc(c.firm.address)}` : ''}<br>
+                    ${c.firm.mobile ? `Mob: ${esc(c.firm.mobile)}` : ''} ${c.firm.gst ? `| GST: ${esc(c.firm.gst)}` : ''}
+                </div>
+                <div class="info">
+                    <div><strong>JobWork No.:</strong> ${esc(c.jwNo)}</div>
+                    <div><strong>Date:</strong> ${esc(formatDisplay(c.date))}</div>
+                    <div><strong>Transport:</strong> ${esc(c.transport)}</div>
+                    <div><strong>L.R. / Bale:</strong> ${esc(c.lrNo)}</div>
+                </div>
+                <div class="stot">TOTAL: ${c.totalPcs} PCS</div>
+                <div class="sdbox">DESIGN: ${esc(c.designNote)}</div>
+            </div>
+        `;
+        return { css, html };
+    };
+
+    const printOutstationChallan = (c) => {
+        if (!c || !c.sareeRows || !c.sareeRows.length) return alert('Print karne ke liye data nahi hai.');
+        const p = buildOutstationChallanParts(c);
+        openPrintWin(`Challan-${c.jwNo}`, `@page { size: A5 portrait; margin: 7mm; } body { margin: 0; padding: 6px; } ${p.css}`, p.html, 680, 760);
+    };
+
+    const printOutstationPackingSlip = (c) => {
+        if (!c) return alert('Packing slip ke liye data nahi hai.');
+        const p = buildOutstationSlipParts(c);
+        openPrintWin(`PackingSlip-${c.jwNo}`, `@page { size: A6 portrait; margin: 4mm; } body { margin: 0; padding: 4mm; } ${p.css}`, p.html, 420, 560);
+    };
+
+    const printOutstationBoth = (c) => {
+        if (!c || !c.sareeRows || !c.sareeRows.length) return alert('Print karne ke liye data nahi hai.');
+        const ch = buildOutstationChallanParts(c);
+        const sl = buildOutstationSlipParts(c);
+        const css = `
+            @page challanPage { size: A5 portrait; margin: 7mm; }
+            @page slipPage { size: A6 portrait; margin: 4mm; }
+            body { margin: 0; padding: 6px; }
+            .pg-challan { page: challanPage; page-break-after: always; }
+            .pg-slip { page: slipPage; padding-top: 4mm; }
+            ${ch.css}
+            ${sl.css}
+        `;
+        openPrintWin(`Challan+Slip-${c.jwNo}`, css, `<div class="pg-challan">${ch.html}</div><div class="pg-slip">${sl.html}</div>`, 680, 760);
+    };
+
+    window.printLastSavedJobWorkPackingSlip = () => {
+        if (!lastSavedExpressBatch || !lastSavedExpressBatch.isOutstation) {
+            return alert('Pehle Outstation Challan save karein!');
+        }
+        printOutstationPackingSlip(lastSavedExpressBatch);
+    };
+
     window.printLastSavedJobWorkChallan = () => {
         if (!lastSavedExpressBatch || !lastSavedExpressBatch.items.length) {
             return alert('Print karne ke liye koi recent batch entry nahi mili!');
         }
+        if (lastSavedExpressBatch.isOutstation) {
+            printOutstationChallan(lastSavedExpressBatch);
+            return;
+        }
+
         const b = lastSavedExpressBatch;
         let tot = 0;
         const rowsHtml = b.items.map((it, i) => {
@@ -1442,19 +1833,16 @@
             </tr>`;
         }).join('');
 
-        const pw = window.open('', '', 'width=420,height=560');
-        if (!pw) return alert('Popup block hai!');
-        pw.document.write(`<html><head><title>JobWork Challan - A6</title>
-            <style>
-                @page { size: A6 portrait; margin: 4mm; }
-                body { font-family: monospace, sans-serif; font-size: 11px; margin: 0; padding: 4mm; color: #000; }
-                .box { border: 1.5px dashed #000; padding: 8px; max-width: 92mm; margin: 0 auto; }
-                .hdr { text-align: center; border-bottom: 1.5px dashed #000; padding-bottom: 5px; margin-bottom: 6px; }
-                table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 6px 0; }
-                th { border-top: 1px solid #000; border-bottom: 1px solid #000; text-align: left; padding: 3px 2px; }
-                .tot { background: #eee; border: 1px solid #000; text-align: center; font-size: 13px; font-weight: 900; padding: 5px; margin: 8px 0; }
-                .sign { display: flex; justify-content: space-between; margin-top: 20px; font-size: 10px; }
-            </style></head><body>
+        openPrintWin('JobWork Challan - A6', `
+            @page { size: A6 portrait; margin: 4mm; }
+            body { font-family: monospace, sans-serif; font-size: 11px; margin: 0; padding: 4mm; color: #000; }
+            .box { border: 1.5px dashed #000; padding: 8px; max-width: 92mm; margin: 0 auto; }
+            .hdr { text-align: center; border-bottom: 1.5px dashed #000; padding-bottom: 5px; margin-bottom: 6px; }
+            table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 6px 0; }
+            th { border-top: 1px solid #000; border-bottom: 1px solid #000; text-align: left; padding: 3px 2px; }
+            .tot { background: #eee; border: 1px solid #000; text-align: center; font-size: 13px; font-weight: 900; padding: 5px; margin: 8px 0; }
+            .sign { display: flex; justify-content: space-between; margin-top: 20px; font-size: 10px; }
+        `, `
             <div class="box">
                 <div class="hdr"><h3 style="margin:0;">SIMPLICITY ERP</h3><div>${esc(b.title)}</div></div>
                 <div><strong>Party / Worker:</strong> ${esc(b.party)}</div>
@@ -1463,9 +1851,7 @@
                 <div class="tot">KUL SAREE: ${tot} Pcs</div>
                 <div class="sign"><div>हस्ताक्षर मुंशी<br><br>_______</div><div>हस्ताक्षर पाने वाला<br><br>_______</div></div>
             </div>
-            <script>window.onload=function(){window.focus();window.print();setTimeout(()=>window.close(),600);};<\/script>
-            </body></html>`);
-        pw.document.close();
+        `, 420, 560);
     };
 
     window.JobWorkExpressEngine = {
@@ -1475,7 +1861,9 @@
         toggleMovementType,
         addExpressBatchRow,
         removeExpressBatchItem,
+        askSaveMasterJobWorkExpress,
         submitMasterJobWorkExpress,
-        printLastSavedJobWorkChallan
+        printLastSavedJobWorkChallan,
+        printLastSavedJobWorkPackingSlip
     };
 })();
