@@ -1,11 +1,10 @@
 /* ============================================================================
-   SIMPLICITY ERP - TALLYPRIME ROZANA DAY-BOOK & DASHBOARD ENGINE
+   SIMPLICITY ERP - TALLYPRIME ROZANA DAY-BOOK & DASHBOARD ENGINE (v3.5)
    File: daybook/daybook.js • Developed by Farhan Jawed
-   Tally Drill-Down Flow:
-   - Main Menu: Bana | Zari | Sancha ▸ | Saree ▸ | Payment
-   - Sancha ▸ : Tani | Chukka
-   - Saree  ▸ : Fresh | Cutting | Embroidery | Calender | Lott
-   (100% Compatible with existing Stores, Supabase Sync, Pagination & A6 Print)
+   100% Synced with: jobwork-trail, jobwork-express, core/tally-master.js
+   - Live Saree Stock: Godam (WIP + Finished + Lott) + JobWork (Workers)
+   - Dynamic JobWork Groups (Cutting, Embroidery, Calender, Outstation, etc.)
+   - Final Out (Dispatch) DayBook + A6 Print
 ============================================================================ */
 
 (() => {
@@ -27,9 +26,24 @@
 
     const esc = (s) => {
         if (typeof window.sanitizeHTML === 'function') return window.sanitizeHTML(s);
-        return String(s || '').replace(/[&<>"']/g, (m) => ({
+        return String(s == null ? '' : s).replace(/[&<>"']/g, (m) => ({
             '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
         }[m]));
+    };
+
+    const safeArr = (v) => {
+        if (Array.isArray(v)) return v.filter(Boolean);
+        if (typeof window.safeArray === 'function') return window.safeArray(v).filter(Boolean);
+        return [];
+    };
+
+    const getStoreSafe = (key) => {
+        try {
+            if (typeof window.getStore === 'function') return window.getStore(key);
+            return JSON.parse(localStorage.getItem(key) || '[]');
+        } catch {
+            return [];
+        }
     };
 
     const safeNum = (val, fallback = 0) => {
@@ -75,7 +89,7 @@
         if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
         const parts = s.split(/[-/]/);
         if (parts.length === 3 && parts[0].length === 2 && parts[2].length === 4) {
-            return `${parts[2]}-${parts[1]}-${parts[0]}`;
+            return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
         }
         return s;
     };
@@ -98,6 +112,65 @@
         const cleanTarget = (!targetKid || targetKid === 'k_main') ? 'k_main' : String(targetKid).trim();
         const cleanItem = (!itemKid || itemKid === 'k_main') ? 'k_main' : String(itemKid).trim();
         return cleanItem === cleanTarget;
+    };
+
+    const getWorkGroups = () => {
+        if (window._JWT && typeof window._JWT.getWorkGroups === 'function') {
+            return window._JWT.getWorkGroups();
+        }
+        const stored = safeArr(getStoreSafe('jobwork_groups'));
+        const workers = safeArr(getStoreSafe('jobwork_workers'));
+        const map = new Map();
+        if (stored.length) {
+            stored.forEach((g) => {
+                if (!g || !g.key) return;
+                const k = String(g.key).trim().toLowerCase();
+                if (k) map.set(k, { key: k, label: String(g.label || k).trim(), outstation: Boolean(g.outstation) });
+            });
+        } else {
+            map.set('cutting', { key: 'cutting', label: 'Cutting', outstation: false });
+            map.set('embroidery', { key: 'embroidery', label: 'Embroidery', outstation: false });
+            map.set('calender', { key: 'calender', label: 'Calender', outstation: false });
+        }
+        workers.forEach((w) => {
+            if (!w || !w.type) return;
+            const k = String(w.type).trim().toLowerCase();
+            if (k && !map.has(k)) {
+                map.set(k, { key: k, label: k.charAt(0).toUpperCase() + k.slice(1), outstation: false });
+            }
+        });
+        return Array.from(map.values());
+    };
+
+    const getLiveSareeTotals = (targetKid) => {
+        const kid = targetKid || 'all';
+        if (window._JWT && typeof window._JWT.computeLiveState === 'function') {
+            return window._JWT.computeLiveState(kid).totals;
+        }
+        let raw = 0, finished = 0, lott = 0, pending = 0;
+        safeArr(getStoreSafe('saree_history')).forEach((h) => {
+            if (!h || !matchesGodown(h.karkhanaId, kid)) return;
+            const bkt = h.stageBucket || ((h.type === 'finished' || h.type === 'finish') ? 'finished' : ((h.type === 'lott' || h.type === 'lot' || h.type === 'damage') ? 'lott' : 'unfinished'));
+            const isOut = (h.isOut === true) || (safeNum(h.gai) > 0);
+            const q = isOut ? safeInt(h.gai != null ? h.gai : h.pcs) : safeInt(h.aai != null ? h.aai : h.pcs);
+            const delta = isOut ? -q : q;
+            if (bkt === 'finished') finished += delta;
+            else if (bkt === 'lott') lott += delta;
+            else raw += delta;
+        });
+        raw = Math.max(0, raw); finished = Math.max(0, finished); lott = Math.max(0, lott);
+        if (kid === 'all') {
+            safeArr(getStoreSafe('jobwork_workers')).forEach((w) => {
+                const shs = safeArr(getStoreSafe(`jobwork_sheets_${w.id}`));
+                let d = shs.length ? safeInt(shs[0].closingPendingSaree, 0) : 0, a = 0;
+                shs.forEach((sh) => safeArr(sh?.rows).forEach((r) => {
+                    d += safeInt(r.gayiQty);
+                    a += safeInt(r.aayiQty) + safeInt(r.damagePcs);
+                }));
+                pending += Math.max(0, d - a);
+            });
+        }
+        return { raw, pending, finished, lott, total: raw + pending + finished + lott };
     };
 
     /* ========================================================================
@@ -162,7 +235,7 @@
         if (typeof window.getKarkhanasSafe === 'function') {
             karkhanas = window.getKarkhanasSafe();
         } else {
-            karkhanas = window.safeArray ? window.safeArray(window.getStore('karkhana_list')) : [];
+            karkhanas = safeArr(getStoreSafe('karkhana_list'));
         }
         if (!karkhanas.length) {
             karkhanas = [{ id: 'k_main', name: 'Main Godown', isDefault: true }];
@@ -206,21 +279,19 @@
     const collectDayBookData = (d, targetKid) => {
         const isAll = (targetKid === 'all');
 
-        const bStock = window.safeArray ? window.safeArray(window.getStore('bana_stock')) : [];
-        const zStock = window.safeArray ? window.safeArray(window.getStore('zari_stock')) : [];
+        const bStock = safeArr(getStoreSafe('bana_stock'));
+        const zStock = safeArr(getStoreSafe('zari_stock'));
         const karList = (typeof window.sanitizeKarigerList === 'function')
             ? window.sanitizeKarigerList()
-            : (window.safeArray ? window.safeArray(window.getStore('kariger_list')) : []);
-        const transfers = (window.safeArray ? window.safeArray(window.getStore('material_transfers')) : [])
-            .filter((t) => isSameDay(t?.date, d));
-        const payRecords = (window.safeArray ? window.safeArray(window.getStore('payment_records')) : [])
-            .filter((x) => isSameDay(x?.date, d));
-        const rawSareeHistory = window.safeArray ? window.safeArray(window.getStore('saree_history')) : [];
-        const sanchaHist = (window.safeArray ? window.safeArray(window.getStore('sancha_history')) : [])
-            .filter((h) => isSameDay(h?.date, d) && matchesGodown(h.karkhanaId, targetKid));
+            : safeArr(getStoreSafe('kariger_list'));
+        const transfers = safeArr(getStoreSafe('material_transfers')).filter((t) => isSameDay(t?.date, d));
+        const payRecords = safeArr(getStoreSafe('payment_records')).filter((x) => isSameDay(x?.date, d));
+        const rawSareeHistory = safeArr(getStoreSafe('saree_history'));
+        const sanchaHist = safeArr(getStoreSafe('sancha_history')).filter((h) => isSameDay(h?.date, d) && matchesGodown(h.karkhanaId, targetKid));
+        const dukanHist = safeArr(getStoreSafe('dukan_transfer_history')).filter((x) => isSameDay(x?.date, d) && matchesGodown(x.karkhanaId, targetKid));
         const jobWorkers = (typeof window.getJobWorkers === 'function')
             ? window.getJobWorkers()
-            : (window.safeArray ? window.safeArray(window.getStore('jobwork_workers')) : []);
+            : safeArr(getStoreSafe('jobwork_workers'));
 
         // 1. BANA ROWS
         const banaRows = [];
@@ -251,8 +322,7 @@
             if (!matchesGodown(k.karkhanaId, targetKid)) return;
             const sheets = (typeof window.getKarigerSheets === 'function') ? window.getKarigerSheets(k.id) : [];
             sheets.forEach((sh) => {
-                const rows = window.safeArray ? window.safeArray(sh?.rows) : [];
-                rows.forEach((r) => {
+                safeArr(sh?.rows).forEach((r) => {
                     if (!isSameDay(r?.date, d)) return;
                     const netB = safeNum(r.netBana), retB = safeNum(r.retBana);
                     const netZ = safeNum(r.netZari), retZ = safeNum(r.retZari);
@@ -316,17 +386,13 @@
             const inQ = safeNum(h.aaya || h.qty);
             const outQ = safeNum(h.gaya);
             if (String(h.category || 'tani').toLowerCase() === 'chukka') {
-                chukkaIn += inQ;
-                chukkaOut += outQ;
-                chukkaRows.push(h);
+                chukkaIn += inQ; chukkaOut += outQ; chukkaRows.push(h);
             } else {
-                taniIn += inQ;
-                taniOut += outQ;
-                taniRows.push(h);
+                taniIn += inQ; taniOut += outQ; taniRows.push(h);
             }
         });
 
-        // 7. SAREE SUB-CATEGORIES: FRESH, CUTTING, EMBROIDERY, CALENDER, LOTT
+        // 7. SAREE SUB-CATEGORIES: FRESH/DIRECT, ALL DYNAMIC JOBWORK GROUPS, FINAL OUT, LOTT
         const sareeFreshRows = [];
         const sareeLottRows = [];
         let sfIn = 0, sfOut = 0, slIn = 0, slOut = 0;
@@ -336,23 +402,15 @@
             if (!matchesGodown(h.karkhanaId, targetKid)) return;
 
             const ref = String(h.refId || '');
-            if (ref.startsWith('duk_')) return;
+            const hid = String(h.id || '');
+            if (ref.startsWith('duk_') || ref.startsWith('dukan_') || hid.startsWith('sh_fo_')) return;
 
             const hType = String(h.type || 'fresh').toLowerCase();
+            const bucket = String(h.stageBucket || '').toLowerCase();
             const inQ = safeInt(h.aai !== undefined ? h.aai : h.pcs);
             const outQ = safeInt(h.gai);
 
-            if (hType === 'fresh' && (inQ > 0 || outQ > 0)) {
-                sfIn += inQ;
-                sfOut += outQ;
-                sareeFreshRows.push({
-                    sareeName: h.sareeName || h.name || 'Saree',
-                    karigerName: h.karigerName || h.kariger || '-',
-                    aai: inQ,
-                    gai: outQ,
-                    detail: h.typeLabel || h.note || 'Fresh Saree'
-                });
-            } else if (hType === 'lott' && (inQ > 0 || outQ > 0)) {
+            if ((hType === 'lott' || hType === 'lot' || hType === 'damage' || bucket === 'lott') && (inQ > 0 || outQ > 0)) {
                 slIn += inQ;
                 slOut += outQ;
                 sareeLottRows.push({
@@ -362,6 +420,16 @@
                     gai: outQ,
                     detail: h.typeLabel || h.note || 'Lott / Damage'
                 });
+            } else if (!h.workerId && (inQ > 0 || outQ > 0)) {
+                sfIn += inQ;
+                sfOut += outQ;
+                sareeFreshRows.push({
+                    sareeName: h.sareeName || h.name || 'Saree',
+                    karigerName: h.karigerName || h.kariger || '-',
+                    aai: inQ,
+                    gai: outQ,
+                    detail: h.typeLabel || h.note || 'Fresh / Godam Inward'
+                });
             }
         });
 
@@ -369,37 +437,60 @@
             const rows = [];
             let gTot = 0, aTot = 0, dTot = 0;
             jobWorkers.forEach((w) => {
-                if (!w || String(w.type || '').toLowerCase() !== wType) return;
+                if (!w || String(w.type || '').toLowerCase().trim() !== wType) return;
                 const sheets = (typeof window.getJobWorkerSheets === 'function')
                     ? window.getJobWorkerSheets(w.id)
-                    : (window.safeArray ? window.safeArray(window.getStore(`jobwork_sheets_${w.id}`)) : []);
+                    : safeArr(getStoreSafe(`jobwork_sheets_${w.id}`));
                 sheets.forEach((sh) => {
-                    const sRows = window.safeArray ? window.safeArray(sh?.rows) : [];
-                    sRows.forEach((r) => {
+                    safeArr(sh?.rows).forEach((r) => {
                         if (!r || !isSameDay(r.date, d)) return;
-                        const gQ = safeInt(r.gayiQty);
-                        const aQ = safeInt(r.aayiQty);
-                        const dQ = safeInt(r.damagePcs);
+                        const gItemsAll = safeArr(r.gayiItems);
+                        const aItemsAll = safeArr(r.aayiItems);
+
+                        const gFiltered = gItemsAll.length
+                            ? gItemsAll.filter((it) => matchesGodown(it.karkhanaId || 'k_main', targetKid))
+                            : [];
+                        const aFiltered = aItemsAll.length
+                            ? aItemsAll.filter((it) => matchesGodown(it.karkhanaId || 'k_main', targetKid))
+                            : [];
+
+                        const gQ = gItemsAll.length
+                            ? gFiltered.reduce((sum, it) => sum + safeInt(it.qty), 0)
+                            : ((targetKid === 'all' || targetKid === 'k_main') ? safeInt(r.gayiQty) : 0);
+
+                        let aQ = 0, dQ = 0;
+                        if (aItemsAll.length) {
+                            aFiltered.forEach((it) => {
+                                if (it.isDamage || it.destBucket === 'lott') dQ += safeInt(it.qty);
+                                else aQ += safeInt(it.qty);
+                            });
+                        } else if (targetKid === 'all' || targetKid === 'k_main') {
+                            aQ = safeInt(r.aayiQty);
+                            dQ = safeInt(r.damagePcs);
+                        }
+
                         if (gQ > 0 || aQ > 0 || dQ > 0) {
                             gTot += gQ;
                             aTot += aQ;
                             dTot += dQ;
-                            const gKars = Array.isArray(r.gayiItems) && r.gayiItems.length
-                                ? r.gayiItems.map((x) => `${x.karigar}(${x.qty})`).join(', ')
+                            const gKars = gFiltered.length
+                                ? gFiltered.map((x) => `${x.karigar || '-'}(${x.qty})`).join(', ')
                                 : '';
-                            const aKars = Array.isArray(r.aayiItems) && r.aayiItems.length
-                                ? r.aayiItems.map((x) => `${x.karigar}(${x.qty})`).join(', ')
+                            const aKars = aFiltered.length
+                                ? aFiltered.map((x) => `${x.karigar || '-'}(${x.qty})`).join(', ')
                                 : '';
                             const detailParts = [];
-                            if (gKars) detailParts.push(`Gayi: ${gKars}`);
-                            if (aKars) detailParts.push(`Aayi: ${aKars}`);
+                            if (r.jwNo) detailParts.push(r.jwNo);
+                            if (r.transport) detailParts.push(r.transport);
+                            if (gKars) detailParts.push(`Out: ${gKars}`);
+                            if (aKars) detailParts.push(`In: ${aKars}`);
                             rows.push({
                                 worker: w.name,
-                                sheet: sh.title || '-',
+                                sheet: r.jwNo ? `${sh.title || 'Sheet'} (${r.jwNo})` : (sh.title || '-'),
                                 gayi: gQ,
                                 aayi: aQ,
                                 damagePcs: dQ,
-                                detail: detailParts.join(' | ') || '-'
+                                detail: detailParts.join(' · ') || '-'
                             });
                         }
                     });
@@ -408,12 +499,26 @@
             return { rows, gayi: gTot, aayi: aTot, damage: dTot };
         };
 
-        const cuttingData = buildJobWorkRows('cutting');
-        const embroideryData = buildJobWorkRows('embroidery');
-        const calenderData = buildJobWorkRows('calender');
+        const groups = getWorkGroups();
+        const sareeGroups = {};
+        let jwInAll = 0, jwOutAll = 0;
+        groups.forEach((g) => {
+            const res = buildJobWorkRows(g.key);
+            sareeGroups[g.key] = { key: g.key, label: g.label, ...res };
+            jwInAll += res.aayi + res.damage;
+            jwOutAll += res.gayi;
+        });
 
-        const sInAll = sfIn + cuttingData.aayi + embroideryData.aayi + calenderData.aayi + slIn;
-        const sOutAll = sfOut + cuttingData.gayi + embroideryData.gayi + calenderData.gayi + slOut;
+        const finalOutRows = dukanHist.map((x) => ({
+            sareeName: x.sareeName || 'Saree',
+            karigerName: x.karigerName || '-',
+            pcs: safeInt(x.pcs),
+            note: x.note || 'Apni Main Dukan'
+        }));
+        const foOutTot = finalOutRows.reduce((sum, x) => sum + x.pcs, 0);
+
+        const sInAll = sfIn + jwInAll + slIn;
+        const sOutAll = sfOut + jwOutAll + foOutTot + slOut;
 
         return {
             bana: { rows: banaRows, inTot: bIn, outTot: bOut },
@@ -421,10 +526,10 @@
             sancha_tani: { rows: taniRows, inTot: taniIn, outTot: taniOut },
             sancha_chukka: { rows: chukkaRows, inTot: chukkaIn, outTot: chukkaOut },
             saree_fresh: { rows: sareeFreshRows, inTot: sfIn, outTot: sfOut },
-            saree_cutting: cuttingData,
-            saree_embroidery: embroideryData,
-            saree_calender: calenderData,
+            saree_groups: sareeGroups,
+            saree_final_out: { rows: finalOutRows, outTot: foOutTot },
             saree_lott: { rows: sareeLottRows, inTot: slIn, outTot: slOut },
+            groups,
             payment: { rows: payRows, inTot: pIn, outTot: pOut },
             totals: {
                 bIn, bOut, zIn, zOut,
@@ -442,7 +547,6 @@
         const container = document.querySelector('#daybook-section .daybook-container');
         if (!container) return null;
 
-        // Hide old 5-tab strip cleanly (IDs stay intact for compatibility)
         const oldGrid = container.querySelector('.daybook-btn-grid');
         if (oldGrid) oldGrid.style.display = 'none';
 
@@ -467,9 +571,9 @@
         };
     };
 
-    const renderTallyMenuCard = (menuWrap, title, items, showBackToMain) => {
+    const renderTallyMenuCard = (menuWrap, title, items, showBackToMain, topStripHtml = '') => {
         let html = `
-            <div style="max-width:520px; margin:14px auto 18px; background:#ffffff; border:1px solid #eef0f4; border-radius:10px; box-shadow:0 20px 45px rgba(133, 92, 0, 0.12), 0 4px 12px rgba(0,0,0,0.04); overflow:hidden;">
+            <div style="max-width:560px; margin:14px auto 18px; background:#ffffff; border:1px solid #eef0f4; border-radius:10px; box-shadow:0 20px 45px rgba(133, 92, 0, 0.12), 0 4px 12px rgba(0,0,0,0.04); overflow:hidden;">
                 <div style="background:#fdf6e2; border-bottom:1.5px solid #f2b71d; padding:12px 16px; display:flex; justify-content:space-between; align-items:center;">
                     <strong style="font-size:14.5px; color:#1f2937;">${esc(title)}</strong>
                     ${showBackToMain
@@ -477,21 +581,24 @@
                         : `<span style="font-size:11px; color:#92400e; font-weight:700;">Select Register</span>`
                     }
                 </div>
+                ${topStripHtml}
                 <div style="padding:8px 0;">`;
+
+        if (daybookMenuActiveIdx >= items.length || daybookMenuActiveIdx < 0) daybookMenuActiveIdx = 0;
 
         items.forEach((it, idx) => {
             const isAct = (idx === daybookMenuActiveIdx);
             const bg = isAct ? '#f2b71d' : 'transparent';
-            const fg = isAct ? '#ffffff' : '#1f2937';
-            const subFg = isAct ? '#ffffff' : '#b47d00';
-            const keyFg = isAct ? '#ffffff' : '#e0a60d';
+            const fg = isAct ? '#1f2937' : '#1f2937';
+            const subFg = isAct ? '#1f2937' : '#b47d00';
+            const keyFg = isAct ? '#1f2937' : '#b45309';
 
             html += `
                 <button type="button" class="tally-db-menu-item${isAct ? ' active' : ''}" data-idx="${idx}" data-key="${esc(it.key)}"
                     onclick="${it.onclick}"
-                    style="width:100%; background:${bg}; color:${fg}; border:none; padding:10px 18px; display:flex; justify-content:space-between; align-items:center; gap:10px; cursor:pointer; font-size:13.5px; font-weight:${isAct ? '700' : '600'}; text-align:left; border-bottom:1px solid #f9fafb;">
-                    <span>${it.labelHtml.replace('class="k"', `style="color:${keyFg}; font-weight:800;"`)}</span>
-                    <span style="font-size:11.5px; font-weight:600; color:${subFg};">${esc(it.summary)}</span>
+                    style="width:100%; background:${bg}; color:${fg}; border:none; padding:10px 18px; display:flex; justify-content:space-between; align-items:center; gap:10px; cursor:pointer; font-size:13.5px; font-weight:${isAct ? '800' : '600'}; text-align:left; border-bottom:1px solid #f9fafb;">
+                    <span>${it.labelHtml.replace('class="k"', `style="color:${keyFg}; font-weight:900; text-decoration:underline;"`)}</span>
+                    <span style="font-size:11.5px; font-weight:700; color:${subFg};">${esc(it.summary)}</span>
                 </button>`;
         });
 
@@ -520,7 +627,6 @@
         const data = collectDayBookData(d, targetKid);
         const tot = data.totals;
 
-        // Keep legacy subtitle badges updated safely
         setElementText('sub-day-bana', `In: +${tot.bIn.toFixed(1)} | Out: -${tot.bOut.toFixed(1)}`);
         setElementText('sub-day-zari', `In: +${tot.zIn.toFixed(1)} | Out: -${tot.zOut.toFixed(1)}`);
         setElementText('sub-day-saree', `In: +${tot.sIn} | Out: -${tot.sOut}`);
@@ -537,11 +643,12 @@
             reportHeader.style.display = 'none';
             if (tableWrap) tableWrap.style.display = 'none';
 
+            const liveS = getLiveSareeTotals(targetKid);
             renderTallyMenuCard(menuWrap, `Day-Book List (${d})`, [
                 { key: 'b', labelHtml: '<span class="k">B</span>ana', summary: `In: +${tot.bIn.toFixed(1)} | Out: -${tot.bOut.toFixed(1)} Kg`, onclick: "openDayBookReport('bana')" },
                 { key: 'z', labelHtml: '<span class="k">Z</span>ari', summary: `In: +${tot.zIn.toFixed(1)} | Out: -${tot.zOut.toFixed(1)} Kg`, onclick: "openDayBookReport('zari')" },
                 { key: 's', labelHtml: '<span class="k">S</span>ancha ▸', summary: `Tani & Chukka (In: +${tot.sanchaIn.toFixed(1)} | Out: -${tot.sanchaOut.toFixed(1)})`, onclick: "openDayBookSubMenu('sancha-menu')" },
-                { key: 'e', labelHtml: 'Sare<span class="k">e</span> ▸', summary: `Fresh, Cutting, Emb, Cal, Lott`, onclick: "openDayBookSubMenu('saree-menu')" },
+                { key: 'e', labelHtml: 'Sare<span class="k">e</span> ▸', summary: `Gdm: ${liveS.raw + liveS.finished + liveS.lott} | JW: ${liveS.pending} Pc`, onclick: "openDayBookSubMenu('saree-menu')" },
                 { key: 'p', labelHtml: '<span class="k">P</span>ayment', summary: `${tot.pIn > 0 ? `In: +₹${tot.pIn.toFixed(0)} | ` : ''}Diya: ₹${tot.pOut.toFixed(0)}`, onclick: "openDayBookReport('payment')" }
             ], false);
             return;
@@ -564,13 +671,46 @@
             reportHeader.style.display = 'none';
             if (tableWrap) tableWrap.style.display = 'none';
 
-            renderTallyMenuCard(menuWrap, `Saree Day-Book (${d})`, [
-                { key: 'f', labelHtml: '🟢 <span class="k">F</span>resh', summary: `In: +${data.saree_fresh.inTot} | Out: -${data.saree_fresh.outTot} Pcs`, onclick: "openDayBookReport('saree_fresh')" },
-                { key: 'c', labelHtml: '✂️ <span class="k">C</span>utting', summary: `Gayi: -${data.saree_cutting.gayi} | Aayi: +${data.saree_cutting.aayi} Pcs`, onclick: "openDayBookReport('saree_cutting')" },
-                { key: 'e', labelHtml: '🪡 <span class="k">E</span>mbroidery', summary: `Gayi: -${data.saree_embroidery.gayi} | Aayi: +${data.saree_embroidery.aayi} Pcs`, onclick: "openDayBookReport('saree_embroidery')" },
-                { key: 'l', labelHtml: '🎛️ Ca<span class="k">l</span>ender', summary: `Gayi: -${data.saree_calender.gayi} | Aayi: +${data.saree_calender.aayi} Pcs`, onclick: "openDayBookReport('saree_calender')" },
-                { key: 'o', labelHtml: '🔴 L<span class="k">o</span>tt', summary: `In: +${data.saree_lott.inTot} | Out: -${data.saree_lott.outTot} Pcs`, onclick: "openDayBookReport('saree_lott')" }
-            ], true);
+            const liveS = getLiveSareeTotals(targetKid);
+            const liveStrip = `
+                <div style="display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); background:#fdfcf7; border-bottom:1.5px solid #e5d5a7; text-align:center;">
+                    <div style="padding:7px 4px; border-right:1px solid #f3efe0;"><small style="display:block; font-size:10px; color:#6b7280; font-weight:700;">Godam WIP</small><strong style="font-size:13px; color:#b47d00;">${liveS.raw}</strong></div>
+                    <div style="padding:7px 4px; border-right:1px solid #f3efe0;"><small style="display:block; font-size:10px; color:#6b7280; font-weight:700;">JobWork</small><strong style="font-size:13px; color:#92400e;">${liveS.pending}</strong></div>
+                    <div style="padding:7px 4px; border-right:1px solid #f3efe0;"><small style="display:block; font-size:10px; color:#6b7280; font-weight:700;">Finished</small><strong style="font-size:13px; color:#065f46;">${liveS.finished}</strong></div>
+                    <div style="padding:7px 4px; border-right:1px solid #f3efe0;"><small style="display:block; font-size:10px; color:#6b7280; font-weight:700;">Lott</small><strong style="font-size:13px; color:#b91c1c;">${liveS.lott}</strong></div>
+                    <div style="padding:7px 4px; background:#fdf6e2;"><small style="display:block; font-size:10px; color:#92400e; font-weight:800;">Kul Stock</small><strong style="font-size:13px; color:#1f2937;">${liveS.total} Pc</strong></div>
+                </div>`;
+
+            const usedKeys = new Set(['f', 'd', 'o']);
+            const sareeItems = [
+                { key: 'f', labelHtml: '🟢 <span class="k">F</span>resh / Direct Inward', summary: `In: +${data.saree_fresh.inTot} | Out: -${data.saree_fresh.outTot} Pcs`, onclick: "openDayBookReport('saree_fresh')" }
+            ];
+
+            data.groups.forEach((g) => {
+                const gd = data.saree_groups[g.key] || { gayi: 0, aayi: 0, damage: 0 };
+                let kChar = '';
+                for (const ch of g.label.toLowerCase()) {
+                    if (/[a-z]/.test(ch) && !usedKeys.has(ch)) { kChar = ch; usedKeys.add(ch); break; }
+                }
+                const icon = g.key === 'cutting' ? '✂️ ' : (g.key === 'embroidery' ? '🪡 ' : (g.key === 'calender' ? '🎛️ ' : '✨ '));
+                const lblHtml = kChar
+                    ? icon + esc(g.label).replace(new RegExp(kChar, 'i'), (m) => `<span class="k">${m}</span>`)
+                    : icon + esc(g.label);
+                const dmgTxt = gd.damage > 0 ? ` | Dmg: ${gd.damage}` : '';
+                sareeItems.push({
+                    key: kChar,
+                    labelHtml: lblHtml,
+                    summary: `Gayi: -${gd.gayi} | Aayi: +${gd.aayi}${dmgTxt} Pcs`,
+                    onclick: `openDayBookReport('saree_jw_${esc(g.key)}')`
+                });
+            });
+
+            sareeItems.push(
+                { key: 'd', labelHtml: '🚚 Final Out (<span class="k">D</span>ispatch)', summary: `Gaya: -${data.saree_final_out.outTot} Pcs`, onclick: "openDayBookReport('saree_final_out')" },
+                { key: 'o', labelHtml: '🔴 L<span class="k">o</span>tt / Damage', summary: `In: +${data.saree_lott.inTot} | Out: -${data.saree_lott.outTot} Pcs`, onclick: "openDayBookReport('saree_lott')" }
+            );
+
+            renderTallyMenuCard(menuWrap, `Saree Day-Book (${d})`, sareeItems, true, liveStrip);
             return;
         }
 
@@ -579,20 +719,21 @@
         reportHeader.style.display = 'flex';
         if (tableWrap) tableWrap.style.display = 'block';
 
+        const curTab = window.currentDayBookTab || 'bana';
         const tabBreadcrumbs = {
             bana: 'Day-Book › Bana',
             zari: 'Day-Book › Zari',
             sancha_tani: 'Day-Book › Sancha › Tani',
             sancha_chukka: 'Day-Book › Sancha › Chukka',
-            saree_fresh: 'Day-Book › Saree › Fresh',
-            saree_cutting: 'Day-Book › Saree › Cutting',
-            saree_embroidery: 'Day-Book › Saree › Embroidery',
-            saree_calender: 'Day-Book › Saree › Calender',
-            saree_lott: 'Day-Book › Saree › Lott',
+            saree_fresh: 'Day-Book › Saree › Fresh / Inward',
+            saree_final_out: 'Day-Book › Saree › Final Out (Dispatch)',
+            saree_lott: 'Day-Book › Saree › Lott / Damage',
             payment: 'Day-Book › Payment'
         };
+        data.groups.forEach((g) => {
+            tabBreadcrumbs[`saree_jw_${g.key}`] = `Day-Book › Saree › ${g.label}`;
+        });
 
-        const curTab = window.currentDayBookTab || 'bana';
         reportHeader.style.cssText = 'display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; background:#fdf6e2; border:1px solid #fde68a; border-radius:8px; padding:9px 14px; margin-bottom:10px;';
         reportHeader.innerHTML = `
             <div style="display:flex; align-items:center; gap:10px;">
@@ -638,7 +779,7 @@
             }
             currentDaybookFilteredRowsCache = rows;
 
-            renderPaginatedDaybookRows(rows, tbody, pager, '#f2b71d', (r) => `
+            renderPaginatedDaybookRows(rows, tbody, pager, (r) => `
                 <tr>
                     <td><strong>${esc(r.name)}</strong></td>
                     <td>${esc(r.desc)}</td>
@@ -662,7 +803,7 @@
             }
             currentDaybookFilteredRowsCache = rows;
 
-            renderPaginatedDaybookRows(rows, tbody, pager, '#f2b71d', (h) => {
+            renderPaginatedDaybookRows(rows, tbody, pager, (h) => {
                 const inQ = safeNum(h.aaya || h.qty);
                 const outQ = safeNum(h.gaya);
                 return `
@@ -680,7 +821,7 @@
 
         } else if (curTab === 'saree_fresh' || curTab === 'saree_lott') {
             const isLott = (curTab === 'saree_lott');
-            const label = isLott ? 'Lott Saree' : 'Fresh Saree';
+            const label = isLott ? 'Lott Saree' : 'Fresh / Godam Inward';
             let rows = [...(isLott ? data.saree_lott.rows : data.saree_fresh.rows)];
             thead.innerHTML = `<tr><th>Saree Ka Naam</th><th>Kariger / Party</th><th>📥 Aayi (In)</th><th>📤 Gayi (Out)</th><th>Detail</th></tr>`;
 
@@ -689,7 +830,7 @@
             }
             currentDaybookFilteredRowsCache = rows;
 
-            renderPaginatedDaybookRows(rows, tbody, pager, '#f2b71d', (h) => {
+            renderPaginatedDaybookRows(rows, tbody, pager, (h) => {
                 const inQ = safeInt(h.aai);
                 const outQ = safeInt(h.gai);
                 return `
@@ -706,22 +847,39 @@
             rows.forEach((h) => { curIn += safeInt(h.aai); curOut += safeInt(h.gai); });
             tfoot.innerHTML = `<tr><td colspan="2"><strong>Total ${label}:</strong></td><td><strong>+${curIn} Pcs</strong></td><td><strong>-${curOut} Pcs</strong></td><td>-</td></tr>`;
 
-        } else if (curTab === 'saree_cutting' || curTab === 'saree_embroidery' || curTab === 'saree_calender') {
-            const map = {
-                saree_cutting: { label: 'Cutting', data: data.saree_cutting },
-                saree_embroidery: { label: 'Embroidery', data: data.saree_embroidery },
-                saree_calender: { label: 'Calender', data: data.saree_calender }
-            };
-            const cfg = map[curTab];
-            let rows = [...cfg.data.rows];
-            thead.innerHTML = `<tr><th>${cfg.label} Worker</th><th>Sheet</th><th>📤 Gayi (Out)</th><th>📥 Wapas Aayi (In)</th><th>⚠️ Damage</th><th>Kariger Detail</th></tr>`;
+        } else if (curTab === 'saree_final_out') {
+            let rows = [...data.saree_final_out.rows];
+            thead.innerHTML = `<tr><th>Saree Ka Naam</th><th>Kariger (Maker)</th><th>Dukan / Party &amp; Stage</th><th>📤 Gaya (Out)</th></tr>`;
+
+            if (searchTxt) {
+                rows = rows.filter((r) => `${r.sareeName} ${r.karigerName} ${r.note}`.toLowerCase().includes(searchTxt));
+            }
+            currentDaybookFilteredRowsCache = rows;
+
+            renderPaginatedDaybookRows(rows, tbody, pager, (r) => `
+                <tr>
+                    <td><strong>${esc(r.sareeName)}</strong></td>
+                    <td>${esc(r.karigerName)}</td>
+                    <td>${esc(r.note)}</td>
+                    <td style="color:#b47d00; font-weight:800;">-${r.pcs} Pcs</td>
+                </tr>
+            `, 'Is tarikh me Final Out ki koi entry nahi hai.', 4);
+
+            const curOut = rows.reduce((sum, r) => sum + safeInt(r.pcs), 0);
+            tfoot.innerHTML = `<tr><td colspan="3"><strong>Total Final Out:</strong></td><td><strong>-${curOut} Pcs</strong></td></tr>`;
+
+        } else if (curTab.startsWith('saree_jw_') || curTab === 'saree_cutting' || curTab === 'saree_embroidery' || curTab === 'saree_calender') {
+            const gKey = curTab.startsWith('saree_jw_') ? curTab.slice('saree_jw_'.length) : curTab.replace('saree_', '');
+            const cfg = data.saree_groups[gKey] || { label: gKey, rows: [] };
+            let rows = [...cfg.rows];
+            thead.innerHTML = `<tr><th>${esc(cfg.label)} Worker</th><th>Sheet / JW No.</th><th>📤 Gayi (Out)</th><th>📥 Wapas Aayi (In)</th><th>⚠️ Lott/Dmg</th><th>Kariger Detail</th></tr>`;
 
             if (searchTxt) {
                 rows = rows.filter((r) => `${r.worker || ''} ${r.sheet || ''} ${r.detail || ''}`.toLowerCase().includes(searchTxt));
             }
             currentDaybookFilteredRowsCache = rows;
 
-            renderPaginatedDaybookRows(rows, tbody, pager, '#f2b71d', (r) => `
+            renderPaginatedDaybookRows(rows, tbody, pager, (r) => `
                 <tr>
                     <td><strong>${esc(r.worker)}</strong></td>
                     <td>${esc(r.sheet)}</td>
@@ -734,7 +892,7 @@
 
             let curG = 0, curA = 0, curD = 0;
             rows.forEach((r) => { curG += r.gayi; curA += r.aayi; curD += r.damagePcs; });
-            tfoot.innerHTML = `<tr><td colspan="2"><strong>Total ${cfg.label}:</strong></td><td><strong>-${curG} Pcs</strong></td><td><strong>+${curA} Pcs</strong></td><td><strong>${curD > 0 ? curD + ' Pcs' : '-'}</strong></td><td>-</td></tr>`;
+            tfoot.innerHTML = `<tr><td colspan="2"><strong>Total ${esc(cfg.label)}:</strong></td><td><strong>-${curG} Pcs</strong></td><td><strong>+${curA} Pcs</strong></td><td><strong>${curD > 0 ? curD + ' Pcs' : '-'}</strong></td><td>-</td></tr>`;
 
         } else if (curTab === 'payment') {
             let rows = [...data.payment.rows];
@@ -745,7 +903,7 @@
             }
             currentDaybookFilteredRowsCache = rows;
 
-            renderPaginatedDaybookRows(rows, tbody, pager, '#f2b71d', (dp) => `
+            renderPaginatedDaybookRows(rows, tbody, pager, (dp) => `
                 <tr>
                     <td><strong>${esc(dp.party)}</strong></td>
                     <td>${esc(dp.desc)}</td>
@@ -760,7 +918,7 @@
         }
     };
 
-    const renderPaginatedDaybookRows = (rows, tbody, pager, themeColor, rowTemplateFn, emptyMsg, colSpan) => {
+    const renderPaginatedDaybookRows = (rows, tbody, pager, rowTemplateFn, emptyMsg, colSpan) => {
         const totalEntries = rows.length;
 
         if (!totalEntries) {
@@ -845,7 +1003,6 @@
         }
     });
 
-    // Reset to Main DayBook Menu automatically whenever #daybook-section opens
     const initDaybookVisibilityObserver = () => {
         const dbSec = document.getElementById('daybook-section');
         if (!dbSec || dbSec.dataset.dbObsBound === '1') return;
@@ -866,7 +1023,7 @@
     };
 
     /* ========================================================================
-       5. A6 THERMAL PRINT ENGINE (ALL 10 SUB-REGISTERS SUPPORTED)
+       5. A6 THERMAL PRINT ENGINE (ALL DYNAMIC REGISTERS SUPPORTED)
     ======================================================================== */
     const getDashboardKarkhanaPrintName = (kId) => {
         if (!kId || kId === 'all') return 'Sabhi Karkhane (All Units)';
@@ -891,15 +1048,19 @@
             zari: 'ZARI ROZANA DAYBOOK',
             sancha_tani: 'SANCHA (TANI) DAYBOOK',
             sancha_chukka: 'SANCHA (CHUKKA) DAYBOOK',
-            saree_fresh: 'SAREE (FRESH) DAYBOOK',
-            saree_cutting: 'SAREE (CUTTING) DAYBOOK',
-            saree_embroidery: 'SAREE (EMBROIDERY) DAYBOOK',
-            saree_calender: 'SAREE (CALENDER) DAYBOOK',
+            saree_fresh: 'SAREE (FRESH/INWARD) DAYBOOK',
+            saree_final_out: 'SAREE (FINAL OUT) DAYBOOK',
             saree_lott: 'SAREE (LOTT) DAYBOOK',
             payment: 'PAYMENT & CASH MOVEMENT DAYBOOK'
         };
 
-        const title = tabTitles[tab] || 'ROZANA DAYBOOK';
+        let title = tabTitles[tab] || 'ROZANA DAYBOOK';
+        if (tab.startsWith('saree_jw_')) {
+            const gKey = tab.slice('saree_jw_'.length);
+            const gObj = getWorkGroups().find((g) => g.key === gKey);
+            title = `SAREE (${(gObj ? gObj.label : gKey).toUpperCase()}) DAYBOOK`;
+        }
+
         let thHtml = '';
         let rowsHtml = '';
         let totHtml = '';
@@ -908,8 +1069,7 @@
             thHtml = `<tr><th>ITEM</th><th>KARIGER / VIVRAN</th><th style="text-align:right;">AAYA</th><th style="text-align:right;">GAYA</th></tr>`;
             let tIn = 0, tOut = 0;
             rows.forEach((r) => {
-                tIn += safeNum(r.inQty);
-                tOut += safeNum(r.outQty);
+                tIn += safeNum(r.inQty); tOut += safeNum(r.outQty);
                 rowsHtml += `<tr style="border-bottom:1px dashed #ccc;"><td style="padding:4px 2px; font-weight:bold;">${esc(r.name)}</td><td style="padding:4px 2px;">${esc(r.desc)}</td><td style="padding:4px 2px; text-align:right;">${r.inQty > 0 ? `+${r.inQty.toFixed(2)}` : '-'}</td><td style="padding:4px 2px; text-align:right;">${r.outQty > 0 ? `-${r.outQty.toFixed(2)}` : '-'}</td></tr>`;
             });
             totHtml = `<div style="display:flex; justify-content:space-between;"><span>Kul Aaya:</span><span>+${tIn.toFixed(2)} Kg</span></div><div style="display:flex; justify-content:space-between;"><span>Kul Gaya:</span><span>-${tOut.toFixed(2)} Kg</span></div>`;
@@ -917,10 +1077,8 @@
             thHtml = `<tr><th>ITEM</th><th>KARIGER / VIVRAN</th><th style="text-align:right;">AAYA</th><th style="text-align:right;">GAYA</th></tr>`;
             let tIn = 0, tOut = 0;
             rows.forEach((h) => {
-                const inQ = safeNum(h.aaya || h.qty);
-                const outQ = safeNum(h.gaya);
-                tIn += inQ;
-                tOut += outQ;
+                const inQ = safeNum(h.aaya || h.qty); const outQ = safeNum(h.gaya);
+                tIn += inQ; tOut += outQ;
                 rowsHtml += `<tr style="border-bottom:1px dashed #ccc;"><td style="padding:4px 2px; font-weight:bold;">${esc(h.name)}</td><td style="padding:4px 2px;">${esc(h.kariger || h.type || '-')}</td><td style="padding:4px 2px; text-align:right;">${inQ > 0 ? `+${inQ.toFixed(2)}` : '-'}</td><td style="padding:4px 2px; text-align:right;">${outQ > 0 ? `-${outQ.toFixed(2)}` : '-'}</td></tr>`;
             });
             totHtml = `<div style="display:flex; justify-content:space-between;"><span>Kul Aaya:</span><span>+${tIn.toFixed(2)} Kg</span></div><div style="display:flex; justify-content:space-between;"><span>Kul Gaya:</span><span>-${tOut.toFixed(2)} Kg</span></div>`;
@@ -928,29 +1086,32 @@
             thHtml = `<tr><th>SAREE</th><th>MAKER</th><th style="text-align:right;">AAI</th><th style="text-align:right;">GAI</th><th>DETAIL</th></tr>`;
             let tIn = 0, tOut = 0;
             rows.forEach((h) => {
-                const inQ = safeInt(h.aai);
-                const outQ = safeInt(h.gai);
-                tIn += inQ;
-                tOut += outQ;
+                const inQ = safeInt(h.aai); const outQ = safeInt(h.gai);
+                tIn += inQ; tOut += outQ;
                 rowsHtml += `<tr style="border-bottom:1px dashed #ccc;"><td style="padding:4px 2px; font-weight:bold;">${esc(h.sareeName)}</td><td style="padding:4px 2px;">${esc(h.karigerName)}</td><td style="padding:4px 2px; text-align:right;">${inQ > 0 ? `+${inQ}` : '-'}</td><td style="padding:4px 2px; text-align:right;">${outQ > 0 ? `-${outQ}` : '-'}</td><td style="padding:4px 2px; font-size:9px;">${esc(h.detail)}</td></tr>`;
             });
             totHtml = `<div style="display:flex; justify-content:space-between;"><span>Kul Aai:</span><span>+${tIn} Pcs</span></div><div style="display:flex; justify-content:space-between;"><span>Kul Gai:</span><span>-${tOut} Pcs</span></div>`;
-        } else if (tab === 'saree_cutting' || tab === 'saree_embroidery' || tab === 'saree_calender') {
+        } else if (tab === 'saree_final_out') {
+            thHtml = `<tr><th>SAREE</th><th>MAKER</th><th>PARTY</th><th style="text-align:right;">PCS</th></tr>`;
+            let tOut = 0;
+            rows.forEach((r) => {
+                tOut += safeInt(r.pcs);
+                rowsHtml += `<tr style="border-bottom:1px dashed #ccc;"><td style="padding:4px 2px; font-weight:bold;">${esc(r.sareeName)}</td><td style="padding:4px 2px;">${esc(r.karigerName)}</td><td style="padding:4px 2px; font-size:9px;">${esc(r.note)}</td><td style="padding:4px 2px; text-align:right; font-weight:bold;">-${r.pcs}</td></tr>`;
+            });
+            totHtml = `<div style="display:flex; justify-content:space-between;"><span>Kul Final Out:</span><span>-${tOut} Pcs</span></div>`;
+        } else if (tab.startsWith('saree_jw_') || tab === 'saree_cutting' || tab === 'saree_embroidery' || tab === 'saree_calender') {
             thHtml = `<tr><th>WORKER</th><th>SHEET</th><th style="text-align:right;">GAYI</th><th style="text-align:right;">AAYI</th><th style="text-align:right;">DMG</th></tr>`;
             let tG = 0, tA = 0, tD = 0;
             rows.forEach((r) => {
-                tG += r.gayi;
-                tA += r.aayi;
-                tD += r.damagePcs;
+                tG += r.gayi; tA += r.aayi; tD += r.damagePcs;
                 rowsHtml += `<tr style="border-bottom:1px dashed #ccc;"><td style="padding:4px 2px; font-weight:bold;">${esc(r.worker)}</td><td style="padding:4px 2px;">${esc(r.sheet)}</td><td style="padding:4px 2px; text-align:right;">${r.gayi > 0 ? `-${r.gayi}` : '-'}</td><td style="padding:4px 2px; text-align:right;">${r.aayi > 0 ? `+${r.aayi}` : '-'}</td><td style="padding:4px 2px; text-align:right;">${r.damagePcs > 0 ? r.damagePcs : '-'}</td></tr>`;
             });
-            totHtml = `<div style="display:flex; justify-content:space-between;"><span>Kul Gayi:</span><span>-${tG} Pcs</span></div><div style="display:flex; justify-content:space-between;"><span>Kul Aayi:</span><span>+${tA} Pcs</span></div><div style="display:flex; justify-content:space-between;"><span>Damage:</span><span>${tD} Pcs</span></div>`;
+            totHtml = `<div style="display:flex; justify-content:space-between;"><span>Kul Gayi:</span><span>-${tG} Pcs</span></div><div style="display:flex; justify-content:space-between;"><span>Kul Aayi:</span><span>+${tA} Pcs</span></div><div style="display:flex; justify-content:space-between;"><span>Lott/Dmg:</span><span>${tD} Pcs</span></div>`;
         } else if (tab === 'payment') {
             thHtml = `<tr><th>PARTY / KARIGER</th><th>KHATA / NOTE</th><th style="text-align:right;">AAMAD</th><th style="text-align:right;">DIYA</th></tr>`;
             let tIn = 0, tOut = 0;
             rows.forEach((dp) => {
-                tIn += safeNum(dp.inAmt);
-                tOut += safeNum(dp.outAmt);
+                tIn += safeNum(dp.inAmt); tOut += safeNum(dp.outAmt);
                 rowsHtml += `<tr style="border-bottom:1px dashed #ccc;"><td style="padding:4px 2px; font-weight:bold;">${esc(dp.party)}</td><td style="padding:4px 2px;">${esc(dp.desc)}</td><td style="padding:4px 2px; text-align:right;">${dp.inAmt > 0 ? `+₹${dp.inAmt.toFixed(2)}` : '-'}</td><td style="padding:4px 2px; text-align:right;">${dp.outAmt > 0 ? `-₹${dp.outAmt.toFixed(2)}` : '-'}</td></tr>`;
             });
             totHtml = `<div style="display:flex; justify-content:space-between;"><span>Kul Aamad:</span><span>+₹ ${tIn.toFixed(2)}</span></div><div style="display:flex; justify-content:space-between;"><span>Kul Diya:</span><span>-₹ ${tOut.toFixed(2)}</span></div>`;
@@ -979,7 +1140,7 @@
             </head>
             <body>
                 <div class="ticket">
-                    <div class="header"><h2>SIMPLICITY ERP</h2><p><strong>${title}</strong></p></div>
+                    <div class="header"><h2>SIMPLICITY ERP</h2><p><strong>${esc(title)}</strong></p></div>
                     <div class="meta">
                         <div><strong>Karkhana:</strong> ${esc(kName)}</div>
                         <div><strong>Tarikh:</strong> ${esc(d)}</div>
@@ -998,7 +1159,7 @@
     };
 
     /* ========================================================================
-       6. DASHBOARD BADGES ENGINE (UNTOUCHED LOGIC)
+       6. DASHBOARD BADGES ENGINE (LIVE GODAM + JOBWORK SYNCED)
     ======================================================================== */
     const updateDashboardBadgeTotals = () => {
         const targetKid = window.currentDashboardKarkhanaFilter;
@@ -1006,7 +1167,7 @@
 
         let karList = (typeof window.sanitizeKarigerList === 'function')
             ? window.sanitizeKarigerList()
-            : (window.safeArray ? window.safeArray(window.getStore('kariger_list')) : []);
+            : safeArr(getStoreSafe('kariger_list'));
 
         if (!isAll) {
             karList = karList.filter((k) => matchesGodown(k.karkhanaId, targetKid));
@@ -1014,30 +1175,19 @@
 
         setElementText('btn-total-kariger', `Total: ${karList.length}`);
 
-        const infoLen = window.safeArray ? window.safeArray(window.getStore('info_ledger')).length : 0;
+        const infoLen = safeArr(getStoreSafe('info_ledger')).length;
         setElementText('btn-total-info', `Total: ${infoLen}`);
 
-        let ts = 0;
-        const sH = (window.safeArray ? window.safeArray(window.getStore('saree_history')) : [])
-            .filter((x) => (x.type || 'fresh') === 'fresh' && matchesGodown(x.karkhanaId, targetKid));
-
-        if (sH.length) {
-            sH.forEach((s) => {
-                const inQ = safeInt(s.aai !== undefined ? s.aai : s.pcs);
-                const outQ = safeInt(s.gai);
-                ts += (inQ - outQ);
-            });
-        }
-        setElementText('btn-total-saree', `Stock: ${Math.max(0, ts)} Pcs`);
+        const sTotals = getLiveSareeTotals(targetKid);
+        const godamSaree = sTotals.raw + sTotals.finished + sTotals.lott;
+        setElementText('btn-total-saree', `Stock: ${sTotals.total} Pcs (Gdm: ${godamSaree} · JW: ${sTotals.pending})`);
 
         if (window.badgeCalculationTimer) clearTimeout(window.badgeCalculationTimer);
 
         window.badgeCalculationTimer = setTimeout(() => {
             let tb = 0;
             const uniqueBana = new Set();
-            const bStock = window.safeArray ? window.safeArray(window.getStore('bana_stock')) : [];
-
-            bStock.forEach((b) => {
+            safeArr(getStoreSafe('bana_stock')).forEach((b) => {
                 const name = b?.name ? b.name.trim() : '';
                 if (name && !uniqueBana.has(name.toLowerCase())) {
                     uniqueBana.add(name.toLowerCase());
@@ -1052,9 +1202,7 @@
 
             let tz = 0;
             const uniqueZari = new Set();
-            const zStock = window.safeArray ? window.safeArray(window.getStore('zari_stock')) : [];
-
-            zStock.forEach((z) => {
+            safeArr(getStoreSafe('zari_stock')).forEach((z) => {
                 const name = z?.name ? z.name.trim() : '';
                 if (name && !uniqueZari.has(name.toLowerCase())) {
                     uniqueZari.add(name.toLowerCase());
@@ -1092,9 +1240,7 @@
             setElementHTML('btn-total-payment', `<span style='color:#059669; font-weight:bold;'>Diya: ₹ ${roundCurrency(totalDiyaAll).toFixed(0)}</span> • <span style='color:#dc2626; font-weight:bold;'>Baki: ₹ ${roundCurrency(totalBakiAll).toFixed(0)}</span>`);
 
             let totTani = 0, totChukka = 0;
-            const sanchaList = window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [];
-
-            sanchaList.forEach((s) => {
+            safeArr(getStoreSafe('sancha_items')).forEach((s) => {
                 if (!matchesGodown(s?.karkhanaId, targetKid)) return;
                 const cat = String(s.category || 'tani').toLowerCase();
                 const bacha = safeNum(s.bacha !== undefined ? s.bacha : s.aaya);
@@ -1144,7 +1290,7 @@
             'dashboard-view', 'tally-master-section', 'admin-section', 'info-section',
             'kariger-section', 'kariger-sheet-section', 'bana-section',
             'zari-section', 'saree-section', 'payment-section', 'sancha-section',
-            'jobwork-section', 'daybook-section'
+            'jobwork-section', 'jw-trail-section', 'stock-summary-section', 'daybook-section'
         ];
         for (let i = 0; i < sections.length; i++) {
             const el = document.getElementById(sections[i]);
