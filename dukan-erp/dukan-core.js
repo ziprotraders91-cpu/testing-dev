@@ -1,18 +1,22 @@
 /* ============================================================================
-   SIMPLICITY ERP (THE TALLY BRIDGE) - DUKAN CORE & GATEWAY
+   SIMPLICITY ERP (THE TALLY BRIDGE) - DUKAN CORE ENGINE (100% KEYBOARD)
    File: dukan-erp/dukan-core.js
 ============================================================================ */
 (() => {
     'use strict';
 
     const D = window.DukanERP = {
-        screen: 'gateway', // 'gateway' | 'create' | 'party-reg' | 'barcode' | 'order' | 'challan' | 'pending' | 'complete'
+        screen: 'gateway',
         gwIdx: 0,
         pageSize: 25,
+        focusOrder: [],
+        sideBindings: {},
         sideItems: [],
         sideIdx: 0,
-        sideHandler: null,
-        activeSideInput: null
+        activeSideId: null,
+        listNav: null,
+        onFinishForm: null,
+        onEsc: null
     };
 
     D.esc = (s) => String(s ?? '').replace(/[&<>"']/g, (m) => ({
@@ -20,7 +24,7 @@
     }[m]));
 
     D.num = (v) => {
-        const n = parseFloat(String(v ?? '').replace(/,/g, ''));
+        const n = parseFloat(String(v ?? '').replace(/,/g, '').trim());
         return isNaN(n) || !isFinite(n) ? 0 : n;
     };
 
@@ -48,6 +52,11 @@
         } catch (_) {}
     };
 
+    D.getKarigers = () => {
+        if (typeof window.sanitizeKarigerList === 'function') return window.sanitizeKarigerList();
+        return D.get('kariger_list').filter((k) => k && k.name);
+    };
+
     D.paginate = (arr, page = 1, size = D.pageSize) => {
         const total = arr.length;
         const pages = Math.max(1, Math.ceil(total / size));
@@ -59,15 +68,14 @@
     D.pagerHTML = (pg, fnName) => `
         <div class="dk-pager">
             <span>Showing ${pg.total ? pg.start + 1 : 0}-${Math.min(pg.start + D.pageSize, pg.total)} of ${pg.total} (25/Page)</span>
-            <div style="display:flex; gap:6px;">
+            <div style="display:flex; gap:6px; align-items:center;">
                 <button type="button" class="dk-btn" ${pg.page <= 1 ? 'disabled' : ''} onclick="${fnName}(${pg.page - 1})">◀ Prev</button>
-                <span style="padding:5px 8px;">Page ${pg.page}/${pg.pages}</span>
+                <span>Page ${pg.page}/${pg.pages}</span>
                 <button type="button" class="dk-btn" ${pg.page >= pg.pages ? 'disabled' : ''} onclick="${fnName}(${pg.page + 1})">Next ▶</button>
             </div>
         </div>
     `;
 
-    // Fresh Saree Stock Deduction Hook (Row-safe for existing saree_stock)
     D.adjustFreshStock = (designName, deltaQty) => {
         const nm = String(designName || '').trim().toUpperCase();
         if (!nm || !deltaQty) return;
@@ -93,7 +101,6 @@
         if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
     };
 
-    // Offline Code39 SVG Barcode
     const C39 = {
         '0':'nnnwwnwnn','1':'wnnwnnnnw','2':'nnwwnnnnw','3':'wnwwnnnnn','4':'nnnwwnnnw','5':'wnnwwnnnn',
         '6':'nnwwwnnnn','7':'nnnwnnwnw','8':'wnnwnnwnn','9':'nnwwnnwnn','A':'wnnnnwnnw','B':'nnwnnwnnw',
@@ -124,7 +131,7 @@
         st.id = 'dk-tally-styles';
         st.textContent = `
             #dukan-section { padding:0 !important; background:transparent !important; box-shadow:none !important; border:none !important; font-family:'Inter',system-ui,sans-serif; }
-            .dk-gw-card { max-width:490px; margin:12px auto; background:#fff; border:1px solid #e5d5a7; border-radius:10px; box-shadow:0 12px 30px rgba(0,0,0,0.08); overflow:hidden; }
+            .dk-gw-card { max-width:500px; margin:12px auto; background:#fff; border:1px solid #e5d5a7; border-radius:10px; box-shadow:0 12px 30px rgba(0,0,0,0.08); overflow:hidden; }
             .dk-gw-head { background:#fdf6e2; border-bottom:1px solid #e5d5a7; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; font-weight:800; font-size:14.5px; }
             .dk-gw-sec { font-size:10px; font-weight:800; text-transform:uppercase; color:#92400e; padding:10px 16px 4px; letter-spacing:0.5px; }
             .dk-gw-row { width:100%; border:none; background:transparent; padding:9px 16px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; font-size:13.5px; font-weight:600; color:#1f2937; text-align:left; }
@@ -134,7 +141,7 @@
             .dk-gw-row.active small { color:#fef9ea; }
             .dk-gw-key { text-decoration:underline; font-weight:800; color:#b45309; }
             .dk-gw-row.active .dk-gw-key { color:#fff; }
-            .dk-card { width:100%; max-width:1040px; margin:6px auto; background:rgba(255,255,255,0.96); border:1px solid #e5e7eb; border-radius:10px; box-shadow:0 12px 32px rgba(0,0,0,0.08); overflow:hidden; }
+            .dk-card { width:100%; max-width:1080px; margin:6px auto; background:rgba(255,255,255,0.97); border:1px solid #e5e7eb; border-radius:10px; box-shadow:0 12px 32px rgba(0,0,0,0.08); overflow:hidden; }
             .dk-head { padding:12px 18px; border-bottom:1px solid #eceff3; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; }
             .dk-head-l { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
             .dk-head h2 { margin:0; font-size:16.5px; font-weight:800; color:#1f2937; }
@@ -144,27 +151,36 @@
             .dk-btn:hover:not(:disabled) { border-color:#d99b07; background:#fef9ea; }
             .dk-btn:disabled { opacity:0.45; cursor:not-allowed; }
             .dk-btn-gold { background:#eab01e; border:1px solid #d99b07; color:#fff; padding:7px 16px; border-radius:6px; font-size:12.5px; font-weight:800; cursor:pointer; }
-            .dk-body { display:grid; grid-template-columns:1.45fr 0.95fr; gap:18px; padding:16px 20px; align-items:start; }
-            .dk-row { display:grid; grid-template-columns:145px 1fr; align-items:center; gap:10px; margin-bottom:9px; }
+            .dk-body { display:grid; grid-template-columns:1.5fr 0.9fr; gap:18px; padding:16px 20px; align-items:start; }
+            .dk-row { display:grid; grid-template-columns:150px 1fr; align-items:center; gap:10px; margin-bottom:8px; }
             .dk-row label { font-size:12.5px; font-weight:700; color:#374151; }
             .dk-row input, .dk-row select { width:100%; padding:7px 10px; border:1px solid #d1d5db; border-radius:5px; font-size:12.5px; font-weight:600; outline:none; background:#fff; }
-            .dk-row input:focus, .dk-row select:focus { border-color:#eab01e; box-shadow:0 0 0 2px rgba(234,176,30,0.2); }
-            .dk-sec { font-size:10.5px; font-weight:800; color:#92400e; text-transform:uppercase; letter-spacing:0.4px; margin:12px 0 8px; padding-top:8px; border-top:1px dashed #e5e7eb; }
-            .dk-side-box { background:#fff; border:1px solid #e5e7eb; border-radius:6px; overflow:hidden; }
-            .dk-side-head { padding:9px 14px; font-size:12.5px; font-weight:800; border-bottom:1px solid #e5e7eb; background:#fafafa; display:flex; justify-content:space-between; }
-            .dk-side-head small { color:#6b7280; font-weight:600; }
-            .dk-side-list { max-height:390px; overflow-y:auto; }
+            .dk-row input:focus, .dk-row select:focus { border-color:#eab01e; background:#fffdf5; box-shadow:0 0 0 2px rgba(234,176,30,0.22); }
+            .dk-sec { font-size:10.5px; font-weight:800; color:#92400e; text-transform:uppercase; letter-spacing:0.4px; margin:11px 0 8px; padding-top:8px; border-top:1px dashed #e5e7eb; }
+            .dk-side-box { background:#fff; border:1px solid #e5d5a7; border-radius:6px; overflow:hidden; position:sticky; top:10px; }
+            .dk-side-head { padding:9px 14px; font-size:12.5px; font-weight:800; border-bottom:1px solid #e5d5a7; background:#fdf6e2; display:flex; justify-content:space-between; }
+            .dk-side-head small { color:#92400e; font-weight:700; }
+            .dk-side-list { max-height:400px; overflow-y:auto; }
             .dk-side-opt { padding:8px 13px; border-bottom:1px solid #f3f4f6; cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12.5px; font-weight:600; }
             .dk-side-opt:hover { background:#fef9ea; }
             .dk-side-opt.selected { background:#eab01e; color:#fff; font-weight:700; }
-            .dk-side-opt small { font-size:11px; color:#9ca3af; font-weight:600; }
+            .dk-side-opt small { font-size:11px; color:#6b7280; font-weight:600; }
             .dk-side-opt.selected small { color:#fff; }
-            .dk-tbl { width:100%; border-collapse:collapse; margin-top:8px; border:1px solid #e5e7eb; font-size:12px; background:#fff; }
+            .dk-tbl { width:100%; border-collapse:collapse; margin-top:6px; border:1px solid #e5e7eb; font-size:12px; background:#fff; }
             .dk-tbl th { background:#fdf6e2; padding:7px 8px; text-align:left; font-weight:800; border-bottom:1px solid #e5d5a7; }
-            .dk-tbl td { padding:7px 8px; border-bottom:1px solid #f3f4f6; }
-            .dk-tbl tr.click-row { cursor:pointer; }
-            .dk-tbl tr.click-row:hover { background:#fef9ea; }
-            .dk-tbl tr.click-row.active { background:#eab01e; color:#fff; font-weight:700; }
+            .dk-tbl td { padding:6px 8px; border-bottom:1px solid #f3f4f6; }
+            .dk-tbl input { width:100%; padding:5px 7px; border:1px solid #d1d5db; border-radius:4px; font-size:12px; font-weight:600; outline:none; }
+            .dk-tbl input:focus { border-color:#eab01e; background:#fffdf5; }
+            .dk-nav-row { cursor:pointer; }
+            .dk-nav-row:hover { background:#fef9ea; }
+            .dk-nav-row.active { background:#eab01e !important; color:#fff !important; font-weight:700; }
+            .dk-nav-row.active small { color:#fff !important; }
+            .dk-choice-btn { width:100%; border:1.5px solid #e5d5a7; background:#fff; border-radius:8px; padding:13px 16px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; margin-bottom:10px; font-size:14px; font-weight:700; color:#1f2937; text-align:left; }
+            .dk-choice-btn:hover { background:#fef9ea; }
+            .dk-choice-btn.active { background:#eab01e; border-color:#d99b07; color:#fff; }
+            .dk-cnt-pill { background:#fdf6e2; border:1px solid #d9b86c; color:#92400e; padding:3px 11px; border-radius:999px; font-size:12px; font-weight:800; }
+            .dk-choice-btn.active .dk-cnt-pill { background:#fff; color:#1f2937; }
+            .dk-accept { display:none; background:#fdf6e2; border:1.5px solid #d9b86c; border-radius:8px; padding:10px 14px; margin-top:10px; justify-content:space-between; align-items:center; gap:10px; }
             .dk-pager { display:flex; justify-content:space-between; align-items:center; margin-top:10px; font-size:11.5px; font-weight:700; color:#6b7280; flex-wrap:wrap; gap:8px; }
             .dk-foot { padding:9px 18px; border-top:1px solid #eceff3; background:#fafafa; display:flex; justify-content:space-between; font-size:11px; color:#6b7280; font-weight:600; }
             .dk-sticker { width:240px; border:1.5px dashed #d9b86c; border-radius:8px; padding:10px 12px; background:#fff; text-align:center; }
@@ -173,12 +189,10 @@
         document.head.appendChild(st);
     };
 
-    D.setSide = (title, sub, items, onPick, focusInputId = null) => {
+    D.renderSide = (title, sub, items, highlightFirst = true) => {
         D.sideItems = items || [];
-        D.sideHandler = onPick;
-        D.activeSideInput = focusInputId;
-        const activeIdx = D.sideItems.findIndex((x) => x.active);
-        D.sideIdx = activeIdx >= 0 ? activeIdx : 0;
+        const pre = D.sideItems.findIndex((x) => x.active);
+        D.sideIdx = pre >= 0 ? pre : (highlightFirst && D.sideItems.length ? 0 : -1);
 
         const tEl = document.getElementById('dk-side-title');
         const sEl = document.getElementById('dk-side-sub');
@@ -188,7 +202,7 @@
         tEl.textContent = title;
         if (sEl) sEl.textContent = sub;
         if (!D.sideItems.length) {
-            lEl.innerHTML = `<div style="padding:16px; text-align:center; color:#9ca3af; font-size:12px;">Koi record nahi mila</div>`;
+            lEl.innerHTML = `<div style="padding:16px; text-align:center; color:#9ca3af; font-size:12px;">Koi record nahi — naya type karke Enter dabaye</div>`;
             return;
         }
         lEl.innerHTML = D.sideItems.map((it, i) => `
@@ -200,19 +214,77 @@
     };
 
     D.pickSide = (idx) => {
-        if (!D.sideItems[idx] || typeof D.sideHandler !== 'function') return;
+        const b = D.activeSideId ? D.sideBindings[D.activeSideId] : null;
+        if (!b || !D.sideItems[idx]) return;
         D.sideIdx = idx;
-        D.sideHandler(D.sideItems[idx], idx);
+        b.onPick(D.sideItems[idx], idx);
     };
 
-    D.renderShell = (headLeftHTML, leftBodyHTML, footLeft = 'Simplicity · The Tally Bridge') => {
+    D.bindFormControls = (cfg = {}) => {
+        D.focusOrder = cfg.focusOrder || [];
+        D.sideBindings = cfg.sideBindings || {};
+        D.listNav = cfg.listNav || null;
+        D.onFinishForm = cfg.onFinishForm || null;
+        D.activeSideId = null;
+
+        Object.keys(D.sideBindings).forEach((fid) => {
+            const el = document.getElementById(fid);
+            if (!el) return;
+            const b = D.sideBindings[fid];
+            const refreshSide = (autoHl) => {
+                D.activeSideId = fid;
+                const items = b.getItems(el.value || '');
+                D.renderSide(b.title, `${items.length} Found`, items, autoHl);
+            };
+            el.addEventListener('focus', () => refreshSide(true));
+            el.addEventListener('click', () => refreshSide(true));
+            el.addEventListener('input', () => refreshSide(true));
+        });
+
+        D.focusOrder.forEach((fid) => {
+            if (D.sideBindings[fid]) return;
+            const el = document.getElementById(fid);
+            if (!el) return;
+            el.addEventListener('focus', () => {
+                D.activeSideId = null;
+                if (cfg.defaultSide) cfg.defaultSide();
+            });
+        });
+    };
+
+    D.focusField = (id) => {
+        const el = document.getElementById(id);
+        if (el) { el.focus(); if (el.select) el.select(); }
+    };
+
+    D.moveFocus = (curId, dir = 1) => {
+        const idx = D.focusOrder.indexOf(curId);
+        if (idx < 0) return;
+        const nextIdx = idx + dir;
+        if (nextIdx >= 0 && nextIdx < D.focusOrder.length) {
+            D.focusField(D.focusOrder[nextIdx]);
+        } else if (dir > 0 && typeof D.onFinishForm === 'function') {
+            D.onFinishForm();
+        }
+    };
+
+    D.askAccept = (yesFn, noFn) => {
+        const box = document.getElementById('dk-accept-box');
+        if (!box) return yesFn();
+        box.style.display = 'flex';
+        D._acceptYes = yesFn;
+        D._acceptNo = noFn || (() => { box.style.display = 'none'; });
+        document.getElementById('dk-accept-yes')?.focus();
+    };
+
+    D.renderShell = (headLeftHTML, leftBodyHTML, footLeft = '[Enter / ↓] Agla Box · [↑ ↓] Side List · [Ctrl+Enter] Save · [Esc] Back') => {
         const sec = document.getElementById('dukan-section');
         if (!sec) return;
         sec.innerHTML = `
             <div class="dk-card">
                 <div class="dk-head">
                     <div class="dk-head-l">${headLeftHTML}</div>
-                    <button type="button" class="dk-btn" onclick="openDukanGateway()">← [Esc] Dukan Gateway</button>
+                    <button type="button" class="dk-btn" onclick="DukanERP.handleEsc()">← [Esc] Back</button>
                 </div>
                 <div class="dk-body">
                     <div id="dk-left">${leftBodyHTML}</div>
@@ -229,12 +301,23 @@
         `;
     };
 
+    D.handleEsc = () => {
+        const acc = document.getElementById('dk-accept-box');
+        if (acc && acc.style.display === 'flex') {
+            acc.style.display = 'none';
+            if (typeof D._acceptNo === 'function') D._acceptNo();
+            return;
+        }
+        if (typeof D.onEsc === 'function') D.onEsc();
+        else window.openDukanGateway();
+    };
+
     const GW_ITEMS = [
         { k: 'c', label: '<span class="dk-gw-key">C</span>reate (Firm / Party / Alter)', meta: 'Master Setup', fn: () => D.openCreate() },
-        { k: 'p', label: '<span class="dk-gw-key">P</span>arty Register', meta: 'Pending / Complete', fn: () => D.openPartyRegister() },
-        { k: 'n', label: '<span class="dk-gw-key">N</span>aming &amp; Barcoding', meta: 'Sticker Print', fn: () => D.openBarcode() },
-        { k: 'o', label: '<span class="dk-gw-key">O</span>rder Form', meta: 'Book Format', fn: () => D.openOrderForm() },
-        { k: 'h', label: 'C<span class="dk-gw-key">h</span>allan &amp; Packing Slip', meta: 'Stock Minus', fn: () => D.openChallan() },
+        { k: 'p', label: '<span class="dk-gw-key">P</span>arty Register', meta: 'Pending / Completed', fn: () => D.openPartyRegister() },
+        { k: 'n', label: '<span class="dk-gw-key">N</span>aming &amp; Barcoding', meta: 'Kariger → Sticker', fn: () => D.openBarcode() },
+        { k: 'o', label: '<span class="dk-gw-key">O</span>rder Form', meta: 'Batch Entry', fn: () => D.openOrderForm() },
+        { k: 'h', label: 'C<span class="dk-gw-key">h</span>allan &amp; Packing Slip', meta: 'Stock Minus + Slip', fn: () => D.openChallan() },
         { k: 'd', label: 'Pen<span class="dk-gw-key">d</span>ing Order (All)', meta: 'All Parties', fn: () => D.openAllOrders('Pending') },
         { k: 'l', label: 'Comp<span class="dk-gw-key">l</span>ete Order (All)', meta: 'All Parties', fn: () => D.openAllOrders('Complete') }
     ];
@@ -248,12 +331,14 @@
         if (!sec) return;
         sec.style.display = 'block';
         D.screen = 'gateway';
+        D.focusOrder = [];
+        D.sideBindings = {};
+        D.listNav = null;
+        D.onEsc = null;
 
         const ords = D.get('dukan_orders');
-        const pendC = ords.filter((o) => o.status !== 'Complete').length;
-        const compC = ords.filter((o) => o.status === 'Complete').length;
-        GW_ITEMS[5].meta = `${pendC} Pending`;
-        GW_ITEMS[6].meta = `${compC} Complete`;
+        GW_ITEMS[5].meta = `${ords.filter((o) => o.status !== 'Complete').length} Pending`;
+        GW_ITEMS[6].meta = `${ords.filter((o) => o.status === 'Complete').length} Complete`;
 
         sec.innerHTML = `
             <div class="dk-gw-card">
@@ -282,15 +367,14 @@
         return `<button type="button" class="dk-gw-row ${i === D.gwIdx ? 'active' : ''}" onclick="DukanERP.runGw(${i})"><span>${it.label}</span><small>${D.esc(it.meta)}</small></button>`;
     }
 
-    D.runGw = (i) => {
-        D.gwIdx = i;
-        if (GW_ITEMS[i]) GW_ITEMS[i].fn();
-    };
+    D.runGw = (i) => { D.gwIdx = i; if (GW_ITEMS[i]) GW_ITEMS[i].fn(); };
 
+    /* -------------------- GLOBAL TALLY KEYBOARD ENGINE -------------------- */
     document.addEventListener('keydown', (e) => {
         const sec = document.getElementById('dukan-section');
         if (!sec || sec.style.display === 'none') return;
 
+        // 1. Gateway of Dukan Management
         if (D.screen === 'gateway') {
             if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); window.backToDashboard(); return; }
             if (e.key === 'ArrowDown') { e.preventDefault(); D.gwIdx = (D.gwIdx + 1) % GW_ITEMS.length; window.openDukanGateway(); return; }
@@ -303,21 +387,101 @@
             return;
         }
 
+        // 2. Escape Back
         if (e.key === 'Escape') {
             e.preventDefault(); e.stopImmediatePropagation();
-            if (typeof D.onEsc === 'function') D.onEsc();
-            else window.openDukanGateway();
+            D.handleEsc();
             return;
         }
 
-        if (D.activeSideInput && document.activeElement?.id === D.activeSideInput && D.sideItems.length) {
-            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-                e.preventDefault();
-                D.sideIdx = e.key === 'ArrowDown' ? (D.sideIdx + 1) % D.sideItems.length : (D.sideIdx - 1 + D.sideItems.length) % D.sideItems.length;
-                document.querySelectorAll('#dk-side-items .dk-side-opt').forEach((el, i) => el.classList.toggle('selected', i === D.sideIdx));
+        // 3. Accept? Box (Y / N / Enter)
+        const acc = document.getElementById('dk-accept-box');
+        if (acc && acc.style.display === 'flex') {
+            if (e.key.toLowerCase() === 'y' || (e.key === 'Enter' && document.activeElement?.id !== 'dk-accept-no')) {
+                e.preventDefault(); e.stopImmediatePropagation();
+                if (typeof D._acceptYes === 'function') D._acceptYes();
                 return;
             }
-            if (e.key === 'Enter') { e.preventDefault(); D.pickSide(D.sideIdx); }
+            if (e.key.toLowerCase() === 'n') {
+                e.preventDefault(); e.stopImmediatePropagation();
+                if (typeof D._acceptNo === 'function') D._acceptNo();
+                return;
+            }
+        }
+
+        // 4. Ctrl+Enter Save Shortcut
+        if (e.ctrlKey && (e.key === 'Enter' || e.key.toLowerCase() === 'a')) {
+            if (typeof D.onFinishForm === 'function') {
+                e.preventDefault(); e.stopImmediatePropagation();
+                D.onFinishForm();
+                return;
+            }
+        }
+
+        const activeEl = document.activeElement;
+        const activeId = activeEl?.id || '';
+
+        // 5. Side-Linked Input (Type + ↑ ↓ + Enter)
+        if (D.activeSideId && activeId === D.activeSideId && D.sideBindings[activeId]) {
+            const b = D.sideBindings[activeId];
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                if (!D.sideItems.length) return;
+                e.preventDefault();
+                D.sideIdx = e.key === 'ArrowDown'
+                    ? (D.sideIdx + 1) % D.sideItems.length
+                    : (D.sideIdx <= 0 ? D.sideItems.length - 1 : D.sideIdx - 1);
+                const opts = Array.from(document.querySelectorAll('#dk-side-items .dk-side-opt'));
+                opts.forEach((o, i) => o.classList.toggle('selected', i === D.sideIdx));
+                opts[D.sideIdx]?.scrollIntoView({ block: 'nearest' });
+                return;
+            }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (e.shiftKey) { D.moveFocus(activeId, -1); return; }
+                if (typeof b.onCustomEnter === 'function' && b.onCustomEnter(activeEl.value)) return;
+                if (D.sideIdx >= 0 && D.sideItems[D.sideIdx]) {
+                    D.pickSide(D.sideIdx);
+                } else if (b.allowCustom) {
+                    D.moveFocus(activeId, 1);
+                }
+                return;
+            }
+        }
+
+        // 6. List Navigation (Party List / Choice Buttons / Order Reports)
+        if (D.listNav) {
+            const rows = Array.from(document.querySelectorAll(D.listNav.selector));
+            if (rows.length && (!activeId || activeId === D.listNav.searchId || activeEl?.tagName === 'BODY' || activeEl?.classList.contains('dk-choice-btn'))) {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    let cur = D.listNav.getIdx();
+                    cur = e.key === 'ArrowDown' ? (cur + 1) % rows.length : (cur - 1 + rows.length) % rows.length;
+                    D.listNav.setIdx(cur);
+                    rows.forEach((r, i) => r.classList.toggle('active', i === cur));
+                    rows[cur]?.scrollIntoView({ block: 'nearest' });
+                    if (typeof D.listNav.onHighlight === 'function') D.listNav.onHighlight(cur);
+                    return;
+                }
+                if (e.key === 'Enter') {
+                    e.preventDefault(); e.stopImmediatePropagation();
+                    D.listNav.onEnter(D.listNav.getIdx());
+                    return;
+                }
+            }
+        }
+
+        // 7. Standard Input Enter / Arrow Navigation
+        const fIdx = D.focusOrder.indexOf(activeId);
+        if (fIdx >= 0) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                D.moveFocus(activeId, e.shiftKey ? -1 : 1);
+                return;
+            }
+            if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && activeEl.tagName !== 'SELECT') {
+                e.preventDefault();
+                D.moveFocus(activeId, e.key === 'ArrowDown' ? 1 : -1);
+            }
         }
     });
 })();
