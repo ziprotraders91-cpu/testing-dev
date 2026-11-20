@@ -16,7 +16,13 @@
 
         // 5. OWNER REPORT
         if (s.curView === 'owner-menu') {
-            J.setTopHeader('Owner Report', '← [Esc] Gateway');
+            const backLabel = (s.entryRoot === 'external')
+                ? (window.__slReturnToStockSummary ? '← [Esc] Stock Summary' : '← [Esc] Dashboard')
+                : '← [Esc] Gateway';
+            const footerBack = (s.entryRoot === 'external')
+                ? (window.__slReturnToStockSummary ? '[Esc] Stock Summary' : '[Esc] Dashboard')
+                : '[Esc] Gateway';
+            J.setTopHeader('Owner Report', backLabel);
             const t = snap.totals;
             const opts = [
                 { label: '1. Har Job Worker Ke Pass', val: `${t.pending} Pcs`, action: "jwtSetMenuIdx(0); jwtGo('owner-workers')" },
@@ -36,7 +42,7 @@
                     <div class="jwt-menu-shell">
                         <div class="jwt-menu-head"><span>Select Report View</span></div>
                         ${opts.map((o, i) => `<button type="button" class="jwt-menu-item ${i === s.menuIdx ? 'active' : ''}" onclick="${o.action}"><span>${o.label}</span><span class="jwt-menu-val">${J.esc(o.val)}</span></button>`).join('')}
-                        <div class="jwt-footer"><span>[&uarr; &darr;] + [Enter]</span><span>[Esc] Gateway</span></div>
+                        <div class="jwt-footer"><span>[&uarr; &darr;] + [Enter]</span><span>${footerBack}</span></div>
                     </div>
                 </div>
             `;
@@ -225,17 +231,51 @@
             if (!g) { J.jwtBackTo('stock-list'); return true; }
             J.setTopHeader(`${g.saree} (${g.maker}) — Stage Trail & Passbook`, '← [Esc] Saree Stock');
 
-            const sH = J.safeArr(J.getStoreSafe('saree_history')).filter((h) => {
+            const workerRunning = snap.pendingBatches.filter((p) => p.saree === g.saree && p.maker === g.maker && p.karkhanaId === g.karkhanaId);
+            const workerRunningPcs = workerRunning.reduce((sum, p) => sum + p.pcs, 0);
+
+            const chronoHist = J.safeArr(J.getStoreSafe('saree_history')).filter((h) => {
                 if (!h) return false;
                 const sN = J.normText(h.sareeName || h.name || h.saree, 'GENERAL SAREE');
                 const mN = J.normText(h.karigerName || h.kariger, 'KARKHANA');
                 const kid = J.normGodam(h.karkhanaId);
                 return sN === g.saree && mN === g.maker && kid === g.karkhanaId;
-            }).sort((a, b) => J.safeNum(b.timestamp, 0) - J.safeNum(a.timestamp, 0)).slice(0, 40);
+            }).sort((a, b) => {
+                const ta = J.safeNum(a.timestamp, 0);
+                const tb = J.safeNum(b.timestamp, 0);
+                if (ta !== tb) return ta - tb;
+                return String(a.date || '').localeCompare(String(b.date || ''));
+            });
+
+            // Final Out se poora hisab clear hone par purane closed cycles ko Passbook me hide rakhein
+            let gBal = 0, wBal = 0, clearIdx = -1;
+            chronoHist.forEach((h, idx) => {
+                const isOut = (h.isOut === true) || (J.safeNum(h.gai) > 0);
+                const q = isOut ? J.safeInt(h.gai != null ? h.gai : h.pcs) : J.safeInt(h.aai != null ? h.aai : h.pcs);
+                if (q <= 0) return;
+                if (!isOut) {
+                    gBal += q;
+                    if (h.workerId) wBal = Math.max(0, wBal - q);
+                } else {
+                    gBal = Math.max(0, gBal - q);
+                    if (h.workerId) wBal += q;
+                    else if (gBal === 0 && wBal === 0) clearIdx = idx;
+                }
+            });
+
+            const sH = chronoHist
+                .slice(clearIdx + 1)
+                .filter((h) => !String(h.id || '').startsWith('sh_fo_') && !String(h.refId || '').startsWith('dukan_'))
+                .reverse()
+                .slice(0, 40);
 
             body.innerHTML = `<div style="padding:14px 16px;">
-                <div style="margin-bottom:8px;"><strong>${J.esc(g.saree)}</strong> (${J.esc(g.maker)}) &middot; ${J.esc(g.godamName)} &middot; <strong style="color:#b47d00;">Total: ${g.pcs} Pcs</strong></div>
-                <h4 style="margin:10px 0 6px; font-size:12px; color:#92400e; text-transform:uppercase;">1. Stage-Wise Available Stock</h4>
+                <div style="margin-bottom:8px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+                    <div><strong>${J.esc(g.saree)}</strong> (${J.esc(g.maker)}) &middot; ${J.esc(g.godamName)} &middot; <strong style="color:#b47d00;">Godam: ${g.pcs} Pcs</strong>${workerRunningPcs ? ` &middot; <strong style="color:#92400e;">Worker Ke Pass: ${workerRunningPcs} Pcs</strong>` : ''}</div>
+                    <span class="trail-muted">Final Out entries "Final Out Register" me rehti hain</span>
+                </div>
+
+                <h4 style="margin:10px 0 6px; font-size:12px; color:#92400e; text-transform:uppercase;">1. Godam Me Maujud (Stage-Wise Stock)</h4>
                 <table style="margin-bottom:14px;">
                     <thead><tr><th>#</th><th>Completed Stages Trail</th><th class="num">Available Pcs</th></tr></thead>
                     <tbody>
@@ -247,11 +287,29 @@
                             </tr>`).join('')}
                     </tbody>
                 </table>
-                <h4 style="margin:10px 0 6px; font-size:12px; color:#92400e; text-transform:uppercase;">2. Movement Passbook</h4>
+
+                ${workerRunning.length ? `
+                    <h4 style="margin:10px 0 6px; font-size:12px; color:#92400e; text-transform:uppercase;">2. Jin Par Kaam Chal Raha Hai (Worker Ke Pass)</h4>
+                    <table style="margin-bottom:14px;">
+                        <thead><tr><th>#</th><th>Job Worker</th><th>Work Group</th><th>Pehle Kya Ho Chuka</th><th class="num">Pending Pcs</th></tr></thead>
+                        <tbody>
+                            ${workerRunning.map((p, i) => `
+                                <tr>
+                                    <td>${i + 1}</td>
+                                    <td><strong>${J.esc(p.workerName)}</strong></td>
+                                    <td>${J.esc(J.grpLabel(p.workerGroup))}</td>
+                                    <td class="trail">${J.esc(J.formatTrail(p.doneStages, 'unfinished'))}</td>
+                                    <td class="gold-num">${p.pcs} Pcs</td>
+                                </tr>`).join('')}
+                        </tbody>
+                    </table>
+                ` : ''}
+
+                <h4 style="margin:10px 0 6px; font-size:12px; color:#92400e; text-transform:uppercase;">${workerRunning.length ? '3.' : '2.'} Active Movement Passbook (Godam &amp; Kaam Baki)</h4>
                 <table>
                     <thead><tr><th>Tarikh</th><th>Detail</th><th class="num">Aai (+)</th><th class="num">Gayi (-)</th></tr></thead>
                     <tbody>
-                        ${sH.map((h) => {
+                        ${sH.length ? sH.map((h) => {
                             const isOut = (h.isOut === true) || (J.safeNum(h.gai) > 0);
                             const q = isOut ? J.safeInt(h.gai) : J.safeInt(h.aai);
                             return `<tr>
@@ -260,38 +318,37 @@
                                 <td class="num">${!isOut ? `+${q}` : '-'}</td>
                                 <td class="num" style="color:#6b7280;">${isOut ? `-${q}` : '-'}</td>
                             </tr>`;
-                        }).join('')}
+                        }).join('') : `<tr><td colspan="4" style="text-align:center; padding:14px; color:#6b7280;">Active passbook clear hai.</td></tr>`}
                     </tbody>
                 </table>
             </div>`;
             return true;
         }
 
-        // 7. FINAL OUT (DISPATCH)
+        // 7A. FINAL OUT MENU (2 ROWS: FINAL OUT ENTRY & FINAL OUT REGISTER)
+        if (s.curView === 'final-out-menu') {
+            J.setTopHeader('Final Out (Dispatch)', '← [Esc] Gateway', '[↑ ↓] + [Enter] · [Esc] Gateway');
+            const dukanHist = J.safeArr(J.getStoreSafe('dukan_transfer_history'));
+            const totDispPcs = dukanHist.reduce((sum, d) => sum + J.safeInt(d.pcs), 0);
+            const opts = [
+                { label: '1. Final Out', val: 'Entry Hogi', action: "jwtSetMenuIdx(0); jwtOpenFinalOutEntry()" },
+                { label: '2. Final Out Register', val: `${dukanHist.length} Entries · ${totDispPcs} Pcs`, action: "jwtSetMenuIdx(1); jwtOpenFinalOutReg()" }
+            ];
+            if (s.menuIdx >= opts.length || s.menuIdx < 0) s.menuIdx = 0;
+
+            body.innerHTML = `<div style="padding:10px 16px;"><div class="jwt-menu-shell">
+                <div class="jwt-menu-head"><span>Final Out Menu</span><span style="color:#b47d00;">Dispatched: ${totDispPcs} Pcs</span></div>
+                ${opts.map((o, i) => `<button type="button" class="jwt-menu-item ${i === s.menuIdx ? 'active' : ''}" onclick="${o.action}"><span>${o.label}</span><span class="jwt-menu-val">${J.esc(o.val)}</span></button>`).join('')}
+                <div class="jwt-footer"><span>[&uarr; &darr;] + [Enter]</span><span>[Esc] Gateway</span></div>
+            </div></div>`;
+            return true;
+        }
+
+        // 7B. FINAL OUT (ENTRY ONLY)
         if (s.curView === 'final-out') {
-            J.setTopHeader('Final Out (Dispatch)', '← [Esc] Gateway', 'Kariger ➔ Stage ➔ Pcs · Khali Kariger Enter = Save', true);
+            J.setTopHeader('Final Out — Entry', '← [Esc] Final Out Menu', 'Kariger ➔ Stage ➔ Pcs · Khali Kariger Enter = Save', true);
             const allBatches = snap.godamBatches.filter((b) => b.bucket !== 'lott' && b.pcs > 0);
             const totFoPcs = s.foBatch.reduce((sum, x) => sum + x.qty, 0);
-            const dukanHist = J.safeArr(J.getStoreSafe('dukan_transfer_history')).slice().sort((a, b) => J.safeNum(b.timestamp, 0) - J.safeNum(a.timestamp, 0)).slice(0, 25);
-
-            let editFoHtml = '';
-            if (s.editFoId) {
-                const target = dukanHist.find((x) => String(x.id) === String(s.editFoId));
-                if (target) {
-                    editFoHtml = `<div style="background:#fdfcf7; border:1.5px solid #d9b86c; border-radius:6px; padding:10px 12px; margin-bottom:10px;">
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                            <strong style="color:#92400e;">Edit Final Out: ${J.esc(target.sareeName)} (${J.esc(target.karigerName || '-')})</strong>
-                            <button type="button" class="jwt-esc" onclick="jwtCancelFinalOutEdit()">Cancel</button>
-                        </div>
-                        <div style="display:grid; grid-template-columns:140px 1fr 100px auto; gap:8px; align-items:center;">
-                            <input type="date" id="jwt-efo-date" class="jwt-inp" value="${J.esc(J.toIsoDate(target.date) || J.getTodayIso())}">
-                            <input type="text" id="jwt-efo-note" class="jwt-inp" value="${J.esc(target.note || '')}">
-                            <input type="text" inputmode="numeric" id="jwt-efo-pcs" class="jwt-inp" value="${J.safeInt(target.pcs)}">
-                            <button type="button" class="jwt-save" onclick="jwtSaveFinalOutEdit('${J.esc(target.id)}')">Save</button>
-                        </div>
-                    </div>`;
-                }
-            }
 
             body.innerHTML = `
                 <div class="jwt-split">
@@ -310,7 +367,7 @@
 
                         <div style="margin-top:10px; border:1px solid #e5d5a7; border-radius:5px; overflow:hidden;">
                             <div class="jwt-sidebox-head"><span>Dispatch Batch</span><strong>${totFoPcs} Pcs (${s.foBatch.length})</strong></div>
-                            <div style="max-height:165px; overflow-y:auto;">
+                            <div style="max-height:190px; overflow-y:auto;">
                                 <table>
                                     <thead><tr><th>#</th><th>Kariger</th><th>Saree &amp; Stage</th><th class="num">Pcs</th><th></th></tr></thead>
                                     <tbody>
@@ -349,33 +406,86 @@
                         </div>
                     </div>
                 </div>
-
-                <div style="padding:12px 16px; border-top:1.5px solid #e5d5a7;">
-                    <div style="font-size:11.5px; font-weight:800; color:#92400e; text-transform:uppercase; margin-bottom:6px;">Recent Final Out Register</div>
-                    ${editFoHtml}
-                    <table>
-                        <thead><tr><th>Tarikh</th><th>Saree</th><th>Kariger</th><th>Note / Stage</th><th class="num">Pcs</th><th style="text-align:right;">Actions</th></tr></thead>
-                        <tbody>
-                            ${dukanHist.length ? dukanHist.map((d) => `
-                                <tr>
-                                    <td>${J.esc(J.fmtDate(d.date))}</td>
-                                    <td><strong>${J.esc(d.sareeName)}</strong></td>
-                                    <td>${J.esc(d.karigerName || '-')}</td>
-                                    <td>${J.esc(d.note || '-')}</td>
-                                    <td class="gold-num">${J.safeInt(d.pcs)}</td>
-                                    <td style="text-align:right; white-space:nowrap;">
-                                        <button type="button" class="jwt-esc" onclick="jwtEditFinalOut('${J.esc(d.id)}')">Edit</button>
-                                        <button type="button" class="jwt-esc" onclick="jwtPrintFinalOutRow('${J.esc(d.id)}')">Print</button>
-                                        <button type="button" class="jwt-del" onclick="jwtDeleteFinalOutEntry('${J.esc(d.id)}')">Del</button>
-                                    </td>
-                                </tr>`).join('') : `<tr><td colspan="6" style="text-align:center; padding:14px; color:#6b7280;">Abhi koi Final Out entry nahi hai.</td></tr>`}
-                        </tbody>
-                    </table>
-                </div>
             `;
             J.renderFoRightPanel(allBatches);
             J.bindFinalOutKeys(allBatches);
             setTimeout(() => document.getElementById('jwt-fo-kariger')?.focus(), 25);
+            return true;
+        }
+
+        // 7C. FINAL OUT REGISTER (DISPATCHED DETAILS + DATE FILTER + EDIT/PRINT/DEL)
+        if (s.curView === 'final-out-reg') {
+            J.setTopHeader('Final Out Register (Maal Ja Chuka)', '← [Esc] Final Out Menu', 'Search · Date Filter · Edit / Print / Del');
+            const q = (document.getElementById('jwt-foreg-search')?.value || '').trim().toLowerCase();
+            const dFrom = s.foRegDateFrom || '';
+            const dTo = s.foRegDateTo || '';
+
+            const allHist = J.safeArr(J.getStoreSafe('dukan_transfer_history')).slice().sort((a, b) => J.safeNum(b.timestamp, 0) - J.safeNum(a.timestamp, 0));
+            const dukanHist = allHist.filter((d) => {
+                const iso = J.toIsoDate(d.date);
+                if (dFrom && (!iso || iso < dFrom)) return false;
+                if (dTo && (!iso || iso > dTo)) return false;
+                if (q && !`${d.sareeName || ''} ${d.karigerName || ''} ${d.note || ''}`.toLowerCase().includes(q)) return false;
+                return true;
+            });
+            const totDispPcs = dukanHist.reduce((sum, d) => sum + J.safeInt(d.pcs), 0);
+
+            let editFoHtml = '';
+            if (s.editFoId) {
+                const target = allHist.find((x) => String(x.id) === String(s.editFoId));
+                if (target) {
+                    editFoHtml = `<div style="background:#fdfcf7; border:1.5px solid #d9b86c; border-radius:6px; padding:10px 12px; margin-bottom:10px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                            <strong style="color:#92400e;">Edit Final Out: ${J.esc(target.sareeName)} (${J.esc(target.karigerName || '-')})</strong>
+                            <button type="button" class="jwt-esc" onclick="jwtCancelFinalOutEdit()">Cancel [Esc]</button>
+                        </div>
+                        <div style="display:grid; grid-template-columns:140px 1fr 100px auto; gap:8px; align-items:center;">
+                            <input type="date" id="jwt-efo-date" class="jwt-inp" value="${J.esc(J.toIsoDate(target.date) || J.getTodayIso())}">
+                            <input type="text" id="jwt-efo-note" class="jwt-inp" value="${J.esc(target.note || '')}">
+                            <input type="text" inputmode="numeric" id="jwt-efo-pcs" class="jwt-inp" value="${J.safeInt(target.pcs)}">
+                            <button type="button" class="jwt-save" onclick="jwtSaveFinalOutEdit('${J.esc(target.id)}')">Save</button>
+                        </div>
+                    </div>`;
+                }
+            }
+
+            body.innerHTML = `<div style="padding:12px 16px;">
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; background:#fdfcf7; border:1px solid #e5d5a7; border-radius:5px; padding:8px 10px; margin-bottom:10px;">
+                    <input type="text" id="jwt-foreg-search" class="jwt-inp" style="flex:1; min-width:180px;" value="${J.esc(q)}" placeholder="Search Saree, Kariger, Dukan/Party..." oninput="jwtFilterList()">
+                    <label style="font-size:11.5px; font-weight:700;">From</label>
+                    <input type="date" id="jwt-foreg-from" class="jwt-inp" style="width:140px;" value="${J.esc(dFrom)}" onchange="jwtApplyFoRegDates()">
+                    <label style="font-size:11.5px; font-weight:700;">To</label>
+                    <input type="date" id="jwt-foreg-to" class="jwt-inp" style="width:140px;" value="${J.esc(dTo)}" onchange="jwtApplyFoRegDates()">
+                    ${(dFrom || dTo) ? `<button type="button" class="jwt-esc" onclick="jwtClearFoRegDates()">All Dates</button>` : ''}
+                </div>
+
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px;">
+                    <span class="trail-muted">Entries: <strong>${dukanHist.length}</strong></span>
+                    <strong style="color:#b47d00; font-size:13.5px;">Total Maal Gaya (Dispatched): ${totDispPcs} Pcs</strong>
+                </div>
+
+                ${editFoHtml}
+
+                <table>
+                    <thead><tr><th>Tarikh</th><th>Saree</th><th>Kariger</th><th>Dukan / Party &amp; Stage</th><th class="num">Pcs</th><th style="text-align:right;">Actions</th></tr></thead>
+                    <tbody>
+                        ${dukanHist.length ? dukanHist.map((d) => `
+                            <tr>
+                                <td>${J.esc(J.fmtDate(d.date))}</td>
+                                <td><strong>${J.esc(d.sareeName)}</strong></td>
+                                <td>${J.esc(d.karigerName || '-')}</td>
+                                <td>${J.esc(d.note || '-')}</td>
+                                <td class="gold-num">${J.safeInt(d.pcs)}</td>
+                                <td style="text-align:right; white-space:nowrap;">
+                                    <button type="button" class="jwt-esc" onclick="jwtEditFinalOut('${J.esc(d.id)}')">Edit</button>
+                                    <button type="button" class="jwt-esc" onclick="jwtPrintFinalOutRow('${J.esc(d.id)}')">Print</button>
+                                    <button type="button" class="jwt-del" onclick="jwtDeleteFinalOutEntry('${J.esc(d.id)}')">Del</button>
+                                </td>
+                            </tr>`).join('') : `<tr><td colspan="6" style="text-align:center; padding:18px; color:#6b7280;">Abhi koi Final Out entry nahi hai.</td></tr>`}
+                    </tbody>
+                </table>
+            </div>`;
+            J.bindSearchKey('jwt-foreg-search');
             return true;
         }
 
