@@ -4,18 +4,18 @@
 ============================================================================ */
 (() => {
     const D = window.DukanERP;
-    let mode = 'create'; // 'create' | 'alter'
-    let type = 'Party';  // 'Firm' | 'Party'
+    let mode = 'create';
+    let type = 'Party';
     let editId = '';
 
     D.openCreate = (initMode = 'create', initType = 'Party') => {
         D.screen = 'create';
         D.onEsc = null;
         mode = initMode; type = initType; editId = '';
-        render();
+        render('dm-name');
     };
 
-    function render() {
+    function render(focusId = 'dm-name') {
         const firms = D.get('dukan_firms');
         const parties = D.get('dukan_parties');
         const curList = type === 'Firm' ? firms : parties;
@@ -28,56 +28,87 @@
         `;
 
         const left = `
-            <div class="dk-row"><label>Type (Under) :</label><input id="dm-type" value="${type}" readonly></div>
-            <div class="dk-row"><label>${type} Name :</label><input id="dm-name" value="${D.esc(rec?.name||'')}" placeholder="Jaise: ${type==='Firm'?'INDIAN FABRICS':'SHARMA SILK HOUSE'}"></div>
+            <div class="dk-row"><label>Type (Under) :</label><input id="dm-type" value="${type}" autocomplete="off"></div>
+            ${mode === 'alter' ? `<div class="dk-row"><label>Search ${type} :</label><input id="dm-pick" value="${D.esc(rec?.name || '')}" placeholder="Type karke list se chunein..." autocomplete="off"></div>` : ''}
+            <div class="dk-row"><label>${type} Name :</label><input id="dm-name" value="${D.esc(rec?.name || '')}" placeholder="Jaise: ${type==='Firm'?'INDIAN FABRICS':'SHARMA SILK HOUSE'}" autocomplete="off"></div>
             <div class="dk-sec">${type} Profile Details</div>
-            <div class="dk-row"><label>Mobile No. :</label><input id="dm-mob" value="${D.esc(rec?.mob||'')}" placeholder="10-digit Mobile"></div>
-            <div class="dk-row"><label>GSTIN / TIN :</label><input id="dm-gst" value="${D.esc(rec?.gst||'')}" placeholder="GST No."></div>
-            <div class="dk-row"><label>Address :</label><input id="dm-addr" value="${D.esc(rec?.address||'')}" placeholder="Market / Address"></div>
-            <div class="dk-row"><label>City (To) :</label><input id="dm-city" value="${D.esc(rec?.city||'')}" placeholder="Jaise: HYDERABAD"></div>
-            <div class="dk-row"><label>Agent Name :</label><input id="dm-agent" value="${D.esc(rec?.agent||'')}" placeholder="Agent ka Naam"></div>
+            <div class="dk-row"><label>Mobile No. :</label><input id="dm-mob" value="${D.esc(rec?.mob || '')}" placeholder="10-digit Mobile"></div>
+            <div class="dk-row"><label>GSTIN / TIN :</label><input id="dm-gst" value="${D.esc(rec?.gst || '')}" placeholder="GST No."></div>
+            <div class="dk-row"><label>Address :</label><input id="dm-addr" value="${D.esc(rec?.address || '')}" placeholder="Market / Address"></div>
+            <div class="dk-row"><label>City (To) :</label><input id="dm-city" value="${D.esc(rec?.city || '')}" placeholder="Jaise: HYDERABAD"></div>
+            <div class="dk-row"><label>Agent Name :</label><input id="dm-agent" value="${D.esc(rec?.agent || '')}" placeholder="Agent ka Naam"></div>
             ${type === 'Party' ? `
-                <div class="dk-row"><label>Default Marka :</label><input id="dm-marka" value="${D.esc(rec?.marka||'')}" placeholder="SSH / HYD"></div>
-                <div class="dk-row"><label>Transport :</label><input id="dm-tr" value="${D.esc(rec?.transport||'')}" placeholder="Transport Name"></div>
+                <div class="dk-row"><label>Default Marka :</label><input id="dm-marka" value="${D.esc(rec?.marka || '')}" placeholder="SSH / HYD"></div>
+                <div class="dk-row"><label>Transport :</label><input id="dm-tr" value="${D.esc(rec?.transport || '')}" placeholder="Transport Name"></div>
             ` : `
-                <div class="dk-row"><label>Email ID :</label><input id="dm-email" value="${D.esc(rec?.email||'')}" placeholder="firm@gmail.com"></div>
+                <div class="dk-row"><label>Email ID :</label><input id="dm-email" value="${D.esc(rec?.email || '')}" placeholder="firm@gmail.com"></div>
             `}
-            <div style="text-align:right; margin-top:12px;">
-                <button type="button" class="dk-btn-gold" onclick="DukanERP.saveMaster()">${rec ? 'Update' : 'Save'} [Ctrl+Enter]</button>
+            <div class="dk-accept" id="dk-accept-box">
+                <strong>${rec ? 'Update' : 'Accept & Save'} ${type}?</strong>
+                <div style="display:flex; gap:8px;">
+                    <button type="button" class="dk-btn-gold" id="dk-accept-yes" onclick="DukanERP.saveMaster()">Yes (Y)</button>
+                    <button type="button" class="dk-btn" id="dk-accept-no" onclick="document.getElementById('dk-accept-box').style.display='none'; DukanERP.focusField('dm-name');">No (N)</button>
+                </div>
             </div>
         `;
 
-        D.renderShell(headL, left, `${type}s: ${curList.length} · Profile me Agent field active`);
+        D.renderShell(headL, left, '[Enter / ↓] Agla Box · [↑ ↓] List Chunein · [Ctrl+Enter] Save');
 
-        if (mode === 'create') {
-            D.setSide('List of Masters', 'Create Mode', [
-                { label: 'Party (Buyer / Vyapari)', meta: `${parties.length} Saved`, active: type === 'Party', t: 'Party' },
-                { label: 'Firm (Apni Dukan)', meta: `${firms.length} Saved`, active: type === 'Firm', t: 'Firm' },
-                { label: 'Alter Existing (Edit)', meta: 'Switch', active: false, m: 'alter' }
-            ], (it) => {
-                if (it.m) mode = 'alter';
-                if (it.t) type = it.t;
-                editId = '';
-                render();
-            }, 'dm-type');
-        } else {
-            const sideArr = [
-                { label: '📁 Switch: Party List', meta: `${parties.length}`, active: false, sw: 'Party' },
-                { label: '📁 Switch: Firm List', meta: `${firms.length}`, active: false, sw: 'Firm' },
-                ...curList.slice(0, 60).map((x) => ({
-                    label: x.name, meta: x.city || x.mob || type, active: x.id === editId, id: x.id
-                }))
-            ];
-            D.setSide(`Alter — ${type} List`, `${curList.length} Total`, sideArr, (it) => {
-                if (it.sw) { type = it.sw; editId = ''; }
-                else if (it.id) { editId = it.id; }
-                render();
-            });
+        const focusOrder = mode === 'alter'
+            ? (type === 'Party'
+                ? ['dm-type', 'dm-pick', 'dm-name', 'dm-mob', 'dm-gst', 'dm-addr', 'dm-city', 'dm-agent', 'dm-marka', 'dm-tr']
+                : ['dm-type', 'dm-pick', 'dm-name', 'dm-mob', 'dm-gst', 'dm-addr', 'dm-city', 'dm-agent', 'dm-email'])
+            : (type === 'Party'
+                ? ['dm-type', 'dm-name', 'dm-mob', 'dm-gst', 'dm-addr', 'dm-city', 'dm-agent', 'dm-marka', 'dm-tr']
+                : ['dm-type', 'dm-name', 'dm-mob', 'dm-gst', 'dm-addr', 'dm-city', 'dm-agent', 'dm-email']);
+
+        const sideBindings = {
+            'dm-type': {
+                title: 'List of Masters',
+                getItems: () => [
+                    { label: 'Party (Buyer / Vyapari)', meta: `${parties.length} Saved`, active: type === 'Party', t: 'Party' },
+                    { label: 'Firm (Apni Dukan)', meta: `${firms.length} Saved`, active: type === 'Firm', t: 'Firm' },
+                    { label: mode === 'create' ? 'Switch to Alter (Edit)' : 'Switch to Create', meta: 'Mode', active: false, m: mode === 'create' ? 'alter' : 'create' }
+                ],
+                onPick: (it) => {
+                    if (it.m) mode = it.m;
+                    if (it.t) type = it.t;
+                    editId = '';
+                    render(mode === 'alter' ? 'dm-pick' : 'dm-name');
+                }
+            }
+        };
+
+        if (mode === 'alter') {
+            sideBindings['dm-pick'] = {
+                title: `List of ${type}s (Alter)`,
+                getItems: (q) => curList
+                    .filter((x) => !q || `${x.name} ${x.city} ${x.mob}`.toLowerCase().includes(q.toLowerCase()))
+                    .slice(0, 60)
+                    .map((x) => ({ id: x.id, label: x.name, meta: x.city || x.mob || '', active: x.id === editId })),
+                onPick: (it) => { editId = it.id; render('dm-name'); }
+            };
         }
-        setTimeout(() => document.getElementById('dm-name')?.focus(), 30);
+
+        D.bindFormControls({
+            focusOrder,
+            sideBindings,
+            defaultSide: () => D.renderSide('Master Info', type, [
+                { label: `Active Type: ${type}`, meta: mode.toUpperCase(), active: true },
+                { label: `Total Parties: ${parties.length}`, meta: 'Saved' },
+                { label: `Total Firms: ${firms.length}`, meta: 'Saved' }
+            ], false),
+            onFinishForm: () => {
+                const nm = (document.getElementById('dm-name')?.value || '').trim();
+                if (!nm) return D.focusField('dm-name');
+                D.askAccept(() => D.saveMaster());
+            }
+        });
+
+        D.focusField(focusId);
     }
 
-    D.setMasterMode = (m) => { mode = m; editId = ''; render(); };
+    D.setMasterMode = (m) => { mode = m; editId = ''; render(m === 'alter' ? 'dm-pick' : 'dm-name'); };
 
     D.saveMaster = () => {
         const name = (document.getElementById('dm-name')?.value || '').trim().toUpperCase();
@@ -102,7 +133,6 @@
         } else list.push(obj);
         D.set(key, list);
         editId = '';
-        alert(`✅ ${type} [${name}] save ho gaya!`);
-        render();
+        render(mode === 'alter' ? 'dm-pick' : 'dm-name');
     };
 })();
