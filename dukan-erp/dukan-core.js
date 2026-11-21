@@ -30,9 +30,18 @@
         return isNaN(n) || !isFinite(n) ? 0 : n;
     };
 
-    D.today = () => (typeof window.getTodayDate === 'function')
-        ? window.getTodayDate()
-        : new Date().toISOString().split('T')[0];
+    // Always YYYY-MM-DD for <input type="date">
+    D.today = () => {
+        const raw = (typeof window.getTodayDate === 'function') ? String(window.getTodayDate() || '').trim() : '';
+        if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+        const m = raw.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
+        if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+        const now = new Date();
+        const y = now.getFullYear();
+        const mo = String(now.getMonth() + 1).padStart(2, '0');
+        const d = String(now.getDate()).padStart(2, '0');
+        return `${y}-${mo}-${d}`;
+    };
 
     D.fmtDate = (iso) => {
         const s = String(iso || '').trim();
@@ -71,7 +80,6 @@
         if (el) el.textContent = msg;
     };
 
-    // Order Progress + Kis Marka, Kis Date me, Kitni Pcs Gayi + Universal Search Index
     D.getOrderProgress = (ord) => {
         const challans = D.get('dukan_challans').filter((c) => c.orderId === ord.id);
         const sentMap = {};
@@ -89,7 +97,6 @@
             return { ...it, ordered, sent, baki };
         });
         const allDone = items.length > 0 && items.every((x) => x.baki <= 0);
-
         const searchParts = [
             ord.no, ord.date, D.fmtDate(ord.date), ord.marka, ord.partyName, ord.agent, ord.transport,
             ...items.map((x) => x.name),
@@ -98,13 +105,7 @@
                 ...(c.items || []).map((ci) => `${ci.name} ${ci.qty}`)
             ])
         ];
-
-        return {
-            items,
-            allDone,
-            challans,
-            searchText: searchParts.filter(Boolean).join(' ').toLowerCase()
-        };
+        return { items, allDone, challans, searchText: searchParts.filter(Boolean).join(' ').toLowerCase() };
     };
 
     D.paginate = (arr, page = 1, size = D.pageSize) => {
@@ -201,6 +202,7 @@
             .dk-btn:hover:not(:disabled) { border-color:#d99b07; background:#fef9ea; }
             .dk-btn:disabled { opacity:0.45; cursor:not-allowed; }
             .dk-btn-gold { background:#eab01e; border:1px solid #d99b07; color:#fff; padding:7px 16px; border-radius:6px; font-size:12.5px; font-weight:800; cursor:pointer; }
+            .dk-btn-gold:focus, .dk-btn:focus { outline:2px solid #92400e; outline-offset:1px; box-shadow:0 0 0 3px rgba(234,176,30,0.35); }
             .dk-body { display:grid; grid-template-columns:1.6fr 0.85fr; gap:16px; padding:14px 18px; align-items:start; }
             .dk-row { display:grid; grid-template-columns:155px 1fr; align-items:center; gap:10px; margin-bottom:8px; }
             .dk-row label { font-size:12.5px; font-weight:700; color:#374151; }
@@ -213,9 +215,9 @@
             .dk-side-list { max-height:420px; overflow-y:auto; }
             .dk-side-opt { padding:8px 13px; border-bottom:1px solid #f3f4f6; cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12.5px; font-weight:600; }
             .dk-side-opt:hover { background:#fef9ea; }
-            .dk-side-opt.selected { background:#eab01e; color:#fff; font-weight:700; }
+            .dk-side-opt.selected { background:#eab01e; color:#111827; font-weight:800; }
             .dk-side-opt small { font-size:11px; color:#6b7280; font-weight:600; text-align:right; }
-            .dk-side-opt.selected small { color:#fff; }
+            .dk-side-opt.selected small { color:#1f2937; }
             .dk-tbl { width:100%; border-collapse:collapse; margin-top:6px; border:1px solid #e5e7eb; font-size:12px; background:#fff; }
             .dk-tbl th { background:#fdf6e2; padding:7px 8px; text-align:left; font-weight:800; border-bottom:1px solid #e5d5a7; }
             .dk-tbl td { padding:5px 7px; border-bottom:1px solid #f3f4f6; vertical-align:top; }
@@ -227,7 +229,7 @@
             .dk-nav-row.active small, .dk-nav-row.active span { color:#1f2937 !important; }
             .dk-choice-btn { width:100%; border:1.5px solid #e5d5a7; background:#fff; border-radius:8px; padding:13px 16px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; margin-bottom:10px; font-size:14px; font-weight:700; color:#1f2937; text-align:left; }
             .dk-choice-btn:hover { background:#fef9ea; }
-            .dk-choice-btn.active { background:#eab01e; border-color:#d99b07; color:#fff; }
+            .dk-choice-btn.active { background:#eab01e; border-color:#d99b07; color:#111827; }
             .dk-cnt-pill { background:#fdf6e2; border:1px solid #d9b86c; color:#92400e; padding:3px 12px; border-radius:999px; font-size:12px; font-weight:800; }
             .dk-choice-btn.active .dk-cnt-pill { background:#fff; color:#1f2937; }
             .dk-accept { display:none; background:#fdf6e2; border:1.5px solid #d9b86c; border-radius:8px; padding:10px 14px; margin-top:10px; justify-content:space-between; align-items:center; gap:10px; }
@@ -497,13 +499,18 @@
         const activeEl = document.activeElement;
         const activeId = activeEl?.id || '';
 
-        if (activeEl?.tagName === 'BUTTON' && !activeEl.classList.contains('dk-choice-btn')) {
-            return;
-        }
-
         if (e.key === 'Enter' && e.shiftKey && activeId && D.focusOrder.includes(activeId)) {
             e.preventDefault(); e.stopImmediatePropagation();
             D.moveFocus(activeId, -1);
+            return;
+        }
+
+        // Focused Action Button inside focusOrder (e.g. + Add button)
+        if (activeEl?.tagName === 'BUTTON' && !activeEl.classList.contains('dk-choice-btn')) {
+            if (e.key === 'Enter') {
+                e.preventDefault(); e.stopImmediatePropagation();
+                activeEl.click();
+            }
             return;
         }
 
