@@ -1,6 +1,6 @@
 /* ============================================================================
    PARTY REGISTER:
-   1. Sirf Party List -> 2. Pending / Completed Buttons (Count Side Me) -> 3. List
+   1. Sirf Sari Party List -> 2. Pending / Completed Buttons -> 3. Order + Gaya/Baki
    File: dukan-erp/dukan-party-reg.js
 ============================================================================ */
 (() => {
@@ -62,8 +62,7 @@
             const getFiltered = () => parties.filter((p) =>
                 !searchQ || `${p.name} ${p.city} ${p.agent} ${p.mob}`.toLowerCase().includes(searchQ.toLowerCase())
             );
-            const filtered = getFiltered();
-            const pg = D.paginate(filtered, page);
+            const pg = D.paginate(getFiltered(), page);
             if (navIdx >= pg.rows.length) navIdx = 0;
 
             const left = `
@@ -74,7 +73,7 @@
                 </table>
                 <div id="pr-pager-box"></div>
             `;
-            D.renderShell(`<h2>Party Register — Party List</h2>`, left, '[↑ ↓] Party Chunein · [Enter] Kholein · [Esc] Back');
+            D.renderShell(`<h2>Party Register — Sari Party List</h2>`, left, '[↑ ↓] Party Chunein · [Enter] Kholein · [Esc] Back');
             renderPartyRows(pg);
 
             const qInp = document.getElementById('pr-q');
@@ -146,17 +145,23 @@
 
         const left = `
             <table class="dk-tbl">
-                <thead><tr><th>Order #</th><th>Date</th><th>Items (Particulars &amp; Qnty)</th><th>Marka</th><th>Action</th></tr></thead>
-                <tbody id="pr-ord-tb">${pg.rows.length ? pg.rows.map((o, i) => `
+                <thead><tr><th>Order #</th><th>Date</th><th>Item-Wise Hisab (Order · Gaya · Baki)</th><th>Marka</th><th>Action</th></tr></thead>
+                <tbody id="pr-ord-tb">${pg.rows.length ? pg.rows.map((o, i) => {
+                    const prog = D.getOrderProgress(o);
+                    const detailHTML = prog.items.map((x) =>
+                        `<div><strong>${D.esc(x.name)}</strong>: Ord <b>${x.ordered}</b> | <span style="color:#15803d;">Gaya ${x.sent}</span> | <span style="color:#b91c1c;">Baki ${x.baki}</span></div>`
+                    ).join('');
+                    return `
                     <tr class="dk-nav-row ${i === navIdx ? 'active' : ''}" onclick="DukanERP.prSelectOrder(${i})">
                         <td><strong>#${D.esc(o.no)}</strong></td>
                         <td>${D.esc(o.date)}</td>
-                        <td>${(o.items || []).map((x) => `${D.esc(x.name)} (${x.qty})`).join(', ')}</td>
+                        <td>${detailHTML}</td>
                         <td>${D.esc(o.marka || '-')}</td>
                         <td>${orderStatusView === 'Pending'
-                            ? `<button type="button" class="dk-btn-gold" style="padding:3px 8px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.loadOrderInChallan('${p.id}','${o.id}')">Challan →</button>`
+                            ? `<button type="button" class="dk-btn-gold" style="padding:4px 9px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.loadOrderInChallan('${p.id}','${o.id}')">Challan →</button>`
                             : '✅ Complete'}</td>
-                    </tr>`).join('') : `<tr><td colspan="5" style="text-align:center;color:#9ca3af;">Koi ${orderStatusView} order nahi</td></tr>`}
+                    </tr>`;
+                }).join('') : `<tr><td colspan="5" style="text-align:center;color:#9ca3af;">Koi ${orderStatusView} order nahi</td></tr>`}
                 </tbody>
             </table>
             ${D.pagerHTML(pg, 'dkPrPage')}
@@ -164,9 +169,10 @@
         D.renderShell(`<h2>${D.esc(p.name)} → List of ${orderStatusView} Orders</h2><button type="button" class="dk-btn" onclick="DukanERP.prBackChoice()">← Back</button>`, left, '[↑ ↓] Order Chunein · [Enter] Challan me Load · [Esc] Back');
 
         const showOrdSide = (ord) => {
-            if (!ord) return D.renderSide('Order Details', '-', [], false);
-            D.renderSide(`Order #${ord.no}`, ord.date, (ord.items || []).map((x) => ({
-                label: x.name, meta: `${x.qty} Pc · ₹${x.rate}`
+            if (!ord) return D.renderSide('Order Breakup', '-', [], false);
+            const prog = D.getOrderProgress(ord);
+            D.renderSide(`Order #${ord.no}`, ord.date, prog.items.map((x) => ({
+                label: x.name, meta: `Gaya ${x.sent} / ${x.ordered} (Baki ${x.baki})`
             })), false);
         };
         showOrdSide(pg.rows[navIdx]);
