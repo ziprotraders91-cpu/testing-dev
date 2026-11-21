@@ -1,6 +1,6 @@
 /* ============================================================================
-   ORDER FORM (Blank Firm Start + Auto Order No & Date + Cancel -> +Add Loop
-   + Ctrl+Enter -> GST No) + Pending/Complete Party->Order Reports
+   ORDER FORM (Book Format + Batch Loop + Live Finished Stock)
+   + PENDING & COMPLETE ALL ORDERS (Party List -> Order List + Universal Search)
    File: dukan-erp/dukan-order.js
 ============================================================================ */
 (() => {
@@ -13,7 +13,7 @@
 
     function getNextOrderNo() {
         const orders = D.get('dukan_orders');
-        if (!orders.length) return ''; // Pehli baar manual likhne ke liye khali
+        if (!orders.length) return '';
         const last = orders[orders.length - 1];
         const m = String(last?.no || '').match(/^(.*?)(\d+)$/);
         if (m) return `${m[1]}${parseInt(m[2], 10) + 1}`;
@@ -101,7 +101,7 @@
     function renderForm(focusId = 'of-firm') {
         const firms = D.get('dukan_firms');
         const parties = D.get('dukan_parties');
-        const designs = D.get('dukan_designs');
+        const designOpts = D.getSellableDesignOptions();
         const nextNo = getNextOrderNo();
 
         const left = `
@@ -135,7 +135,7 @@
                         </div>
 
                         <div style="padding:7px 8px;background:#fef2f2;border-bottom:1.5px solid #991b1b;display:grid;grid-template-columns:1.8fr 0.7fr 0.7fr 0.9fr 0.9fr auto;gap:5px;align-items:end;">
-                            <div><label style="font-size:10px;font-weight:800;color:#991b1b;">Item / Design</label><input id="of-cur-name" placeholder="Design..." style="width:100%;padding:5px;border:1px solid #fca5a5;border-radius:4px;font-weight:700;background:#fff;" autocomplete="off"></div>
+                            <div><label style="font-size:10px;font-weight:800;color:#991b1b;">Item / Design (Finished)</label><input id="of-cur-name" placeholder="Design..." style="width:100%;padding:5px;border:1px solid #fca5a5;border-radius:4px;font-weight:700;background:#fff;" autocomplete="off"></div>
                             <div><label style="font-size:10px;font-weight:800;color:#991b1b;">Qnty (Pcs)</label><input id="of-cur-qty" type="number" placeholder="0" style="width:100%;padding:5px;border:1px solid #fca5a5;border-radius:4px;font-weight:700;background:#fff;"></div>
                             <div><label style="font-size:10px;font-weight:800;color:#991b1b;">Rate</label><input id="of-cur-rate" type="number" placeholder="0" style="width:100%;padding:5px;border:1px solid #fca5a5;border-radius:4px;font-weight:700;background:#fff;"></div>
                             <div><label style="font-size:10px;font-weight:800;color:#991b1b;">Fold Size</label><input id="of-cur-fold" value="Box Fold" style="width:100%;padding:5px;border:1px solid #fca5a5;border-radius:4px;font-weight:700;background:#fff;"></div>
@@ -237,10 +237,10 @@
                     }
                 },
                 'of-cur-name': {
-                    title: `List of Designs (${designs.length})`,
+                    title: `Finished Designs (${designOpts.length})`,
                     noAutoHighlight: true,
-                    getItems: (q) => designs.filter((d) => !q || d.design.toLowerCase().includes(q.toLowerCase()))
-                        .slice(0, 60).map((d) => ({ label: d.design, meta: `${D.num(d.freshQty)} Pc · ${d.kariger || ''}` })),
+                    getItems: (q) => designOpts.filter((d) => !q || `${d.design} ${d.kariger}`.toLowerCase().includes(q.toLowerCase()))
+                        .slice(0, 60).map((d) => ({ label: d.design, meta: `${d.finishedQty} Pc Fin · ${d.kariger || ''}` })),
                     onPick: (it) => { document.getElementById('of-cur-name').value = it.label; D.focusField('of-cur-qty'); },
                     onEmptyEnter: () => D.focusField('of-tin')
                 },
