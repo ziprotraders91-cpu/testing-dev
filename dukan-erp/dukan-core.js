@@ -1,5 +1,5 @@
 /* ============================================================================
-   SIMPLICITY ERP (THE TALLY BRIDGE) - DUKAN CORE ENGINE
+   SIMPLICITY ERP (THE TALLY BRIDGE) - DUKAN CORE ENGINE (FINISHED STOCK LINKED)
    File: dukan-erp/dukan-core.js
 ============================================================================ */
 (() => {
@@ -30,17 +30,13 @@
         return isNaN(n) || !isFinite(n) ? 0 : n;
     };
 
-    // Always YYYY-MM-DD for <input type="date">
     D.today = () => {
         const raw = (typeof window.getTodayDate === 'function') ? String(window.getTodayDate() || '').trim() : '';
         if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
         const m = raw.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
         if (m) return `${m[3]}-${m[2]}-${m[1]}`;
         const now = new Date();
-        const y = now.getFullYear();
-        const mo = String(now.getMonth() + 1).padStart(2, '0');
-        const d = String(now.getDate()).padStart(2, '0');
-        return `${y}-${mo}-${d}`;
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     };
 
     D.fmtDate = (iso) => {
@@ -78,6 +74,155 @@
         D.lastToast = msg;
         const el = document.getElementById('dk-toast-msg');
         if (el) el.textContent = msg;
+    };
+
+    /* -------------------- REAL FINISHED SAREE STOCK (saree_history) -------------------- */
+    D.getFinishedStockRows = () => {
+        const history = D.get('saree_history');
+        if (typeof window.groupSareeStockByTab === 'function') {
+            return window.groupSareeStockByTab(history, 'finished', 'all') || [];
+        }
+        const map = new Map();
+        history.forEach((h) => {
+            if (!h) return;
+            const t = String(h.type || '').trim().toLowerCase();
+            if (t !== 'finished' && t !== 'finish' && t !== 'calender') return;
+            const sName = String(h.sareeName || h.name || h.saree || 'GENERAL SAREE').trim().toUpperCase();
+            const kName = String(h.karigerName || h.kariger || 'KARKHANA').trim().toUpperCase();
+            const kid = String(h.karkhanaId || 'k_main').trim() || 'k_main';
+            const key = `${sName}___${kName}___${kid}`;
+            if (!map.has(key)) map.set(key, { sareeName: sName, karigerName: kName, karkhanaId: kid, godamName: kid, aai: 0, gai: 0, bachi: 0 });
+            const e = map.get(key);
+            const isOut = (h.isOut === true) || (D.num(h.gai) > 0);
+            if (isOut) e.gai += D.num(h.gai !== undefined ? h.gai : h.pcs);
+            else e.aai += D.num(h.aai !== undefined ? h.aai : h.pcs);
+        });
+        const out = [];
+        map.forEach((e) => { e.bachi = Math.max(0, Math.round(e.aai - e.gai)); out.push(e); });
+        return out;
+    };
+
+    D.getDesignFinishedStock = (designOrObj) => {
+        const rows = D.getFinishedStockRows();
+        const designs = D.get('dukan_designs');
+        const dObj = typeof designOrObj === 'string'
+            ? designs.find((x) => String(x.design || '').toUpperCase() === designOrObj.trim().toUpperCase())
+            : designOrObj;
+
+        const targetDes = String(typeof designOrObj === 'string' ? designOrObj : (dObj?.design || '')).trim().toUpperCase();
+        if (!targetDes) return 0;
+
+        let matched = [];
+        if (dObj && dObj.sareeName && dObj.kariger) {
+            matched = rows.filter((r) =>
+                r.sareeName === String(dObj.sareeName).toUpperCase() &&
+                r.karigerName === String(dObj.kariger).toUpperCase() &&
+                (!dObj.karkhanaId || r.karkhanaId === dObj.karkhanaId)
+            );
+        }
+        if (!matched.length && dObj && dObj.sareeName) {
+            matched = rows.filter((r) => r.sareeName === String(dObj.sareeName).toUpperCase());
+        }
+        if (!matched.length) {
+            matched = rows.filter((r) => r.sareeName === targetDes);
+        }
+        return matched.reduce((sum, r) => sum + D.num(r.bachi), 0);
+    };
+
+    D.getSellableDesignOptions = () => {
+        const designs = D.get('dukan_designs');
+        const finRows = D.getFinishedStockRows();
+        const list = designs.map((d) => ({
+            design: String(d.design || '').toUpperCase(),
+            kariger: d.kariger || '',
+            sareeName: d.sareeName || d.design,
+            karkhanaId: d.karkhanaId || 'k_main',
+            finishedQty: D.getDesignFinishedStock(d)
+        }));
+        const linkedKeys = new Set(list.map((x) => `${x.sareeName}___${x.kariger}`.toUpperCase()));
+        finRows.forEach((r) => {
+            if (D.num(r.bachi) > 0 && !linkedKeys.has(`${r.sareeName}___${r.karigerName}`) && !list.some((x) => x.design === r.sareeName)) {
+                list.push({
+                    design: r.sareeName,
+                    kariger: r.karigerName,
+                    sareeName: r.sareeName,
+                    karkhanaId: r.karkhanaId,
+                    finishedQty: D.num(r.bachi)
+                });
+            }
+        });
+        return list;
+    };
+
+    D.deductFinishedStock = (designName, qty, meta = {}) => {
+        let rem = Math.round(D.num(qty));
+        const targetDes = String(designName || '').trim().toUpperCase();
+        if (!targetDes || rem <= 0) return;
+
+        const designs = D.get('dukan_designs');
+        const dObj = designs.find((x) => String(x.design || '').toUpperCase() === targetDes);
+        const finRows = D.getFinishedStockRows();
+
+        let candidates = [];
+        if (dObj && dObj.sareeName && dObj.kariger) {
+            candidates = finRows.filter((r) => r.bachi > 0 && r.sareeName === String(dObj.sareeName).toUpperCase() && r.karigerName === String(dObj.kariger).toUpperCase());
+        }
+        if (!candidates.length && dObj && dObj.sareeName) {
+            candidates = finRows.filter((r) => r.bachi > 0 && r.sareeName === String(dObj.sareeName).toUpperCase());
+        }
+        if (!candidates.length) {
+            candidates = finRows.filter((r) => r.bachi > 0 && r.sareeName === targetDes);
+        }
+
+        const history = D.get('saree_history');
+        const now = Date.now();
+        let idx = 0;
+
+        candidates.forEach((r) => {
+            if (rem <= 0) return;
+            const take = Math.min(rem, Math.round(D.num(r.bachi)));
+            if (take <= 0) return;
+            rem -= take;
+            history.push({
+                id: `saree_out_${now}_${idx++}_ch`,
+                date: meta.date || D.today(),
+                sareeName: r.sareeName,
+                karigerName: r.karigerName,
+                kariger: r.karigerName,
+                partyName: meta.partyName || 'DUKAN PARTY',
+                karkhanaId: r.karkhanaId || 'k_main',
+                type: 'finished',
+                typeLabel: `Dukan Challan #${meta.chNo || '-'}${meta.marka ? ` (${meta.marka})` : ''}`,
+                aai: 0,
+                gai: take,
+                isOut: true,
+                refId: meta.refId || `ch_${now}`,
+                timestamp: now + idx
+            });
+        });
+
+        if (rem > 0) {
+            history.push({
+                id: `saree_out_${now}_${idx}_ch`,
+                date: meta.date || D.today(),
+                sareeName: dObj?.sareeName || targetDes,
+                karigerName: dObj?.kariger || 'DUKAN',
+                kariger: dObj?.kariger || 'DUKAN',
+                partyName: meta.partyName || 'DUKAN PARTY',
+                karkhanaId: dObj?.karkhanaId || 'k_main',
+                type: 'finished',
+                typeLabel: `Dukan Challan #${meta.chNo || '-'}${meta.marka ? ` (${meta.marka})` : ''}`,
+                aai: 0,
+                gai: rem,
+                isOut: true,
+                refId: meta.refId || `ch_${now}`,
+                timestamp: now + idx + 1
+            });
+        }
+
+        D.set('saree_history', history);
+        if (typeof window.invalidateSareeCalcCache === 'function') window.invalidateSareeCalcCache();
+        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
     };
 
     D.getOrderProgress = (ord) => {
@@ -126,31 +271,6 @@
             </div>
         </div>
     `;
-
-    D.adjustFreshStock = (designName, deltaQty) => {
-        const nm = String(designName || '').trim().toUpperCase();
-        if (!nm || !deltaQty) return;
-        const designs = D.get('dukan_designs');
-        const d = designs.find((x) => String(x.design || '').toUpperCase() === nm);
-        if (d) {
-            d.freshQty = Math.max(0, D.num(d.freshQty) + deltaQty);
-            D.set('dukan_designs', designs);
-        }
-        const sStock = D.get('saree_stock');
-        if (sStock.length) {
-            const match = sStock.find((x) => {
-                const cat = String(x?.category || x?.status || 'fresh').toLowerCase();
-                const xName = String(x?.name || x?.design || '').trim().toUpperCase();
-                return cat === 'fresh' && xName === nm;
-            });
-            if (match) {
-                if (match.pcs !== undefined) match.pcs = Math.max(0, D.num(match.pcs) + deltaQty);
-                else if (match.qty !== undefined) match.qty = Math.max(0, D.num(match.qty) + deltaQty);
-                D.set('saree_stock', sStock);
-            }
-        }
-        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-    };
 
     const C39 = {
         '0':'nnnwwnwnn','1':'wnnwnnnnw','2':'nnwwnnnnw','3':'wnwwnnnnn','4':'nnnwwnnnw','5':'wnnwwnnnn',
@@ -398,9 +518,9 @@
     const GW_ITEMS = [
         { k: 'c', label: '<span class="dk-gw-key">C</span>reate (Firm / Party / Alter)', meta: 'Master Setup', fn: () => D.openCreate() },
         { k: 'p', label: '<span class="dk-gw-key">P</span>arty Register', meta: 'Party → Pending / Complete', fn: () => D.openPartyRegister() },
-        { k: 'n', label: '<span class="dk-gw-key">N</span>aming &amp; Barcoding', meta: 'Kariger → Sticker', fn: () => D.openBarcode() },
+        { k: 'n', label: '<span class="dk-gw-key">N</span>aming &amp; Barcoding', meta: 'Finished → Sticker', fn: () => D.openBarcode() },
         { k: 'o', label: '<span class="dk-gw-key">O</span>rder Form', meta: 'Batch Format', fn: () => D.openOrderForm() },
-        { k: 'h', label: 'C<span class="dk-gw-key">h</span>allan &amp; Packing Slip', meta: 'Manual No + Combo Print', fn: () => D.openChallan() },
+        { k: 'h', label: 'C<span class="dk-gw-key">h</span>allan &amp; Packing Slip', meta: 'Finished Minus + Slip', fn: () => D.openChallan() },
         { k: 'd', label: 'Pen<span class="dk-gw-key">d</span>ing Order (All)', meta: 'Party Wise', fn: () => D.openAllOrders('Pending') },
         { k: 'l', label: 'Comp<span class="dk-gw-key">l</span>ete Order (All)', meta: 'Party Wise', fn: () => D.openAllOrders('Complete') }
     ];
@@ -505,7 +625,6 @@
             return;
         }
 
-        // Focused Action Button inside focusOrder (e.g. + Add button)
         if (activeEl?.tagName === 'BUTTON' && !activeEl.classList.contains('dk-choice-btn')) {
             if (e.key === 'Enter') {
                 e.preventDefault(); e.stopImmediatePropagation();
