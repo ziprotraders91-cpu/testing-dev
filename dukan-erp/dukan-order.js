@@ -1,5 +1,6 @@
 /* ============================================================================
-   ORDER FORM (EXACT BOOK FORMAT + FIRM HEADER + PARTY ADDRESS + PACK/FOLD SIDE LIST)
+   ORDER FORM (Book Format + Firm Auto-Fill + Fixed Design Enter)
+   + PENDING & COMPLETE ORDERS (Pahle Sari Party List -> Andar Order List)
    File: dukan-erp/dukan-order.js
 ============================================================================ */
 (() => {
@@ -7,17 +8,19 @@
     let selPartyId = '';
     let selFirmId = '';
     let rows = [{ name: '', qty: '', rate: '', fold: 'Box Fold', cancel: '-' }];
-    let repPage = 1, repStatus = 'Pending', repSearch = '', repNav = 0;
+
+    // Pending/Complete Reports state (Party List -> Order List)
+    let repStatus = 'Pending', repStep = 'parties', repPartyId = '', repSearch = '', repPage = 1, repNav = 0;
 
     D.openOrderForm = () => {
         D.screen = 'order';
         D.onEsc = null;
         D.onCustomFieldEnter = null;
         const firms = D.get('dukan_firms');
-        selFirmId = firms.length ? firms[firms.length - 1].id : '';
+        selFirmId = firms.length ? firms[0].id : '';
         selPartyId = '';
         rows = [{ name: '', qty: '', rate: '', fold: 'Box Fold', cancel: '-' }];
-        renderForm(firms.length ? 'of-party' : 'of-firm');
+        renderForm('of-firm');
     };
 
     function applyFirmToHeader(f) {
@@ -46,9 +49,7 @@
                     if (String(rows[i].name || '').trim()) {
                         if (i === rows.length - 1) appendBatchRow();
                         else D.focusField(`of-it-${i + 1}-name`);
-                    } else {
-                        D.focusField('of-no');
-                    }
+                    } else D.focusField('of-no');
                 }
             });
         }
@@ -85,7 +86,7 @@
             'of-firm': {
                 title: `List of Firms (${firms.length})`,
                 getItems: (q) => firms.filter((f) => !q || f.name.toLowerCase().includes(q.toLowerCase()))
-                    .map((f) => ({ id: f.id, label: f.name, meta: f.city || f.gst || 'Firm', f })),
+                    .map((f) => ({ id: f.id, label: f.name, meta: f.city || f.gst || 'Firm', f, active: f.id === selFirmId })),
                 onPick: (it) => {
                     selFirmId = it.id;
                     applyFirmToHeader(it.f);
@@ -114,27 +115,22 @@
                 getItems: (q) => ['Box', 'Paper', 'No Box']
                     .filter((x) => !q || x.toLowerCase().includes(q.toLowerCase()))
                     .map((x) => ({ label: x, meta: 'Pack' })),
-                onPick: (it) => {
-                    document.getElementById('of-pack').value = it.label;
-                    D.focusField('of-fold');
-                }
+                onPick: (it) => { document.getElementById('of-pack').value = it.label; D.focusField('of-fold'); }
             },
             'of-fold': {
                 title: 'Fold Type',
                 getItems: (q) => ['Box Fold', 'Book Fold', 'Patti Fold', 'Roll Fold']
                     .filter((x) => !q || x.toLowerCase().includes(q.toLowerCase()))
                     .map((x) => ({ label: x, meta: 'Fold' })),
-                onPick: (it) => {
-                    document.getElementById('of-fold').value = it.label;
-                    D.focusField('of-rem');
-                }
+                onPick: (it) => { document.getElementById('of-fold').value = it.label; D.focusField('of-rem'); }
             }
         };
 
         rows.forEach((_, i) => {
             focusOrder.push(`of-it-${i}-name`, `of-it-${i}-qty`, `of-it-${i}-rate`, `of-it-${i}-fold`, `of-it-${i}-cancel`);
             sideBindings[`of-it-${i}-name`] = {
-                title: 'List of Designs (Fresh Stock)',
+                title: 'List of Designs (↑ ↓ + Enter)',
+                noAutoHighlight: true,
                 getItems: (q) => designs.filter((d) => !q || d.design.toLowerCase().includes(q.toLowerCase()))
                     .slice(0, 60).map((d) => ({ label: d.design, meta: `${D.num(d.freshQty)} Pc · ${d.kariger || ''}` })),
                 onPick: (it) => {
@@ -159,7 +155,7 @@
         });
     }
 
-    function renderForm(focusId = 'of-party') {
+    function renderForm(focusId = 'of-firm') {
         const firms = D.get('dukan_firms');
         const fObj = firms.find((x) => x.id === selFirmId) || firms[0] || {};
         const orders = D.get('dukan_orders');
@@ -169,7 +165,7 @@
             <div class="dk-ord-book">
                 <div class="dk-ord-hdr">
                     <div>
-                        <input id="of-firm" value="${D.esc(fObj.name || '')}" placeholder="Apni Firm chunein / likhein..." style="border:none;border-bottom:1px dashed #991b1b;font-size:17px;font-weight:800;color:#991b1b;background:transparent;outline:none;width:270px;" autocomplete="off">
+                        <input id="of-firm" value="${D.esc(fObj.name || '')}" placeholder="Apni Firm chunein (Side List)..." style="border:none;border-bottom:1px dashed #991b1b;font-size:17px;font-weight:800;color:#991b1b;background:transparent;outline:none;width:270px;" autocomplete="off">
                         <div id="of-firm-info" style="font-size:10.5px;color:#7f1d1d;font-weight:700;margin-top:2px;">GSTIN: ${D.esc(fObj.gst || '-')} · ${D.esc(fObj.address || '')}${fObj.email ? ' · ' + D.esc(fObj.email) : ''}</div>
                     </div>
                     <div style="text-align:right;">
@@ -234,8 +230,8 @@
                         <div class="dk-ord-box"><label>Marka / Through</label><input id="of-marka" placeholder="Marka"></div>
                         <div class="dk-ord-box"><label>Transport</label><input id="of-tr" placeholder="Transport"></div>
                         <div class="dk-ord-box"><label>Agent Name</label><input id="of-agent" placeholder="Agent Name"></div>
-                        <div class="dk-ord-box"><label>Box / Paper / No Box</label><input id="of-pack" value="Box" placeholder="Box / Paper / No Box" autocomplete="off"></div>
-                        <div class="dk-ord-box"><label>Fold</label><input id="of-fold" value="Box Fold" placeholder="Box Fold / Book Fold..." autocomplete="off"></div>
+                        <div class="dk-ord-box"><label>Box / Paper / No Box</label><input id="of-pack" value="Box" autocomplete="off"></div>
+                        <div class="dk-ord-box"><label>Fold</label><input id="of-fold" value="Box Fold" autocomplete="off"></div>
                         <div class="dk-ord-box" style="border-bottom:none;"><label>Remarks</label><input id="of-rem" placeholder="Enter = Save"></div>
                     </div>
                 </div>
@@ -256,7 +252,7 @@
             </div>
         `;
 
-        D.renderShell(`<h2>Order Form (Book Format)</h2>`, left);
+        D.renderShell(`<h2>Order Form (Book Format)</h2>`, left, 'Design box par ↓ dabakar Enter se Design chunein · Khali box par Enter se Order No. par jayein');
         rows.forEach((_, i) => bindRowEvents(i));
         rebuildOrderBindings();
         D.focusField(focusId);
@@ -307,9 +303,8 @@
         const clone = book.cloneNode(true);
         clone.querySelectorAll('input').forEach((inp) => {
             const orig = document.getElementById(inp.id);
-            const val = orig ? orig.value : inp.value;
             const span = document.createElement('span');
-            span.textContent = val;
+            span.textContent = orig ? orig.value : inp.value;
             span.style.cssText = inp.style.cssText + ';display:inline-block;border:none;';
             inp.replaceWith(span);
         });
@@ -318,57 +313,119 @@
         w.document.close(); w.print();
     };
 
+    /* PENDING / COMPLETE ALL ORDERS: PAHLE PARTY LIST -> ANDAR ORDER LIST */
     D.openAllOrders = (status) => {
         D.screen = status === 'Pending' ? 'pending' : 'complete';
-        D.onEsc = null; D.onCustomFieldEnter = null;
-        repStatus = status; repPage = 1; repSearch = ''; repNav = 0;
+        D.onCustomFieldEnter = null;
+        repStatus = status; repStep = 'parties'; repPartyId = ''; repSearch = ''; repPage = 1; repNav = 0;
+        D.onEsc = () => {
+            if (repStep === 'orders') { repStep = 'parties'; repPage = 1; repNav = 0; renderReport(); }
+            else window.openDukanGateway();
+        };
         renderReport();
     };
 
     window.dkRepPage = (p) => { repPage = p; repNav = 0; renderReport(); };
 
     function renderReport() {
-        const list = D.get('dukan_orders').filter((o) =>
-            (repStatus === 'Pending' ? o.status !== 'Complete' : o.status === 'Complete') &&
-            (!repSearch || `${o.no} ${o.partyName} ${o.marka} ${(o.items || []).map(i => i.name).join(' ')}`.toLowerCase().includes(repSearch.toLowerCase()))
-        );
-        const pg = D.paginate(list, repPage);
+        const orders = D.get('dukan_orders');
+        const parties = D.get('dukan_parties');
+        const matchSt = (o) => repStatus === 'Pending' ? o.status !== 'Complete' : o.status === 'Complete';
+
+        if (repStep === 'parties') {
+            const getPList = () => {
+                const map = new Map();
+                orders.filter(matchSt).forEach((o) => {
+                    const pid = o.partyId || o.partyName;
+                    if (!map.has(pid)) {
+                        const pObj = parties.find((x) => x.id === pid) || {};
+                        map.set(pid, { id: pid, name: o.partyName || pObj.name || pid, city: pObj.city || '', count: 0 });
+                    }
+                    map.get(pid).count++;
+                });
+                return Array.from(map.values()).filter((x) => !repSearch || `${x.name} ${x.city}`.toLowerCase().includes(repSearch.toLowerCase()));
+            };
+
+            const drawRows = () => {
+                const flt = getPList();
+                const pg = D.paginate(flt, repPage);
+                if (repNav >= pg.rows.length) repNav = 0;
+                const tb = document.getElementById('rep-ptb');
+                if (tb) {
+                    tb.innerHTML = pg.rows.length ? pg.rows.map((p, i) => `
+                        <tr class="dk-nav-row ${i === repNav ? 'active' : ''}" onclick="DukanERP.repOpenParty('${D.esc(p.id)}')">
+                            <td><strong>${D.esc(p.name)}</strong></td>
+                            <td>${D.esc(p.city || '-')}</td>
+                            <td><strong>${p.count} ${repStatus}</strong></td>
+                        </tr>`).join('') : `<tr><td colspan="3" style="text-align:center;color:#9ca3af;">Koi ${repStatus} party nahi</td></tr>`;
+                }
+                const pgBox = document.getElementById('rep-pg');
+                if (pgBox) pgBox.innerHTML = D.pagerHTML(pg, 'dkRepPage');
+                D.renderSide(`${repStatus} Parties`, `${flt.length} Parties`, pg.rows.map((p, i) => ({
+                    label: p.name, meta: `${p.count} Orders`, active: i === repNav
+                })), false);
+            };
+
+            D.renderShell(`<h2>${repStatus} Orders — Sari Party List</h2>`, `
+                <div class="dk-row"><label>🔍 Search Party :</label><input id="rep-q" value="${D.esc(repSearch)}" placeholder="Party naam likhein..." autocomplete="off"></div>
+                <table class="dk-tbl"><thead><tr><th>Party Name</th><th>City</th><th>${repStatus} Orders</th></tr></thead><tbody id="rep-ptb"></tbody></table>
+                <div id="rep-pg"></div>
+            `, '[↑ ↓] Party Chunein · [Enter] Orders Dekhein · [Esc] Back');
+
+            drawRows();
+            const qEl = document.getElementById('rep-q');
+            if (qEl) {
+                qEl.addEventListener('input', () => { repSearch = qEl.value; repPage = 1; repNav = 0; drawRows(); });
+                qEl.focus();
+            }
+            D.bindFormControls({
+                listNav: {
+                    selector: '#rep-ptb .dk-nav-row',
+                    searchId: 'rep-q',
+                    getIdx: () => repNav,
+                    setIdx: (i) => { repNav = i; },
+                    onEnter: (i) => {
+                        const row = D.paginate(getPList(), repPage).rows[i];
+                        if (row) D.repOpenParty(row.id);
+                    }
+                }
+            });
+            return;
+        }
+
+        const pOrders = orders.filter((o) => matchSt(o) && (o.partyId === repPartyId || o.partyName === repPartyId));
+        const pg = D.paginate(pOrders, repPage);
         if (repNav >= pg.rows.length) repNav = 0;
+        const pName = pOrders[0]?.partyName || repPartyId;
 
         const left = `
-            <div class="dk-row"><label>🔍 Search Order :</label><input id="rep-q" value="${D.esc(repSearch)}" placeholder="Order No, Party, Design..." autocomplete="off"></div>
             <table class="dk-tbl">
-                <thead><tr><th>Order #</th><th>Date</th><th>Party</th><th>Items</th><th>Action</th></tr></thead>
-                <tbody id="rep-tb">${pg.rows.length ? pg.rows.map((o, i) => `
+                <thead><tr><th>Order #</th><th>Date</th><th>Item-Wise (Ord · Gaya · Baki)</th><th>Marka</th><th>Action</th></tr></thead>
+                <tbody id="rep-tb">${pg.rows.length ? pg.rows.map((o, i) => {
+                    const prog = D.getOrderProgress(o);
+                    const detail = prog.items.map((x) => `<div><strong>${D.esc(x.name)}</strong>: Ord <b>${x.ordered}</b> | <span style="color:#15803d;">Gaya ${x.sent}</span> | <span style="color:#b91c1c;">Baki ${x.baki}</span></div>`).join('');
+                    return `
                     <tr class="dk-nav-row ${i === repNav ? 'active' : ''}" onclick="DukanERP.repPick(${i})">
-                        <td><strong>#${D.esc(o.no)}</strong></td><td>${D.esc(o.date)}</td><td>${D.esc(o.partyName)}</td>
-                        <td>${(o.items || []).map((x) => `${D.esc(x.name)} (${x.qty})`).join(', ')}</td>
-                        <td>${repStatus === 'Pending' ? `<button type="button" class="dk-btn-gold" style="padding:3px 8px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.loadOrderInChallan('${o.partyId}','${o.id}')">Challan →</button>` : '✅ Complete'}</td>
-                    </tr>`).join('') : `<tr><td colspan="5" style="text-align:center;color:#9ca3af;">Koi ${repStatus} order nahi</td></tr>`}
+                        <td><strong>#${D.esc(o.no)}</strong></td><td>${D.esc(o.date)}</td>
+                        <td>${detail}</td><td>${D.esc(o.marka || '-')}</td>
+                        <td>${repStatus === 'Pending' ? `<button type="button" class="dk-btn-gold" style="padding:4px 9px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.loadOrderInChallan('${o.partyId}','${o.id}')">Challan →</button>` : '✅ Complete'}</td>
+                    </tr>`;
+                }).join('') : `<tr><td colspan="5" style="text-align:center;color:#9ca3af;">Koi order nahi</td></tr>`}
                 </tbody>
             </table>
             ${D.pagerHTML(pg, 'dkRepPage')}
         `;
-        D.renderShell(`<h2>${repStatus} Orders (All Parties)</h2>`, left, '[↑ ↓] Order Chunein · [Enter] Challan me Load');
-        D.renderSide(`${repStatus} Orders`, `${list.length} Total`, pg.rows.map((o, i) => ({
-            label: `#${o.no} · ${o.partyName}`, meta: `${(o.items || []).reduce((a, b) => a + D.num(b.qty), 0)} Pc`, active: i === repNav
+        D.renderShell(`<h2>${D.esc(pName)} → ${repStatus} Orders</h2><button type="button" class="dk-btn" onclick="DukanERP.repBackParties()">← Party List</button>`, left, '[↑ ↓] Order Chunein · [Enter] Challan me Load');
+        D.renderSide(pName, `${pOrders.length} Orders`, pg.rows.map((o, i) => ({
+            label: `Order #${o.no}`, meta: o.date, active: i === repNav
         })), false);
 
         D.repPick = (i) => { repNav = i; const o = pg.rows[i]; if (o && repStatus === 'Pending') D.loadOrderInChallan(o.partyId, o.id); };
-
-        const qEl = document.getElementById('rep-q');
-        if (qEl) {
-            qEl.addEventListener('input', () => { repSearch = qEl.value; repPage = 1; repNav = 0; renderReport(); });
-            qEl.focus();
-        }
         D.bindFormControls({
-            listNav: {
-                selector: '#rep-tb .dk-nav-row',
-                searchId: 'rep-q',
-                getIdx: () => repNav,
-                setIdx: (i) => { repNav = i; },
-                onEnter: (i) => D.repPick(i)
-            }
+            listNav: { selector: '#rep-tb .dk-nav-row', getIdx: () => repNav, setIdx: (i) => { repNav = i; }, onEnter: (i) => D.repPick(i) }
         });
     }
+
+    D.repOpenParty = (pid) => { repPartyId = pid; repStep = 'orders'; repPage = 1; repNav = 0; renderReport(); };
+    D.repBackParties = () => { repStep = 'parties'; repPage = 1; repNav = 0; renderReport(); };
 })();
