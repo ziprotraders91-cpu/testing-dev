@@ -1,5 +1,5 @@
 /* ============================================================================
-   CHALLAN & PACKING SLIP (Blank Firm Start + Rate->+Add Loop + Combo Print)
+   CHALLAN & PACKING SLIP (Real Finished Stock Auto-Load & Auto-Minus)
    File: dukan-erp/dukan-challan.js
 ============================================================================ */
 (() => {
@@ -34,7 +34,6 @@
     };
 
     function renderChBatchTable() {
-        const designs = D.get('dukan_designs');
         const tb = document.getElementById('ch-items-tb');
         const totEl = document.getElementById('ch-batch-tot');
         if (!tb) return;
@@ -43,11 +42,11 @@
         if (totEl) totEl.textContent = `Total: ${chBatch.length} Designs · ${totPcs} Pcs · ₹ ${totAmt.toLocaleString('en-IN')}`;
 
         tb.innerHTML = chBatch.length ? chBatch.map((it, i) => {
-            const ds = designs.find((d) => String(d.design || '').toUpperCase() === String(it.name || '').toUpperCase());
+            const finAvail = D.getDesignFinishedStock(it.name);
             return `<tr>
                 <td>${i + 1}</td>
                 <td><strong>${D.esc(it.name)}</strong></td>
-                <td style="color:#15803d;font-weight:700;">${ds ? D.num(ds.freshQty) : 0} Pc</td>
+                <td style="color:#15803d;font-weight:700;">${finAvail} Pc</td>
                 <td><strong>${it.qty}</strong></td>
                 <td>${it.rate}</td>
                 <td>₹ ${(D.num(it.qty) * D.num(it.rate)).toLocaleString('en-IN')}</td>
@@ -71,7 +70,7 @@
         qtEl.value = '';
         rtEl.value = '';
         const avEl = document.getElementById('ch-cur-av');
-        if (avEl) avEl.textContent = '(Avail: -)';
+        if (avEl) avEl.textContent = '(Finished: -)';
 
         renderChBatchTable();
         D.toast(`✅ Added: ${name} (${qty} Pc) — Agla item chunein ya [Ctrl+Enter] se Save karein`);
@@ -89,7 +88,7 @@
         const fObj = selFirmId ? (firms.find((x) => x.id === selFirmId) || {}) : {};
         const parties = D.get('dukan_parties');
         const orders = D.get('dukan_orders');
-        const designs = D.get('dukan_designs');
+        const designOpts = D.getSellableDesignOptions();
         const p = parties.find((x) => x.id === selPartyId) || {};
         const ordObj = linkedOrderId ? orders.find((o) => o.id === linkedOrderId) : null;
         const markaVal = ordObj ? (ordObj.marka || p.marka || '') : (p.marka || '');
@@ -104,10 +103,10 @@
             <div class="dk-row"><label>Mobile / GST :</label><div style="display:flex;gap:8px;"><input id="ch-mob" value="${D.esc(p.mob || '')}" placeholder="Mobile"><input id="ch-gst" value="${D.esc(p.gst || '')}" placeholder="GSTIN"></div></div>
             <div class="dk-row"><label>Challan No (Manual) :</label><div style="display:flex;gap:8px;"><input id="ch-no" placeholder="Manual Challan No. (e.g. 105)" autocomplete="off"><input id="ch-marka" value="${D.esc(markaVal)}" placeholder="Marka (Order wala)"></div></div>
 
-            <div class="dk-sec">Batch Entry (Rate → +Add (Enter) → wapas Item · [Ctrl+Enter] Save)</div>
+            <div class="dk-sec">Batch Entry (Save par asli Finished Stock se minus hoga · [Ctrl+Enter] Save)</div>
             <div style="padding:8px;background:#fdf6e2;border:1.5px solid #e5d5a7;border-radius:6px;display:grid;grid-template-columns:1.8fr 0.8fr 0.8fr auto;gap:6px;align-items:end;margin-bottom:8px;">
                 <div>
-                    <label style="font-size:10.5px;font-weight:800;color:#92400e;">Item / Design <small id="ch-cur-av" style="color:#15803d;">(Avail: -)</small></label>
+                    <label style="font-size:10.5px;font-weight:800;color:#92400e;">Item / Design <small id="ch-cur-av" style="color:#15803d;">(Finished: -)</small></label>
                     <input id="ch-cur-name" placeholder="Design..." style="width:100%;padding:6px;border:1px solid #d9b86c;border-radius:4px;font-weight:700;background:#fff;" autocomplete="off">
                 </div>
                 <div><label style="font-size:10.5px;font-weight:800;color:#92400e;">Challan Pcs</label><input id="ch-cur-qty" type="number" placeholder="0" style="width:100%;padding:6px;border:1px solid #d9b86c;border-radius:4px;font-weight:700;background:#fff;"></div>
@@ -117,7 +116,7 @@
 
             <div style="max-height:220px;overflow-y:auto;">
                 <table class="dk-tbl">
-                    <thead><tr><th>#</th><th>Design</th><th>Fresh Avail</th><th>Qty</th><th>Rate</th><th>Amount</th><th>Del</th></tr></thead>
+                    <thead><tr><th>#</th><th>Design</th><th>Finished Avail</th><th>Qty</th><th>Rate</th><th>Amount</th><th>Del</th></tr></thead>
                     <tbody id="ch-items-tb"></tbody>
                 </table>
             </div>
@@ -131,7 +130,7 @@
             </div>
 
             <div class="dk-accept" id="dk-accept-box">
-                <strong>Save Challan &amp; Minus Fresh Stock?</strong>
+                <strong>Save Challan &amp; Minus Finished Stock?</strong>
                 <div style="display:flex; gap:8px;">
                     <button type="button" class="dk-btn-gold" id="dk-accept-yes" onclick="DukanERP.saveChallan()">Yes (Y)</button>
                     <button type="button" class="dk-btn" onclick="DukanERP.printChallanAndSlip()">🖨️ Print</button>
@@ -140,7 +139,7 @@
             </div>
         `;
 
-        D.renderShell(`<h2>Challan &amp; Packing Slip (Batch Mode)</h2>`, left, 'Rate → +Add (Enter) → wapas Item · Poora batch hone par [Ctrl+Enter] se Save');
+        D.renderShell(`<h2>Challan &amp; Packing Slip (Finished Stock Linked)</h2>`, left, 'Save par Saree Stock → Finished se auto-minus + Passbook entry jayegi');
         renderChBatchTable();
 
         D.bindFormControls({
@@ -177,14 +176,14 @@
                     onEmptyEnter: () => D.focusField('ch-no')
                 },
                 'ch-cur-name': {
-                    title: `List of Designs (${designs.length})`,
+                    title: `Finished Designs (${designOpts.length})`,
                     noAutoHighlight: true,
-                    getItems: (q) => designs.filter((d) => !q || d.design.toLowerCase().includes(q.toLowerCase()))
-                        .slice(0, 60).map((d) => ({ label: d.design, meta: `${D.num(d.freshQty)} Pc`, qty: D.num(d.freshQty) })),
+                    getItems: (q) => designOpts.filter((d) => !q || `${d.design} ${d.kariger}`.toLowerCase().includes(q.toLowerCase()))
+                        .slice(0, 60).map((d) => ({ label: d.design, meta: `${d.finishedQty} Pc Fin`, qty: d.finishedQty })),
                     onPick: (it) => {
                         document.getElementById('ch-cur-name').value = it.label;
                         const av = document.getElementById('ch-cur-av');
-                        if (av) av.textContent = `(Avail: ${it.qty} Pc)`;
+                        if (av) av.textContent = `(Finished: ${it.qty} Pc)`;
                         D.focusField('ch-cur-qty');
                     },
                     onEmptyEnter: () => D.askChallanSave()
@@ -215,8 +214,9 @@
 
         const p = D.get('dukan_parties').find((x) => x.id === selPartyId) || {};
         const challans = D.get('dukan_challans');
+        const chId = `ch_${Date.now()}`;
         const rec = {
-            id: `ch_${Date.now()}`,
+            id: chId,
             no: chNo,
             date: D.today(),
             firmId: selFirmId,
@@ -234,7 +234,15 @@
         challans.push(rec);
         D.set('dukan_challans', challans);
 
-        rec.items.forEach((it) => D.adjustFreshStock(it.name, -D.num(it.qty)));
+        rec.items.forEach((it) => {
+            D.deductFinishedStock(it.name, D.num(it.qty), {
+                date: rec.date,
+                partyName: rec.partyName,
+                chNo: rec.no,
+                marka: rec.marka,
+                refId: chId
+            });
+        });
 
         if (linkedOrderId) {
             const ords = D.get('dukan_orders');
@@ -245,7 +253,7 @@
                 D.set('dukan_orders', ords);
             }
         }
-        D.toast(`✅ Challan ${rec.no} (${chBatch.length} items) save hua aur Fresh Stock minus ho gaya!`);
+        D.toast(`✅ Challan ${rec.no} save hua aur Finished Stock se minus ho gaya!`);
         D.openChallan();
     };
 
