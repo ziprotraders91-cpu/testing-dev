@@ -10,6 +10,7 @@
     D.openBarcode = () => {
         D.screen = 'barcode';
         D.onEsc = null;
+        D.onCustomFieldEnter = null;
         editId = ''; page = 1;
         render('bc-kar');
     };
@@ -33,7 +34,7 @@
             <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap; background:#fdf6e2; border:1px solid #e5d5a7; padding:10px; border-radius:8px; margin:8px 0;">
                 <div class="dk-sticker" id="dk-sticker-prev"></div>
                 <div style="display:flex; flex-direction:column; gap:8px;">
-                    <button type="button" class="dk-btn-gold" onclick="DukanERP.saveDesign()">💾 Save Naming [Ctrl+Enter]</button>
+                    <button type="button" class="dk-btn-gold" onclick="DukanERP.askBarcodeSave()">💾 Save Naming [Ctrl+Enter]</button>
                     <button type="button" class="dk-btn" onclick="DukanERP.printStickers()">🖨️ Print Stickers</button>
                 </div>
             </div>
@@ -58,15 +59,14 @@
             ${D.pagerHTML(pg, 'dkBcPage')}
         `;
 
-        D.renderShell(`<h2>Naming &amp; Barcoding</h2>`, left, 'Kariger par aate hi bagal me Kariger List khulegi');
+        D.renderShell(`<h2>Naming &amp; Barcoding</h2>`, left);
         D.updSticker();
 
         D.bindFormControls({
             focusOrder: ['bc-kar', 'bc-des', 'bc-spec', 'bc-code', 'bc-qty', 'bc-pqty'],
             sideBindings: {
                 'bc-kar': {
-                    title: 'List of Karigers',
-                    allowCustom: true,
+                    title: `List of Karigers (${karigers.length})`,
                     getItems: (q) => karigers
                         .filter((k) => !q || `${k.name} ${k.saree} ${k.karkhanaName}`.toLowerCase().includes(q.toLowerCase()))
                         .slice(0, 60)
@@ -79,25 +79,27 @@
                 },
                 'bc-des': {
                     title: 'List of Existing Designs',
-                    allowCustom: true,
                     getItems: (q) => designs
                         .filter((d) => !q || `${d.design} ${d.kariger}`.toLowerCase().includes(q.toLowerCase()))
                         .slice(0, 60)
                         .map((d) => ({ id: d.id, label: d.design, meta: `${d.kariger} · ${D.num(d.freshQty)} Pc` })),
-                    onPick: (it) => D.loadDesign(it.id),
-                    onCustomEnter: (val) => {
-                        const cd = document.getElementById('bc-code');
-                        if (cd && !cd.value.trim() && val.trim()) cd.value = `${val.trim().toUpperCase()} KT`;
-                        D.updSticker();
-                        D.focusField('bc-spec');
-                        return true;
+                    onPick: (it) => {
+                        const val = (document.getElementById('bc-des')?.value || '').trim().toUpperCase();
+                        if (val && val !== it.label) {
+                            const cd = document.getElementById('bc-code');
+                            if (cd && !cd.value.trim()) cd.value = `${val} KT`;
+                            D.updSticker();
+                            D.focusField('bc-spec');
+                        } else {
+                            D.loadDesign(it.id);
+                        }
                     }
                 }
             },
             defaultSide: () => D.renderSide('Saved Designs', `${designs.length} Items`, designs.slice(0, 40).map((d) => ({
                 label: d.design, meta: `${d.kariger} · ${D.num(d.freshQty)} Pc`
             })), false),
-            onFinishForm: () => D.askAccept(() => D.saveDesign())
+            onFinishForm: () => D.askBarcodeSave()
         });
 
         D.focusField(focusId);
@@ -119,10 +121,16 @@
         `;
     };
 
+    D.askBarcodeSave = () => {
+        const des = (document.getElementById('bc-des')?.value || '').trim();
+        if (!des) { D.toast('⚠️ Design Name bharein!'); return D.focusField('bc-des'); }
+        D.askAccept(() => D.saveDesign());
+    };
+
     D.saveDesign = () => {
         const kariger = (document.getElementById('bc-kar')?.value || '').trim().toUpperCase();
         const design = (document.getElementById('bc-des')?.value || '').trim().toUpperCase();
-        if (!design) return alert('Design Name bharein!');
+        if (!design) return D.focusField('bc-des');
         const specs = (document.getElementById('bc-spec')?.value || '').trim().toUpperCase();
         const code = (document.getElementById('bc-code')?.value || `${design} KT`).trim().toUpperCase();
         const freshQty = D.num(document.getElementById('bc-qty')?.value);
@@ -134,6 +142,7 @@
             if (idx >= 0) list[idx] = obj;
         } else list.push(obj);
         D.set('dukan_designs', list);
+        D.toast(`✅ Design [${design}] save ho gaya!`);
         editId = '';
         render('bc-kar');
     };
