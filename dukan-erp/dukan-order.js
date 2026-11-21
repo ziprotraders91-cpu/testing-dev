@@ -1,15 +1,23 @@
 /* ============================================================================
-   ORDER FORM (Book Format + Batch Loop + Edit/Delete/A5 Print)
-   + PENDING & COMPLETE ALL ORDERS (Party List -> Order List + Universal Search)
+   ORDER FORM:
+   - 2-Button Menu: [Order Form] & [Order Register]
+   - Dedicated Order Register with Universal Search + Edit / Delete / A5 Print / Challan
+   - Create / Edit / Delete + A5 Book Print + Batch Loop
+   - PENDING & COMPLETE ALL ORDERS (Party List -> Order List + Universal Search)
    File: dukan-erp/dukan-order.js
 ============================================================================ */
 (() => {
     const D = window.DukanERP;
+    let viewMode = 'choice'; // 'choice' | 'form' | 'register'
+    let choiceIdx = 0;
+    let fromRegister = false;
+    let fromExternal = false;
     let editOrderId = '';
     let selPartyId = '';
     let selFirmId = '';
     let batch = [];
 
+    let regSearch = '', regPage = 1, regNav = 0;
     let repStatus = 'Pending', repStep = 'parties', repPartyId = '', repSearch = '', repOrdSearch = '', repPage = 1, repNav = 0;
 
     function getNextOrderNo() {
@@ -21,36 +29,101 @@
         return '';
     }
 
-    D.openOrderForm = () => {
-        D.screen = 'order';
-        D.onEsc = null;
-        D.onCustomFieldEnter = null;
-        editOrderId = '';
-        selFirmId = '';
-        selPartyId = '';
-        batch = [];
-        renderForm('of-firm');
-    };
-
-    // Tally Style: Kisi bhi Saved Order par click/Enter karne par poora Order Edit/Delete/Print ke liye khulega
-    D.editOrder = (orderId) => {
-        const ord = D.get('dukan_orders').find((o) => o.id === orderId);
-        if (!ord) return;
-        D.screen = 'order';
-        D.onCustomFieldEnter = null;
-        editOrderId = ord.id;
-        selFirmId = ord.firmId || '';
-        selPartyId = ord.partyId || '';
-        batch = (ord.items || []).map((x) => ({ ...x }));
+    function bindOrderEsc() {
         D.onEsc = () => {
-            if (repPartyId && (repStatus === 'Pending' || repStatus === 'Complete')) {
-                D.screen = repStatus === 'Pending' ? 'pending' : 'complete';
-                renderReport();
+            if (viewMode === 'form') {
+                if (fromExternal) {
+                    fromExternal = false;
+                    window.openDukanGateway();
+                    return;
+                }
+                viewMode = fromRegister ? 'register' : 'choice';
+                editOrderId = '';
+                fromRegister = false;
+                renderOrderScreen();
+            } else if (viewMode === 'register') {
+                viewMode = 'choice';
+                renderOrderScreen();
             } else {
                 window.openDukanGateway();
             }
         };
-        renderForm('of-party', ord);
+    }
+
+    D.openOrderForm = (ordId = '') => {
+        D.screen = 'order';
+        D.onCustomFieldEnter = null;
+        bindOrderEsc();
+        fromExternal = false;
+
+        if (ordId) {
+            const ord = D.get('dukan_orders').find((o) => o.id === ordId);
+            if (ord) {
+                viewMode = 'form';
+                editOrderId = ord.id;
+                selFirmId = ord.firmId || '';
+                selPartyId = ord.partyId || '';
+                batch = (ord.items || []).map((x) => ({ ...x }));
+                renderOrderScreen('of-cur-name', ord);
+                return;
+            }
+        }
+
+        viewMode = 'choice';
+        choiceIdx = 0;
+        fromRegister = false;
+        editOrderId = '';
+        selFirmId = '';
+        selPartyId = '';
+        batch = [];
+        regSearch = '';
+        regPage = 1;
+        regNav = 0;
+        renderOrderScreen();
+    };
+
+    D.openOrderEdit = (ordId) => {
+        fromRegister = false;
+        D.openOrderForm(ordId);
+        fromExternal = true;
+    };
+
+    D.ofEditFromReg = (ordId) => {
+        fromRegister = true;
+        D.openOrderForm(ordId);
+    };
+
+    D.ofOpenChoice = (idx) => {
+        choiceIdx = idx;
+        fromRegister = false;
+        fromExternal = false;
+        editOrderId = '';
+        if (idx === 0) {
+            viewMode = 'form';
+            selFirmId = '';
+            selPartyId = '';
+            batch = [];
+            renderOrderScreen('of-firm', null);
+        } else {
+            viewMode = 'register';
+            regPage = 1;
+            regNav = 0;
+            renderOrderScreen();
+        }
+    };
+
+    D.ofBackToChoice = () => {
+        viewMode = 'choice';
+        editOrderId = '';
+        fromRegister = false;
+        fromExternal = false;
+        renderOrderScreen();
+    };
+
+    window.dkOfRegPage = (p) => {
+        regPage = p;
+        regNav = 0;
+        renderOrderScreen();
     };
 
     function applyFirmToHeader(f) {
@@ -121,27 +194,194 @@
         D.focusField('of-cur-name');
     };
 
-    function renderForm(focusId = 'of-firm', preOrd = null) {
+    function renderChoiceScreen() {
+        const orders = D.get('dukan_orders');
+        const pendCnt = orders.filter((o) => o.status !== 'Complete').length;
+        const compCnt = orders.filter((o) => o.status === 'Complete').length;
+
+        const left = `
+            <div style="background:#fdf6e2; border:1px solid #e5d5a7; border-radius:8px; padding:12px; margin-bottom:14px;">
+                <strong style="font-size:15px;">Order Form Menu</strong>
+                <div style="font-size:12px; color:#6b7280; margin-top:2px;">
+                    Naya Order banane ya Saved Order Register dekhne ke liye option chunein
+                </div>
+            </div>
+            <button type="button" class="dk-choice-btn ${choiceIdx === 0 ? 'active' : ''}" onclick="DukanERP.ofOpenChoice(0)">
+                <span>📝 Order Form (New Batch Entry)</span>
+                <span class="dk-cnt-pill">${pendCnt} Pend</span>
+            </button>
+            <button type="button" class="dk-choice-btn ${choiceIdx === 1 ? 'active' : ''}" onclick="DukanERP.ofOpenChoice(1)">
+                <span>📋 Order Register (All Saved Orders)</span>
+                <span class="dk-cnt-pill">${orders.length}</span>
+            </button>
+        `;
+
+        D.renderShell(`<h2>Order Form</h2>`, left, '[↑ ↓] Option Chunein · [Enter] Kholein · [Esc] Back');
+        D.renderSide('Orders Summary', `${orders.length} Saved`, [
+            { label: 'Order Form', meta: 'Naya Order + A5 Print', active: choiceIdx === 0 },
+            { label: 'Order Register', meta: `${orders.length} Orders Saved`, active: choiceIdx === 1 },
+            { label: 'Pending Orders', meta: `${pendCnt} Baki` },
+            { label: 'Complete Orders', meta: `${compCnt} Done` }
+        ], false);
+
+        D.bindFormControls({
+            listNav: {
+                selector: '#dk-left .dk-choice-btn',
+                getIdx: () => choiceIdx,
+                setIdx: (i) => { choiceIdx = i; },
+                onEnter: (i) => D.ofOpenChoice(i)
+            }
+        });
+        setTimeout(() => document.querySelectorAll('#dk-left .dk-choice-btn')[choiceIdx]?.focus(), 20);
+    }
+
+    function renderRegisterScreen() {
+        const orders = D.get('dukan_orders').slice().reverse();
+
+        const getFiltered = () => {
+            const q = regSearch.trim().toLowerCase();
+            if (!q) return orders;
+            return orders.filter((o) => {
+                const prog = D.getOrderProgress(o);
+                const blob = `${prog.searchText} ${o.status || ''} ${o.firmName || ''}`.toLowerCase();
+                return blob.includes(q);
+            });
+        };
+
+        const showRegSide = (ord) => {
+            if (!ord) return D.renderSide('Order Register', '0', [], false);
+            const prog = D.getOrderProgress(ord);
+            D.renderSide(`Order #${ord.no}`, `${D.fmtDate(ord.date)} · ${ord.status || 'Pending'}`, [
+                { label: `Party: ${ord.partyName}`, meta: `Marka: ${ord.marka || '-'}`, active: true },
+                ...prog.items.map((x) => ({
+                    label: x.name,
+                    meta: `Gaya ${x.sent}/${x.ordered} · Baki ${x.baki}`
+                })),
+                ...prog.challans.map((c) => ({
+                    label: `📦 Ch #${c.no} (${D.fmtDate(c.date)})`,
+                    meta: `${(c.items || []).map((ci) => `${ci.name}:${ci.qty}`).join(', ')}`
+                }))
+            ], false);
+        };
+
+        const drawRows = () => {
+            const flt = getFiltered();
+            const pg = D.paginate(flt, regPage);
+            if (regNav >= pg.rows.length) regNav = 0;
+
+            const tb = document.getElementById('of-reg-tb');
+            if (tb) {
+                tb.innerHTML = pg.rows.length ? pg.rows.map((o, i) => {
+                    const prog = D.getOrderProgress(o);
+                    const isDone = o.status === 'Complete';
+                    const badge = isDone
+                        ? `<span style="background:#dcfce7;color:#15803d;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:800;">Complete</span>`
+                        : `<span style="background:#fef2f2;color:#b91c1c;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:800;">Pending</span>`;
+                    const itemsHTML = prog.items.map((x) =>
+                        `<div><strong>${D.esc(x.name)}</strong>: Ord <b>${x.ordered}</b> | <span style="color:#15803d;">Gaya ${x.sent}</span> | <span style="color:#b91c1c;">Baki ${x.baki}</span></div>`
+                    ).join('');
+                    const chHTML = prog.challans.map((c) =>
+                        `<div style="font-size:10.5px;color:#4b5563;margin-top:2px;">📦 Ch #${D.esc(c.no)} (${D.fmtDate(c.date)})</div>`
+                    ).join('');
+
+                    return `
+                        <tr class="dk-nav-row ${i === regNav ? 'active' : ''}" onclick="DukanERP.ofEditFromReg('${o.id}')">
+                            <td><strong>#${D.esc(o.no)}</strong><br><small>${D.fmtDate(o.date)}</small><br>${badge}</td>
+                            <td><strong>${D.esc(o.partyName)}</strong><br><small>Marka: ${D.esc(o.marka || '-')} · ${D.esc(o.agent || '-')}</small></td>
+                            <td>${itemsHTML}${chHTML}</td>
+                            <td style="white-space:nowrap;">
+                                <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.ofEditFromReg('${o.id}')">✏️ Edit</button>
+                                <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.printSavedOrder('${o.id}')">🖨️ A5</button>
+                                <button type="button" class="dk-btn-del" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.deleteOrder('${o.id}')">🗑️ Del</button>
+                                ${!isDone ? `<button type="button" class="dk-btn-gold" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.loadOrderInChallan('${D.esc(o.partyId)}','${o.id}')">Challan →</button>` : ''}
+                            </td>
+                        </tr>`;
+                }).join('') : `<tr><td colspan="4" style="text-align:center;color:#9ca3af;">Koi saved order nahi mila</td></tr>`;
+            }
+
+            const pgBox = document.getElementById('of-reg-pg');
+            if (pgBox) pgBox.innerHTML = D.pagerHTML(pg, 'dkOfRegPage');
+            showRegSide(pg.rows[regNav]);
+        };
+
+        const headL = `
+            <h2>Order Register (${orders.length})</h2>
+            <button type="button" class="dk-tab" onclick="DukanERP.ofOpenChoice(0)">+ New Order Form</button>
+            <button type="button" class="dk-btn" onclick="DukanERP.ofBackToChoice()">← Menu</button>
+        `;
+
+        const left = `
+            <div class="dk-row">
+                <label>🔍 Universal Search :</label>
+                <input id="of-reg-q" value="${D.esc(regSearch)}" placeholder="Order #, Party, Marka, Design, Agent, Date, Challan # ya Status..." autocomplete="off">
+            </div>
+            <table class="dk-tbl">
+                <thead>
+                    <tr>
+                        <th>Order # / Status</th>
+                        <th>Party / Marka</th>
+                        <th>Items Hisab (Ord / Gaya / Baki)</th>
+                        <th>Action (Edit / Del / Print)</th>
+                    </tr>
+                </thead>
+                <tbody id="of-reg-tb"></tbody>
+            </table>
+            <div id="of-reg-pg"></div>
+        `;
+
+        D.renderShell(headL, left, '[↑ ↓] Select · [Enter / Click] Edit & Delete kholein · [Esc] Menu');
+        drawRows();
+
+        const qEl = document.getElementById('of-reg-q');
+        if (qEl) {
+            qEl.addEventListener('input', () => {
+                regSearch = qEl.value;
+                regPage = 1;
+                regNav = 0;
+                drawRows();
+            });
+            qEl.focus();
+        }
+
+        D.bindFormControls({
+            listNav: {
+                selector: '#of-reg-tb .dk-nav-row',
+                searchId: 'of-reg-q',
+                getIdx: () => regNav,
+                setIdx: (i) => { regNav = i; },
+                onHighlight: (i) => showRegSide(D.paginate(getFiltered(), regPage).rows[i]),
+                onEnter: (i) => {
+                    const row = D.paginate(getFiltered(), regPage).rows[i];
+                    if (row) D.ofEditFromReg(row.id);
+                }
+            }
+        });
+    }
+
+    function renderForm(focusId = 'of-firm', ord = null) {
         const firms = D.get('dukan_firms');
         const parties = D.get('dukan_parties');
+        const orders = D.get('dukan_orders');
         const designOpts = D.getSellableDesignOptions();
-        const recentOrders = D.get('dukan_orders').slice().reverse().slice(0, 20);
-        const fObj = preOrd
-            ? (firms.find((x) => x.id === preOrd.firmId || x.name === preOrd.firmName) || { name: preOrd.firmName || '' })
-            : null;
-        const noVal = preOrd ? preOrd.no : getNextOrderNo();
-        const dtVal = preOrd ? (preOrd.date || D.today()) : D.today();
+        const fObj = selFirmId ? (firms.find((x) => x.id === selFirmId) || {}) : {};
+        const nextNo = ord ? ord.no : getNextOrderNo();
+
+        const headL = `
+            <h2>Order Form (${ord ? `Edit #${D.esc(ord.no)}` : 'Batch Mode'})</h2>
+            <button type="button" class="dk-tab" onclick="DukanERP.ofOpenChoice(1)">📋 Order Register (${orders.length})</button>
+            <button type="button" class="dk-btn" onclick="DukanERP.ofBackToChoice()">← Menu</button>
+        `;
 
         const left = `
             <div class="dk-ord-book">
                 <div class="dk-ord-hdr">
                     <div>
-                        <input id="of-firm" value="${D.esc(fObj?.name || '')}" placeholder="Apni Firm chunein (Side List)..." style="border:none;border-bottom:1.5px dashed #991b1b;font-size:17px;font-weight:800;color:#991b1b;background:transparent;outline:none;width:290px;" autocomplete="off">
-                        <div id="of-firm-info" style="font-size:10.5px;color:#7f1d1d;font-weight:700;margin-top:2px;">${fObj ? `GSTIN: ${D.esc(fObj.gst || '-')} · ${D.esc(fObj.address || '')}` : 'Side List se Apni Firm chunein'}</div>
+                        <input id="of-firm" value="${D.esc(ord ? (ord.firmName || fObj.name || '') : '')}" placeholder="Apni Firm chunein (Side List)..." style="border:none;border-bottom:1.5px dashed #991b1b;font-size:17px;font-weight:800;color:#991b1b;background:transparent;outline:none;width:290px;" autocomplete="off">
+                        <div id="of-firm-info" style="font-size:10.5px;color:#7f1d1d;font-weight:700;margin-top:2px;">${ord && fObj.name ? D.esc(`GSTIN: ${fObj.gst || '-'} · ${fObj.address || ''}`) : 'Side List se Apni Firm chunein'}</div>
                     </div>
                     <div style="text-align:right;">
-                        <strong style="font-size:15px;color:#991b1b;letter-spacing:0.6px;">ORDER FORM ${preOrd ? '(EDIT)' : ''}</strong>
-                        <div id="of-firm-ph" style="font-size:10.5px;color:#7f1d1d;font-weight:700;">${fObj?.mob ? 'Mob: ' + D.esc(fObj.mob) : ''}</div>
+                        <strong style="font-size:15px;color:#991b1b;letter-spacing:0.6px;">ORDER FORM ${ord ? '(EDIT)' : ''}</strong>
+                        <div id="of-firm-ph" style="font-size:10.5px;color:#7f1d1d;font-weight:700;">${ord && fObj.mob ? 'Mob: ' + D.esc(fObj.mob) : ''}</div>
                     </div>
                 </div>
 
@@ -149,16 +389,16 @@
                     <div class="dk-ord-main">
                         <div class="dk-ord-ms">
                             <strong style="color:#991b1b;font-size:13px;">M/s.</strong>
-                            <input id="of-party" value="${D.esc(preOrd?.partyName || '')}" placeholder="Party ka naam likhein ya Side List se chunein..." autocomplete="off">
+                            <input id="of-party" value="${D.esc(ord?.partyName || '')}" placeholder="Party ka naam likhein ya Side List se chunein..." autocomplete="off">
                         </div>
                         <div style="padding:5px 10px;border-bottom:1.5px solid #991b1b;display:grid;grid-template-columns:1.5fr 0.8fr;gap:8px;background:#fffafa;">
                             <div style="display:flex;align-items:center;gap:5px;font-size:11.5px;">
                                 <strong style="color:#991b1b;">Add:</strong>
-                                <input id="of-party-addr" value="${D.esc(preOrd?.partyAddress || '')}" placeholder="Party Address &amp; City" style="flex:1;border:none;border-bottom:1px dashed #fca5a5;font-size:11.5px;font-weight:600;outline:none;background:transparent;">
+                                <input id="of-party-addr" value="${D.esc(ord?.partyAddress || '')}" placeholder="Party Address &amp; City" style="flex:1;border:none;border-bottom:1px dashed #fca5a5;font-size:11.5px;font-weight:600;outline:none;background:transparent;">
                             </div>
                             <div style="display:flex;align-items:center;gap:5px;font-size:11.5px;">
                                 <strong style="color:#991b1b;">Mob:</strong>
-                                <input id="of-party-mob" value="${D.esc(preOrd?.partyMob || '')}" placeholder="Mobile No." style="flex:1;border:none;border-bottom:1px dashed #fca5a5;font-size:11.5px;font-weight:600;outline:none;background:transparent;">
+                                <input id="of-party-mob" value="${D.esc(ord?.partyMob || '')}" placeholder="Mobile No." style="flex:1;border:none;border-bottom:1px dashed #fca5a5;font-size:11.5px;font-weight:600;outline:none;background:transparent;">
                             </div>
                         </div>
 
@@ -166,7 +406,7 @@
                             <div><label style="font-size:10px;font-weight:800;color:#991b1b;">Item / Design (Finished)</label><input id="of-cur-name" placeholder="Design..." style="width:100%;padding:5px;border:1px solid #fca5a5;border-radius:4px;font-weight:700;background:#fff;" autocomplete="off"></div>
                             <div><label style="font-size:10px;font-weight:800;color:#991b1b;">Qnty (Pcs)</label><input id="of-cur-qty" type="number" placeholder="0" style="width:100%;padding:5px;border:1px solid #fca5a5;border-radius:4px;font-weight:700;background:#fff;"></div>
                             <div><label style="font-size:10px;font-weight:800;color:#991b1b;">Rate</label><input id="of-cur-rate" type="number" placeholder="0" style="width:100%;padding:5px;border:1px solid #fca5a5;border-radius:4px;font-weight:700;background:#fff;"></div>
-                            <div><label style="font-size:10px;font-weight:800;color:#991b1b;">Fold Size</label><input id="of-cur-fold" value="${D.esc(preOrd?.fold || 'Box Fold')}" style="width:100%;padding:5px;border:1px solid #fca5a5;border-radius:4px;font-weight:700;background:#fff;"></div>
+                            <div><label style="font-size:10px;font-weight:800;color:#991b1b;">Fold Size</label><input id="of-cur-fold" value="${D.esc(ord?.fold || 'Box Fold')}" style="width:100%;padding:5px;border:1px solid #fca5a5;border-radius:4px;font-weight:700;background:#fff;"></div>
                             <div><label style="font-size:10px;font-weight:800;color:#991b1b;">Cancel Col.</label><input id="of-cur-cancel" value="-" style="width:100%;padding:5px;border:1px solid #fca5a5;border-radius:4px;font-weight:700;background:#fff;"></div>
                             <button type="button" id="of-add-btn" class="dk-btn-gold" style="padding:6px 10px;font-size:11.5px;" onclick="DukanERP.ofAddBatchItem()">+ Add</button>
                         </div>
@@ -190,39 +430,39 @@
 
                         <div style="margin-top:auto;padding:7px 10px;border-top:1.5px solid #991b1b;background:#fff5f5;display:flex;justify-content:space-between;font-size:11px;color:#7f1d1d;">
                             <strong id="of-batch-tot">Total: 0 Designs · 0 Pcs</strong>
-                            <strong id="of-firm-for">For: ${D.esc(fObj?.name || '-')}</strong>
+                            <strong id="of-firm-for">For: ${D.esc(ord?.firmName || fObj.name || '-')}</strong>
                         </div>
                     </div>
 
                     <div class="dk-ord-side">
                         <div class="dk-ord-2">
-                            <div><label>No.</label><input id="of-no" value="${D.esc(noVal)}" placeholder="Manual No."></div>
-                            <div><label>Date</label><input id="of-date" type="date" value="${D.esc(dtVal)}"></div>
+                            <div><label>No.</label><input id="of-no" value="${D.esc(nextNo)}" placeholder="Manual No."></div>
+                            <div><label>Date</label><input id="of-date" type="date" value="${ord?.date || D.today()}"></div>
                         </div>
-                        <div class="dk-ord-box"><label>Tin No. / GSTIN</label><input id="of-tin" value="${D.esc(preOrd?.gst || '')}" placeholder="TIN / GST"></div>
-                        <div class="dk-ord-box"><label>Marka / Through</label><input id="of-marka" value="${D.esc(preOrd?.marka || '')}" placeholder="Marka"></div>
-                        <div class="dk-ord-box"><label>Transport</label><input id="of-tr" value="${D.esc(preOrd?.transport || '')}" placeholder="Transport"></div>
-                        <div class="dk-ord-box"><label>Agent Name</label><input id="of-agent" value="${D.esc(preOrd?.agent || '')}" placeholder="Agent Name"></div>
-                        <div class="dk-ord-box"><label>Box / Paper / No Box</label><input id="of-pack" value="${D.esc(preOrd?.pack || 'Box')}" autocomplete="off"></div>
-                        <div class="dk-ord-box"><label>Fold</label><input id="of-fold" value="${D.esc(preOrd?.fold || 'Box Fold')}" autocomplete="off"></div>
-                        <div class="dk-ord-box" style="border-bottom:none;"><label>Remarks</label><input id="of-rem" value="${D.esc(preOrd?.remarks || '')}" placeholder="Enter = Save"></div>
+                        <div class="dk-ord-box"><label>Tin No. / GSTIN</label><input id="of-tin" value="${D.esc(ord?.gst || '')}" placeholder="TIN / GST"></div>
+                        <div class="dk-ord-box"><label>Marka / Through</label><input id="of-marka" value="${D.esc(ord?.marka || '')}" placeholder="Marka"></div>
+                        <div class="dk-ord-box"><label>Transport</label><input id="of-tr" value="${D.esc(ord?.transport || '')}" placeholder="Transport"></div>
+                        <div class="dk-ord-box"><label>Agent Name</label><input id="of-agent" value="${D.esc(ord?.agent || '')}" placeholder="Agent Name"></div>
+                        <div class="dk-ord-box"><label>Box / Paper / No Box</label><input id="of-pack" value="${D.esc(ord?.pack || 'Box')}" autocomplete="off"></div>
+                        <div class="dk-ord-box"><label>Fold</label><input id="of-fold" value="${D.esc(ord?.fold || 'Box Fold')}" autocomplete="off"></div>
+                        <div class="dk-ord-box" style="border-bottom:none;"><label>Remarks</label><input id="of-rem" value="${D.esc(ord?.remarks || '')}" placeholder="Enter = Save"></div>
                     </div>
                 </div>
             </div>
 
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap;">
-                <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                    ${preOrd ? `<button type="button" class="dk-btn" style="color:#dc2626;border-color:#fca5a5;" onclick="DukanERP.deleteOrder('${preOrd.id}')">🗑️ Delete Order</button>` : ''}
-                    ${preOrd && preOrd.status !== 'Complete' ? `<button type="button" class="dk-btn" onclick="DukanERP.loadOrderInChallan('${preOrd.partyId}','${preOrd.id}')">🚚 Challan Banayein →</button>` : ''}
+                <div style="display:flex;gap:8px;align-items:center;">
+                    ${ord ? `<button type="button" class="dk-btn-del" onclick="DukanERP.deleteOrder('${ord.id}')">🗑️ Delete Order</button>` : ''}
+                    <small style="color:#92400e;font-weight:700;">[Ctrl + Enter] se GST No. / Save par jayein</small>
                 </div>
                 <div style="display:flex;gap:8px;">
-                    <button type="button" class="dk-btn" onclick="DukanERP.printOrderBook()">🖨️ Print A5 Book</button>
-                    <button type="button" class="dk-btn-gold" onclick="DukanERP.askOrderSave()">${preOrd ? '💾 Update Order' : '💾 Save Order'} [Ctrl+Enter]</button>
+                    <button type="button" class="dk-btn" onclick="DukanERP.printOrderBook()">🖨️ Print A5 Form</button>
+                    <button type="button" class="dk-btn-gold" onclick="DukanERP.askOrderSave()">💾 ${ord ? 'Update' : 'Save'} Order [Ctrl+Enter]</button>
                 </div>
             </div>
 
             <div class="dk-accept" id="dk-accept-box">
-                <strong>${preOrd ? 'Update Order?' : 'Save Order Form?'}</strong>
+                <strong>${ord ? 'Update Order Form?' : 'Save Order Form?'}</strong>
                 <div style="display:flex; gap:8px;">
                     <button type="button" class="dk-btn-gold" id="dk-accept-yes" onclick="DukanERP.saveOrder()">Yes (Y)</button>
                     <button type="button" class="dk-btn" onclick="DukanERP.printOrderBook()">🖨️ Print A5</button>
@@ -231,8 +471,7 @@
             </div>
         `;
 
-        const headHTML = `<h2>${preOrd ? `Edit Order #${D.esc(preOrd.no)}` : 'Order Form (Batch Mode)'}</h2>${preOrd ? `<button type="button" class="dk-btn" onclick="DukanERP.openOrderForm()">+ Naya Order</button>` : ''}`;
-        D.renderShell(headHTML, left);
+        D.renderShell(headL, left);
         renderBatchTable();
 
         const batchIds = ['of-cur-name', 'of-cur-qty', 'of-cur-rate', 'of-cur-fold', 'of-cur-cancel', 'of-add-btn'];
@@ -287,17 +526,9 @@
                     onPick: (it) => { document.getElementById('of-fold').value = it.label; D.focusField('of-rem'); }
                 }
             },
-            defaultSide: () => {
-                if (batch.length) {
-                    D.renderSide('Batch Summary', `${batch.length} Items`, batch.map((r) => ({
-                        label: r.name, meta: `${r.qty} Pc · ₹${r.rate}`
-                    })), false);
-                } else {
-                    D.renderSide('Recent Saved Orders', `${recentOrders.length}`, recentOrders.map((o) => ({
-                        label: `#${o.no} · ${o.partyName}`, meta: `${o.status} · ${D.fmtDate(o.date)}`
-                    })), false);
-                }
-            },
+            defaultSide: () => D.renderSide('Batch Summary', `${batch.length} Items`, batch.map((r) => ({
+                label: r.name, meta: `${r.qty} Pc · ₹${r.rate}`
+            })), false),
             onFinishForm: () => {
                 const curId = document.activeElement?.id || '';
                 if (batchIds.includes(curId)) {
@@ -318,6 +549,12 @@
         D.focusField(focusId);
     }
 
+    function renderOrderScreen(focusId = 'of-firm', ord = null) {
+        if (viewMode === 'choice') return renderChoiceScreen();
+        if (viewMode === 'register') return renderRegisterScreen();
+        return renderForm(focusId, ord);
+    }
+
     D.askOrderSave = () => {
         const partyTxt = (document.getElementById('of-party')?.value || '').trim();
         const ordNo = (document.getElementById('of-no')?.value || '').trim();
@@ -333,7 +570,7 @@
         if (!partyTxt || !ordNo || !batch.length) return;
 
         const orders = D.get('dukan_orders');
-        const payload = {
+        const rec = {
             id: editOrderId || `ord_${Date.now()}`,
             no: ordNo,
             date: document.getElementById('of-date').value || D.today(),
@@ -356,40 +593,61 @@
 
         if (editOrderId) {
             const idx = orders.findIndex((o) => o.id === editOrderId);
-            if (idx >= 0) {
-                const prog = D.getOrderProgress({ ...orders[idx], items: payload.items });
-                payload.status = prog.allDone ? 'Complete' : 'Pending';
-                orders[idx] = payload;
-            }
+            if (idx >= 0) orders[idx] = rec;
             D.set('dukan_orders', orders);
+            D.recalcOrderStatus(rec.id);
             D.toast(`✅ Order #${ordNo} update ho gaya!`);
-            if (repPartyId) { D.openAllOrders(repStatus); } else D.openOrderForm();
         } else {
-            orders.push(payload);
+            orders.push(rec);
             D.set('dukan_orders', orders);
             D.toast(`✅ Order #${ordNo} (${batch.length} items) save ho gaya!`);
-            D.openOrderForm();
+        }
+
+        editOrderId = '';
+        selFirmId = '';
+        selPartyId = '';
+        batch = [];
+
+        if (fromRegister) {
+            fromRegister = false;
+            viewMode = 'register';
+            renderOrderScreen();
+        } else {
+            viewMode = 'form';
+            renderOrderScreen('of-firm', null);
         }
     };
 
-    D.deleteOrder = (orderId) => {
-        if (!confirm('Kya aap sach me ye Order delete karna chahte hain?')) return;
-        const orders = D.get('dukan_orders').filter((o) => o.id !== orderId);
-        D.set('dukan_orders', orders);
-        D.toast('🗑️ Order delete ho gaya!');
-        if (repPartyId) D.openAllOrders(repStatus);
-        else D.openOrderForm();
+    D.deleteOrder = (ordId) => {
+        if (!ordId) return;
+        const orders = D.get('dukan_orders');
+        const target = orders.find((o) => o.id === ordId);
+        if (!target) return;
+        if (!confirm(`Kya aap sach me Order #${target.no} delete karna chahte hain?`)) return;
+
+        D.set('dukan_orders', orders.filter((o) => o.id !== ordId));
+        D.toast(`🗑️ Order #${target.no} delete ho gaya!`);
+        editOrderId = '';
+        selFirmId = '';
+        selPartyId = '';
+        batch = [];
+
+        if (fromRegister || viewMode === 'register') {
+            fromRegister = false;
+            viewMode = 'register';
+            renderOrderScreen();
+        } else {
+            viewMode = 'form';
+            renderOrderScreen('of-firm', null);
+        }
     };
 
-    // A5 Paper Print for Order Form
-    D.printOrderBook = () => {
-        const firm = document.getElementById('of-firm')?.value || 'FIRM';
-        const fObj = D.get('dukan_firms').find((x) => x.id === selFirmId || x.name === firm) || {};
-        const totPcs = batch.reduce((a, b) => a + D.num(b.qty), 0);
-        const w = window.open('', '_blank', 'width=650,height=850');
-        w.document.write(`<html><head><style>
-            @page { size: A5 portrait; margin: 5mm; }
-            body{font-family:Inter,sans-serif;padding:4px;margin:0;color:#111}
+    const buildOrderA5HTML = (data) => {
+        const fObj = D.get('dukan_firms').find((x) => x.id === data.firmId || x.name === data.firmName) || {};
+        const totPcs = (data.items || []).reduce((a, b) => a + D.num(b.qty), 0);
+        return `<html><head><style>
+            @page{size:A5 portrait;margin:6mm}
+            body{font-family:Inter,sans-serif;margin:0;color:#111}
             .bk{border:2px solid #991b1b}
             .hd{background:#fff5f5;border-bottom:2px solid #991b1b;padding:7px 10px;display:flex;justify-content:space-between}
             .gr{display:grid;grid-template-columns:1fr 165px}
@@ -397,32 +655,65 @@
             table{width:100%;border-collapse:collapse}
             th,td{border:1px solid #fca5a5;padding:4px;font-size:10.5px;text-align:left}
             th{background:#fef2f2;color:#991b1b}
-            .sb{border-bottom:1px solid #fca5a5;padding:4px 6px;font-size:10px}
+            .sb{border-bottom:1px solid #fca5a5;padding:4px 7px;font-size:10px}
         </style></head><body>
             <div class="bk">
                 <div class="hd">
-                    <div><strong style="font-size:15px;color:#991b1b;">${D.esc(firm)}</strong><div style="font-size:9.5px;">GSTIN: ${D.esc(fObj.gst || '-')} · ${D.esc(fObj.address || '')}</div></div>
+                    <div><strong style="font-size:15px;color:#991b1b;">${D.esc(data.firmName || fObj.name || 'FIRM')}</strong><div style="font-size:9.5px;">GSTIN: ${D.esc(fObj.gst || '-')} · ${D.esc(fObj.address || '')}</div></div>
                     <div style="text-align:right;"><strong style="color:#991b1b;font-size:12px;">ORDER FORM</strong><div style="font-size:9.5px;">Mob: ${D.esc(fObj.mob || '-')}</div></div>
                 </div>
-                <div class="gr"><div class="mn">
-                    <div class="sb"><b>M/s.:</b> ${D.esc(document.getElementById('of-party').value)}<br>${D.esc(document.getElementById('of-party-addr').value)} · Mob: ${D.esc(document.getElementById('of-party-mob').value)}</div>
-                    <table><thead><tr><th>#</th><th>Particulars</th><th>Qnty</th><th>Rate</th><th>Fold</th><th>Cancel</th></tr></thead>
-                    <tbody>${batch.map((r, i) => `<tr><td>${i + 1}</td><td><b>${D.esc(r.name)}</b></td><td>${r.qty}</td><td>${r.rate}</td><td>${D.esc(r.fold)}</td><td>${D.esc(r.cancel)}</td></tr>`).join('')}</tbody>
-                    <tfoot><tr><th colspan="2">TOTAL (${batch.length} Items)</th><th>${totPcs}</th><th colspan="3"></th></tr></tfoot></table>
-                </div><div>
-                    <div class="sb"><b>No:</b> ${D.esc(document.getElementById('of-no').value)}<br><b>Date:</b> ${D.esc(D.fmtDate(document.getElementById('of-date').value))}</div>
-                    <div class="sb"><b>TIN/GST:</b> ${D.esc(document.getElementById('of-tin').value)}</div>
-                    <div class="sb"><b>Marka:</b> ${D.esc(document.getElementById('of-marka').value)}</div>
-                    <div class="sb"><b>Transport:</b> ${D.esc(document.getElementById('of-tr').value)}</div>
-                    <div class="sb"><b>Agent:</b> ${D.esc(document.getElementById('of-agent').value)}</div>
-                    <div class="sb"><b>Pack:</b> ${D.esc(document.getElementById('of-pack').value)}<br><b>Fold:</b> ${D.esc(document.getElementById('of-fold').value)}</div>
-                    <div class="sb" style="border-bottom:none;"><b>Remarks:</b> ${D.esc(document.getElementById('of-rem').value)}</div>
-                </div></div>
-            </div></body></html>`);
-        w.document.close(); w.print();
+                <div class="gr">
+                    <div class="mn">
+                        <div class="sb"><b>M/s.:</b> ${D.esc(data.partyName)}<br><small>${D.esc(data.partyAddress || '')} | Mob: ${D.esc(data.partyMob || '-')}</small></div>
+                        <table><thead><tr><th>S.No</th><th>Particulars</th><th>Qnty</th><th>Rate</th><th>Fold</th><th>Cancel</th></tr></thead>
+                        <tbody>${(data.items || []).map((r, i) => `<tr><td>${i + 1}</td><td><b>${D.esc(r.name)}</b></td><td>${r.qty}</td><td>${r.rate}</td><td>${D.esc(r.fold)}</td><td>${D.esc(r.cancel)}</td></tr>`).join('')}</tbody>
+                        <tfoot><tr><th colspan="2">TOTAL (${(data.items || []).length} Items)</th><th>${totPcs} Pcs</th><th colspan="3"></th></tr></tfoot></table>
+                    </div>
+                    <div>
+                        <div class="sb"><b>No:</b> ${D.esc(data.no)} | <b>Date:</b> ${D.esc(D.fmtDate(data.date))}</div>
+                        <div class="sb"><b>TIN/GST:</b> ${D.esc(data.gst || '-')}</div>
+                        <div class="sb"><b>Marka:</b> ${D.esc(data.marka || '-')}</div>
+                        <div class="sb"><b>Transport:</b> ${D.esc(data.transport || '-')}</div>
+                        <div class="sb"><b>Agent:</b> ${D.esc(data.agent || '-')}</div>
+                        <div class="sb"><b>Pack:</b> ${D.esc(data.pack || '-')} | <b>Fold:</b> ${D.esc(data.fold || '-')}</div>
+                        <div class="sb" style="border-bottom:none;"><b>Remarks:</b> ${D.esc(data.remarks || '-')}</div>
+                    </div>
+                </div>
+            </div></body></html>`;
     };
 
-    /* PENDING / COMPLETE ALL ORDERS: PARTY LIST -> ORDER LIST + UNIVERSAL SEARCH */
+    D.printOrderBook = () => {
+        const html = buildOrderA5HTML({
+            firmId: selFirmId,
+            firmName: document.getElementById('of-firm')?.value,
+            partyName: document.getElementById('of-party')?.value,
+            partyAddress: document.getElementById('of-party-addr')?.value,
+            partyMob: document.getElementById('of-party-mob')?.value,
+            no: document.getElementById('of-no')?.value,
+            date: document.getElementById('of-date')?.value,
+            gst: document.getElementById('of-tin')?.value,
+            marka: document.getElementById('of-marka')?.value,
+            transport: document.getElementById('of-tr')?.value,
+            agent: document.getElementById('of-agent')?.value,
+            pack: document.getElementById('of-pack')?.value,
+            fold: document.getElementById('of-fold')?.value,
+            remarks: document.getElementById('of-rem')?.value,
+            items: batch
+        });
+        const w = window.open('', '_blank', 'width=720,height=650');
+        w.document.write(html);
+        w.document.close(); setTimeout(() => w.print(), 150);
+    };
+
+    D.printSavedOrder = (ordId) => {
+        const ord = D.get('dukan_orders').find((o) => o.id === ordId);
+        if (!ord) return;
+        const w = window.open('', '_blank', 'width=720,height=650');
+        w.document.write(buildOrderA5HTML(ord));
+        w.document.close(); setTimeout(() => w.print(), 150);
+    };
+
+    /* PENDING / COMPLETE ALL ORDERS: PARTY LIST -> ORDER LIST + EDIT/PRINT/CHALLAN */
     D.openAllOrders = (status) => {
         D.screen = status === 'Pending' ? 'pending' : 'complete';
         D.onCustomFieldEnter = null;
@@ -537,12 +828,13 @@
                         `<div style="font-size:11px;color:#4b5563;margin-top:2px;">📦 <b>Ch #${D.esc(c.no)}</b> (${D.fmtDate(c.date)}) · Marka: <b>${D.esc(c.marka || '-')}</b> → ${(c.items || []).map((ci) => `${D.esc(ci.name)}:${ci.qty}`).join(', ')}</div>`
                     ).join('');
                     return `
-                    <tr class="dk-nav-row ${i === repNav ? 'active' : ''}" onclick="DukanERP.editOrder('${o.id}')">
+                    <tr class="dk-nav-row ${i === repNav ? 'active' : ''}" onclick="DukanERP.repPick(${i})">
                         <td><strong>#${D.esc(o.no)}</strong><br><small>${D.fmtDate(o.date)}</small></td>
                         <td>${detail}${chHTML}</td><td>${D.esc(o.marka || '-')}</td>
                         <td style="white-space:nowrap;">
-                            <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.editOrder('${o.id}')">✏️ Edit</button>
-                            ${repStatus === 'Pending' ? `<button type="button" class="dk-btn-gold" style="padding:4px 8px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.loadOrderInChallan('${o.partyId}','${o.id}')">Challan →</button>` : ''}
+                            <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.openOrderEdit('${o.id}')">✏️ Edit</button>
+                            <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.printSavedOrder('${o.id}')">🖨️</button>
+                            ${repStatus === 'Pending' ? `<button type="button" class="dk-btn-gold" style="padding:3px 8px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.loadOrderInChallan('${D.esc(o.partyId)}','${o.id}')">Challan →</button>` : ''}
                         </td>
                     </tr>`;
                 }).join('') : `<tr><td colspan="4" style="text-align:center;color:#9ca3af;">Koi order nahi mila</td></tr>`;
@@ -560,7 +852,7 @@
             </table>
             <div id="rep-ord-pg"></div>
         `;
-        D.renderShell(`<h2>${D.esc(pName)} → ${repStatus} Orders</h2><button type="button" class="dk-btn" onclick="DukanERP.repBackParties()">← Party List</button>`, left, '[Enter / Click] Poora Order Edit/Delete/Print · Marka/Date search karein');
+        D.renderShell(`<h2>${D.esc(pName)} → ${repStatus} Orders</h2><button type="button" class="dk-btn" onclick="DukanERP.repBackParties()">← Party List</button>`, left, '[Enter] Order Edit/Open · [✏️ Edit] · [🖨️] A5 Print · [Challan →]');
         drawOrdRows();
 
         const oq = document.getElementById('rep-ord-q');
@@ -568,6 +860,13 @@
             oq.addEventListener('input', () => { repOrdSearch = oq.value; repPage = 1; repNav = 0; drawOrdRows(); });
             oq.focus();
         }
+        D.repPick = (i) => {
+            repNav = i;
+            document.querySelectorAll('#rep-tb .dk-nav-row').forEach((r, idx) => r.classList.toggle('active', idx === i));
+            const o = D.paginate(getFilteredOrders(), repPage).rows[i];
+            showSide(o);
+            if (o) D.openOrderEdit(o.id);
+        };
         D.bindFormControls({
             listNav: {
                 selector: '#rep-tb .dk-nav-row',
@@ -575,10 +874,7 @@
                 getIdx: () => repNav,
                 setIdx: (i) => { repNav = i; },
                 onHighlight: (i) => showSide(D.paginate(getFilteredOrders(), repPage).rows[i]),
-                onEnter: (i) => {
-                    const o = D.paginate(getFilteredOrders(), repPage).rows[i];
-                    if (o) D.editOrder(o.id);
-                }
+                onEnter: (i) => D.repPick(i)
             }
         });
     }
