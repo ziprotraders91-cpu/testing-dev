@@ -1,5 +1,5 @@
 /* ============================================================================
-   DUKAN MASTER: CREATE & ALTER (FIRM / PARTY) — Profile me Agent Field
+   DUKAN MASTER: CREATE, ALTER & DELETE (FIRM / PARTY) — Profile me Agent Field
    File: dukan-erp/dukan-master.js
 ============================================================================ */
 (() => {
@@ -25,7 +25,7 @@
         const headL = `
             <h2>Dukan Master (Tally Style)</h2>
             <button type="button" class="dk-tab ${mode==='create'?'active':''}" onclick="DukanERP.setMasterMode('create')">+ Create</button>
-            <button type="button" class="dk-tab ${mode==='alter'?'active':''}" onclick="DukanERP.setMasterMode('alter')">Alter (Firm / Party)</button>
+            <button type="button" class="dk-tab ${mode==='alter'?'active':''}" onclick="DukanERP.setMasterMode('alter')">Alter / Delete (Firm / Party)</button>
         `;
 
         const left = `
@@ -44,8 +44,9 @@
             ` : `
                 <div class="dk-row"><label>Email ID :</label><input id="dm-email" value="${D.esc(rec?.email || '')}" placeholder="firm@gmail.com"></div>
             `}
-            <div style="text-align:right; margin-top:10px;">
-                <button type="button" class="dk-btn-gold" onclick="DukanERP.askMasterSave()">Save [Ctrl+Enter]</button>
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+                ${rec ? `<button type="button" class="dk-btn-del" onclick="DukanERP.deleteMaster()">🗑️ Delete ${type}</button>` : ''}
+                <button type="button" class="dk-btn-gold" onclick="DukanERP.askMasterSave()">${rec ? 'Update' : 'Save'} [Ctrl+Enter]</button>
             </div>
             <div class="dk-accept" id="dk-accept-box">
                 <strong>${rec ? 'Update' : 'Accept & Save'} ${type}?</strong>
@@ -72,7 +73,7 @@
                 getItems: () => [
                     { label: 'Party (Buyer / Vyapari)', meta: `${parties.length} Saved`, active: type === 'Party', t: 'Party' },
                     { label: 'Firm (Apni Dukan)', meta: `${firms.length} Saved`, active: type === 'Firm', t: 'Firm' },
-                    { label: mode === 'create' ? 'Switch to Alter (Edit)' : 'Switch to Create', meta: 'Mode', active: false, m: mode === 'create' ? 'alter' : 'create' }
+                    { label: mode === 'create' ? 'Switch to Alter (Edit/Del)' : 'Switch to Create', meta: 'Mode', active: false, m: mode === 'create' ? 'alter' : 'create' }
                 ],
                 onPick: (it) => {
                     if (it.m) mode = it.m;
@@ -109,6 +110,7 @@
     }
 
     D.setMasterMode = (m) => { mode = m; editId = ''; render(m === 'alter' ? 'dm-pick' : 'dm-name'); };
+
     D.askMasterSave = () => {
         const nm = (document.getElementById('dm-name')?.value || '').trim();
         if (!nm) { D.toast('⚠️ Pehle Name bharein!'); return D.focusField('dm-name'); }
@@ -140,5 +142,15 @@
         D.toast(`✅ ${type} [${name}] save ho gaya!`);
         editId = '';
         render(mode === 'alter' ? 'dm-pick' : 'dm-name');
+    };
+
+    D.deleteMaster = () => {
+        if (!editId) return;
+        if (!confirm(`Kya aap is ${type} ko delete karna chahte hain?`)) return;
+        const key = type === 'Firm' ? 'dukan_firms' : 'dukan_parties';
+        D.set(key, D.get(key).filter((x) => x.id !== editId));
+        D.toast(`🗑️ ${type} delete ho gaya!`);
+        editId = '';
+        render('dm-pick');
     };
 })();
