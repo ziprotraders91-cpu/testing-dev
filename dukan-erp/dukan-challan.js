@@ -1,5 +1,5 @@
 /* ============================================================================
-   CHALLAN & PACKING SLIP (TRUE BATCH LOOP + MANUAL CHALLAN NO + COMBO PRINT)
+   CHALLAN & PACKING SLIP (Blank Firm Start + Rate->+Add Loop + Combo Print)
    File: dukan-erp/dukan-challan.js
 ============================================================================ */
 (() => {
@@ -12,8 +12,7 @@
     D.openChallan = () => {
         D.screen = 'challan';
         D.onEsc = null; D.onCustomFieldEnter = null;
-        const firms = D.get('dukan_firms');
-        selFirmId = firms.length ? firms[0].id : '';
+        selFirmId = '';
         selPartyId = ''; linkedOrderId = '';
         chBatch = [];
         render('ch-firm');
@@ -25,15 +24,13 @@
         selPartyId = partyId;
         linkedOrderId = orderId;
         const ord = D.get('dukan_orders').find((o) => o.id === orderId);
-        const firms = D.get('dukan_firms');
-        if (ord?.firmId) selFirmId = ord.firmId;
-        else if (!selFirmId && firms[0]) selFirmId = firms[0].id;
+        selFirmId = ord?.firmId || '';
 
         if (ord) {
             const prog = D.getOrderProgress(ord);
             chBatch = prog.items.filter((x) => x.baki > 0).map((i) => ({ name: i.name, qty: i.baki, rate: i.rate }));
         } else chBatch = [];
-        render('ch-no');
+        render(selFirmId ? 'ch-no' : 'ch-firm');
     };
 
     function renderChBatchTable() {
@@ -57,7 +54,7 @@
                 <td style="text-align:center;"><button type="button" class="dk-btn" style="padding:2px 6px;color:#dc2626;" onclick="DukanERP.chDelRow(${i})">✕</button></td>
             </tr>`;
         }).join('')
-        : `<tr><td colspan="7" style="text-align:center;color:#9ca3af;padding:12px;">Upar Item chunein, Qty bharein aur Enter (+ Add) dabaye — Batch yahan judega</td></tr>`;
+        : `<tr><td colspan="7" style="text-align:center;color:#9ca3af;padding:12px;">Item chunein → Qty → Rate → +Add (Enter) — Batch yahan judega</td></tr>`;
     }
 
     D.chAddBatchItem = () => {
@@ -74,7 +71,7 @@
         qtEl.value = '';
         rtEl.value = '';
         const avEl = document.getElementById('ch-cur-av');
-        if (avEl) avEl.textContent = 'Avail: -';
+        if (avEl) avEl.textContent = '(Avail: -)';
 
         renderChBatchTable();
         D.toast(`✅ Added: ${name} (${qty} Pc) — Agla item chunein ya [Ctrl+Enter] se Save karein`);
@@ -89,7 +86,7 @@
 
     function render(focusId = 'ch-firm') {
         const firms = D.get('dukan_firms');
-        const fObj = firms.find((x) => x.id === selFirmId) || firms[0] || {};
+        const fObj = selFirmId ? (firms.find((x) => x.id === selFirmId) || {}) : {};
         const parties = D.get('dukan_parties');
         const orders = D.get('dukan_orders');
         const designs = D.get('dukan_designs');
@@ -98,8 +95,8 @@
         const markaVal = ordObj ? (ordObj.marka || p.marka || '') : (p.marka || '');
 
         const left = `
-            <div class="dk-row"><label>Firm (From) :</label><input id="ch-firm" value="${D.esc(fObj.name || '')}" placeholder="Side List se Firm chunein..." autocomplete="off"></div>
-            <div class="dk-row"><label>Firm Info :</label><input id="ch-firm-meta" value="${D.esc(`${fObj.address || ''} · Mob: ${fObj.mob || '-'} · GST: ${fObj.gst || '-'}`)}" readonly style="background:#f9fafb;"></div>
+            <div class="dk-row"><label>Firm (From) :</label><input id="ch-firm" value="${D.esc(fObj.name || '')}" placeholder="Side List se Apni Firm chunein..." autocomplete="off"></div>
+            <div class="dk-row"><label>Firm Info :</label><input id="ch-firm-meta" value="${fObj.name ? D.esc(`${fObj.address || ''} · Mob: ${fObj.mob || '-'} · GST: ${fObj.gst || '-'}`) : ''}" placeholder="Firm select karne par khud bharega" readonly style="background:#f9fafb;"></div>
             <div class="dk-sec">Party &amp; Order Details</div>
             <div class="dk-row"><label>Party Name :</label><input id="ch-party" value="${D.esc(p.name || '')}" placeholder="Type karein ya Side List chunein..." autocomplete="off"></div>
             <div class="dk-row"><label>Pending Order # :</label><input id="ch-ord" value="${D.esc(ordObj ? `#${ordObj.no}` : '')}" placeholder="Side List se Pending Order chunein..." autocomplete="off"></div>
@@ -107,8 +104,7 @@
             <div class="dk-row"><label>Mobile / GST :</label><div style="display:flex;gap:8px;"><input id="ch-mob" value="${D.esc(p.mob || '')}" placeholder="Mobile"><input id="ch-gst" value="${D.esc(p.gst || '')}" placeholder="GSTIN"></div></div>
             <div class="dk-row"><label>Challan No (Manual) :</label><div style="display:flex;gap:8px;"><input id="ch-no" placeholder="Manual Challan No. (e.g. 105)" autocomplete="off"><input id="ch-marka" value="${D.esc(markaVal)}" placeholder="Marka (Order wala)"></div></div>
 
-            <!-- BATCH ENTRY STRIP (LOOP: Item -> Qty -> Rate -> +Add -> Back to Item) -->
-            <div class="dk-sec">Batch Entry (Add dabate hi cursor wapas Item par jayega · [Ctrl+Enter] Save)</div>
+            <div class="dk-sec">Batch Entry (Rate → +Add (Enter) → wapas Item · [Ctrl+Enter] Save)</div>
             <div style="padding:8px;background:#fdf6e2;border:1.5px solid #e5d5a7;border-radius:6px;display:grid;grid-template-columns:1.8fr 0.8fr 0.8fr auto;gap:6px;align-items:end;margin-bottom:8px;">
                 <div>
                     <label style="font-size:10.5px;font-weight:800;color:#92400e;">Item / Design <small id="ch-cur-av" style="color:#15803d;">(Avail: -)</small></label>
@@ -116,7 +112,7 @@
                 </div>
                 <div><label style="font-size:10.5px;font-weight:800;color:#92400e;">Challan Pcs</label><input id="ch-cur-qty" type="number" placeholder="0" style="width:100%;padding:6px;border:1px solid #d9b86c;border-radius:4px;font-weight:700;background:#fff;"></div>
                 <div><label style="font-size:10.5px;font-weight:800;color:#92400e;">Rate (₹)</label><input id="ch-cur-rate" type="number" placeholder="0" style="width:100%;padding:6px;border:1px solid #d9b86c;border-radius:4px;font-weight:700;background:#fff;"></div>
-                <button type="button" class="dk-btn-gold" style="padding:7px 12px;" onclick="DukanERP.chAddBatchItem()">+ Add</button>
+                <button type="button" id="ch-add-btn" class="dk-btn-gold" style="padding:7px 12px;" onclick="DukanERP.chAddBatchItem()">+ Add</button>
             </div>
 
             <div style="max-height:220px;overflow-y:auto;">
@@ -144,31 +140,21 @@
             </div>
         `;
 
-        D.renderShell(`<h2>Challan &amp; Packing Slip (Batch Mode)</h2>`, left, 'Rate par Enter = +Add (wapas Item par) · Poora batch hone par [Ctrl+Enter] se Save');
+        D.renderShell(`<h2>Challan &amp; Packing Slip (Batch Mode)</h2>`, left, 'Rate → +Add (Enter) → wapas Item · Poora batch hone par [Ctrl+Enter] se Save');
         renderChBatchTable();
 
-        const rtEl = document.getElementById('ch-cur-rate');
-        if (rtEl) {
-            rtEl.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault(); e.stopImmediatePropagation();
-                    D.chAddBatchItem();
-                }
-            });
-        }
-
         D.bindFormControls({
-            focusOrder: ['ch-firm', 'ch-party', 'ch-ord', 'ch-addr', 'ch-mob', 'ch-gst', 'ch-no', 'ch-marka', 'ch-cur-name', 'ch-cur-qty', 'ch-cur-rate'],
+            focusOrder: ['ch-firm', 'ch-party', 'ch-ord', 'ch-addr', 'ch-mob', 'ch-gst', 'ch-no', 'ch-marka', 'ch-cur-name', 'ch-cur-qty', 'ch-cur-rate', 'ch-add-btn'],
             sideBindings: {
                 'ch-firm': {
                     title: `List of Firms (${firms.length})`,
                     getItems: (q) => firms.filter((f) => !q || f.name.toLowerCase().includes(q.toLowerCase()))
-                        .map((f) => ({ id: f.id, label: f.name, meta: f.city || f.gst || 'Firm', f, active: f.id === selFirmId })),
+                        .map((f) => ({ id: f.id, label: f.name, meta: f.city || f.gst || 'Firm', f })),
                     onPick: (it) => {
                         selFirmId = it.id;
                         document.getElementById('ch-firm').value = it.f?.name || '';
                         document.getElementById('ch-firm-meta').value = `${it.f?.address || ''} · Mob: ${it.f?.mob || '-'} · GST: ${it.f?.gst || '-'}`;
-                        D.focusField('ch-party');
+                        D.focusField(selPartyId ? 'ch-no' : 'ch-party');
                     }
                 },
                 'ch-party': {
@@ -285,7 +271,7 @@
             <div class="box">
                 <div style="display:flex;justify-content:space-between;border-bottom:2px solid #111;padding-bottom:8px;">
                     <div><strong style="font-size:18px;">${D.esc(firmName)}</strong><div style="font-size:11px;">${D.esc(fObj.address || '')} · Mob: ${D.esc(fObj.mob || '-')} · GSTIN: ${D.esc(fObj.gst || '-')}</div></div>
-                    <div style="text-align:right;"><strong>DELIVERY CHALLAN</strong><div style="font-size:12px;">Challan No: <b>${D.esc(chNo)}</b> · Date: ${D.esc(D.today())}</div></div>
+                    <div style="text-align:right;"><strong>DELIVERY CHALLAN</strong><div style="font-size:12px;">Challan No: <b>${D.esc(chNo)}</b> · Date: ${D.esc(D.fmtDate(D.today()))}</div></div>
                 </div>
                 <div style="margin:8px 0;font-size:12px;">
                     <div><b>M/s.:</b> ${D.esc(document.getElementById('ch-party').value)} | <b>Mob:</b> ${D.esc(document.getElementById('ch-mob').value)} | <b>GST:</b> ${D.esc(document.getElementById('ch-gst').value)}</div>
