@@ -1,17 +1,19 @@
 /* ============================================================================
-   NAMING & BARCODING: Kariger ka Design Auto-Link + Top Specs/Code + Stock Add
+   NAMING & BARCODING: Linked to Real Saree Finished Stock (saree_history)
    File: dukan-erp/dukan-barcode.js
 ============================================================================ */
 (() => {
     const D = window.DukanERP;
     let editId = '';
+    let linkedSareeName = '';
+    let linkedKarkhanaId = 'k_main';
     let page = 1;
 
     D.openBarcode = () => {
         D.screen = 'barcode';
         D.onEsc = null;
         D.onCustomFieldEnter = null;
-        editId = ''; page = 1;
+        editId = ''; linkedSareeName = ''; linkedKarkhanaId = 'k_main'; page = 1;
         render('bc-kar');
     };
 
@@ -19,17 +21,23 @@
 
     function render(focusId = 'bc-kar') {
         const designs = D.get('dukan_designs');
+        const finRows = D.getFinishedStockRows();
         const karigers = D.getKarigers();
         const cur = editId ? designs.find((x) => x.id === editId) : null;
         const pg = D.paginate(designs, page);
 
+        const curKar = cur?.kariger || '';
+        const curSaree = cur?.sareeName || linkedSareeName || '';
+        const liveFin = cur ? D.getDesignFinishedStock(cur) : 0;
+
         const left = `
-            <div class="dk-row"><label>Kariger (Baithak) :</label><input id="bc-kar" value="${D.esc(cur?.kariger || '')}" placeholder="Kariger chunein (Purana design khud aayega)" autocomplete="off"></div>
+            <div class="dk-row"><label>Finished Kariger :</label><input id="bc-kar" value="${D.esc(curKar)}" placeholder="Finished Stock / Kariger chunein..." autocomplete="off"></div>
+            <div class="dk-row"><label>Saree (Finished) :</label><input id="bc-saree" value="${D.esc(curSaree)}" placeholder="Finished stage ka saree naam" autocomplete="off"></div>
             <div class="dk-row"><label>Design Name :</label><input id="bc-des" value="${D.esc(cur?.design || '')}" placeholder="Jaise: RASHMIKA" oninput="DukanERP.updSticker()" autocomplete="off"></div>
             <div class="dk-row"><label>Top Specs Line :</label><input id="bc-spec" value="${D.esc(cur?.specs || '3.60 CM EMB JHALAR')}" oninput="DukanERP.updSticker()" autocomplete="off"></div>
             <div class="dk-row"><label>Barcode Code :</label><input id="bc-code" value="${D.esc(cur?.code || '')}" placeholder="Jaise: RASHMIKA KT" oninput="DukanERP.updSticker()" autocomplete="off"></div>
-            <div class="dk-row"><label>${cur ? `Add Finished Qty (+${D.num(cur.freshQty)} Avail) :` : 'Fresh Qty (Pcs) :'}</label><input type="number" id="bc-qty" value="${cur ? '' : '20'}" placeholder="${cur ? 'Nayi finished pcs daalein (e.g. 20)' : '20'}"></div>
-            <div class="dk-row"><label>Print Stickers :</label><input type="number" id="bc-pqty" value="10"></div>
+            <div class="dk-row"><label>Finished Stock (Live) :</label><input id="bc-fin" value="${liveFin} Pcs (Saree Finished Tab)" readonly style="background:#f9fafb;color:#15803d;"></div>
+            <div class="dk-row"><label>Print Stickers :</label><input type="number" id="bc-pqty" value="${liveFin > 0 ? liveFin : 10}"></div>
 
             <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap; background:#fdf6e2; border:1px solid #e5d5a7; padding:10px; border-radius:8px; margin:8px 0;">
                 <div class="dk-sticker" id="dk-sticker-prev"></div>
@@ -40,7 +48,7 @@
             </div>
 
             <div class="dk-accept" id="dk-accept-box">
-                <strong>Save Design &amp; Update Stock?</strong>
+                <strong>Save Design &amp; Barcode Link?</strong>
                 <div style="display:flex; gap:8px;">
                     <button type="button" class="dk-btn-gold" id="dk-accept-yes" onclick="DukanERP.saveDesign()">Yes (Y)</button>
                     <button type="button" class="dk-btn" id="dk-accept-no" onclick="document.getElementById('dk-accept-box').style.display='none'; DukanERP.focusField('bc-spec');">No (N)</button>
@@ -48,56 +56,93 @@
             </div>
 
             <table class="dk-tbl">
-                <thead><tr><th>Kariger</th><th>Design Name</th><th>Specs</th><th>Code</th><th>Fresh Stock</th></tr></thead>
-                <tbody>${pg.rows.length ? pg.rows.map((d) => `
+                <thead><tr><th>Kariger</th><th>Finished Saree</th><th>Design Name</th><th>Specs / Code</th><th>Finished Bachi</th></tr></thead>
+                <tbody>${pg.rows.length ? pg.rows.map((d) => {
+                    const bachi = D.getDesignFinishedStock(d);
+                    return `
                     <tr class="dk-nav-row ${d.id === editId ? 'active' : ''}" onclick="DukanERP.loadDesign('${d.id}')">
-                        <td>${D.esc(d.kariger)}</td><td><strong>${D.esc(d.design)}</strong></td>
-                        <td>${D.esc(d.specs)}</td><td>${D.esc(d.code)}</td><td><strong>${D.num(d.freshQty)} Pc</strong></td>
-                    </tr>`).join('') : `<tr><td colspan="5" style="text-align:center;color:#9ca3af;">Abhi koi design naming nahi hui</td></tr>`}
+                        <td>${D.esc(d.kariger)}</td>
+                        <td>${D.esc(d.sareeName || '-')}</td>
+                        <td><strong>${D.esc(d.design)}</strong></td>
+                        <td><small>${D.esc(d.specs)}<br><b>${D.esc(d.code)}</b></small></td>
+                        <td><strong style="color:#15803d;">${bachi} Pc</strong></td>
+                    </tr>`;
+                }).join('') : `<tr><td colspan="5" style="text-align:center;color:#9ca3af;">Abhi koi design naming nahi hui</td></tr>`}
                 </tbody>
             </table>
             ${D.pagerHTML(pg, 'dkBcPage')}
         `;
 
-        D.renderShell(`<h2>Naming &amp; Barcoding</h2>`, left, 'Kariger select karte hi uska purana Design khud load hoga (Top Spec & Code badal sakte hain)');
+        D.renderShell(`<h2>Naming &amp; Barcoding (Finished Stock Linked)</h2>`, left, 'Bagal me Finished Saree Stock dikhega · Kariger chunein -> Design / Specs save karein');
         D.updSticker();
 
         D.bindFormControls({
-            focusOrder: ['bc-kar', 'bc-des', 'bc-spec', 'bc-code', 'bc-qty', 'bc-pqty'],
+            focusOrder: ['bc-kar', 'bc-saree', 'bc-des', 'bc-spec', 'bc-code', 'bc-pqty'],
             sideBindings: {
                 'bc-kar': {
-                    title: `List of Karigers (${karigers.length})`,
-                    getItems: (q) => karigers
-                        .filter((k) => !q || `${k.name} ${k.saree} ${k.karkhanaName}`.toLowerCase().includes(q.toLowerCase()))
-                        .slice(0, 60)
-                        .map((k) => {
-                            const ex = designs.find((d) => String(d.kariger || '').toUpperCase() === String(k.name).toUpperCase());
-                            return { label: k.name, meta: ex ? `Design: ${ex.design}` : (k.saree || 'New'), name: k.name, existingId: ex?.id || '' };
-                        }),
+                    title: `Finished Stock (${finRows.length}) & Karigers`,
+                    getItems: (q) => {
+                        const ql = q.toLowerCase();
+                        const items = [];
+                        finRows
+                            .filter((r) => !ql || `${r.karigerName} ${r.sareeName}`.toLowerCase().includes(ql))
+                            .forEach((r) => {
+                                const ex = designs.find((d) =>
+                                    String(d.kariger || '').toUpperCase() === r.karigerName &&
+                                    (!d.sareeName || String(d.sareeName).toUpperCase() === r.sareeName)
+                                );
+                                items.push({
+                                    label: `${r.karigerName} · ${r.sareeName}`,
+                                    meta: `${r.bachi} Pc Fin${ex ? ` → ${ex.design}` : ''}`,
+                                    karigerName: r.karigerName,
+                                    sareeName: r.sareeName,
+                                    karkhanaId: r.karkhanaId,
+                                    bachi: r.bachi,
+                                    existingId: ex?.id || ''
+                                });
+                            });
+                        karigers
+                            .filter((k) => !ql || `${k.name} ${k.saree}`.toLowerCase().includes(ql))
+                            .slice(0, 40)
+                            .forEach((k) => {
+                                const nm = String(k.name).toUpperCase();
+                                const ex = designs.find((d) => String(d.kariger || '').toUpperCase() === nm);
+                                items.push({
+                                    label: nm,
+                                    meta: ex ? `Design: ${ex.design}` : (k.saree || 'Kariger'),
+                                    karigerName: nm,
+                                    sareeName: k.saree || '',
+                                    karkhanaId: k.karkhanaId || 'k_main',
+                                    bachi: 0,
+                                    existingId: ex?.id || ''
+                                });
+                            });
+                        return items.slice(0, 60);
+                    },
                     onPick: (it) => {
+                        linkedSareeName = it.sareeName || '';
+                        linkedKarkhanaId = it.karkhanaId || 'k_main';
                         if (it.existingId) {
-                            // Kariger ka pehle se barcode bana hai -> usi design me load, cursor Top Specs par!
                             editId = it.existingId;
-                            D.toast(`🔗 [${it.name}] ka purana design load hua — Top Specs / Code & Qty update karein!`);
+                            D.toast(`🔗 [${it.karigerName}] ka purana design load hua — Top Specs / Code update karein!`);
                             render('bc-spec');
                         } else {
                             editId = '';
-                            const el = document.getElementById('bc-kar');
-                            if (el) el.value = it.name;
+                            document.getElementById('bc-kar').value = it.karigerName || '';
+                            document.getElementById('bc-saree').value = it.sareeName || '';
+                            const finEl = document.getElementById('bc-fin');
+                            if (finEl) finEl.value = `${it.bachi || 0} Pcs (Saree Finished Tab)`;
                             D.focusField('bc-des');
                         }
                     }
                 },
                 'bc-des': {
-                    title: 'List of Existing Designs',
+                    title: 'Saved Designs',
                     noAutoHighlight: true,
-                    getItems: (q) => {
-                        const kar = (document.getElementById('bc-kar')?.value || '').trim().toUpperCase();
-                        return designs
-                            .filter((d) => (!q && (!kar || d.kariger === kar)) || `${d.design} ${d.kariger}`.toLowerCase().includes(q.toLowerCase()))
-                            .slice(0, 60)
-                            .map((d) => ({ id: d.id, label: d.design, meta: `${d.kariger} · ${D.num(d.freshQty)} Pc` }));
-                    },
+                    getItems: (q) => designs
+                        .filter((d) => !q || `${d.design} ${d.kariger}`.toLowerCase().includes(q.toLowerCase()))
+                        .slice(0, 60)
+                        .map((d) => ({ id: d.id, label: d.design, meta: `${d.kariger} · ${D.getDesignFinishedStock(d)} Pc` })),
                     onPick: (it) => {
                         const typed = (document.getElementById('bc-des')?.value || '').trim().toUpperCase();
                         if (typed && typed !== it.label) {
@@ -111,8 +156,8 @@
                     }
                 }
             },
-            defaultSide: () => D.renderSide('Saved Designs', `${designs.length} Items`, designs.slice(0, 40).map((d) => ({
-                label: d.design, meta: `${d.kariger} · ${D.num(d.freshQty)} Pc`
+            defaultSide: () => D.renderSide('Finished Saree Stock', `${finRows.length} Items`, finRows.slice(0, 40).map((r) => ({
+                label: `${r.karigerName} · ${r.sareeName}`, meta: `${r.bachi} Pc`
             })), false),
             onFinishForm: () => D.askBarcodeSave()
         });
@@ -144,27 +189,35 @@
 
     D.saveDesign = () => {
         const kariger = (document.getElementById('bc-kar')?.value || '').trim().toUpperCase();
+        const sareeName = (document.getElementById('bc-saree')?.value || '').trim().toUpperCase();
         const design = (document.getElementById('bc-des')?.value || '').trim().toUpperCase();
         if (!design) return D.focusField('bc-des');
         const specs = (document.getElementById('bc-spec')?.value || '').trim().toUpperCase();
         const code = (document.getElementById('bc-code')?.value || `${design} KT`).trim().toUpperCase();
-        const qtyVal = D.num(document.getElementById('bc-qty')?.value);
 
         const list = D.get('dukan_designs');
         const existing = editId ? list.find((x) => x.id === editId) : list.find((x) => x.design === design);
         if (existing) {
             existing.kariger = kariger || existing.kariger;
+            existing.sareeName = sareeName || existing.sareeName || design;
+            existing.karkhanaId = linkedKarkhanaId || existing.karkhanaId || 'k_main';
             existing.design = design;
             existing.specs = specs;
             existing.code = code;
-            // Existing design me finished aayi nayi qty add hogi
-            existing.freshQty = D.num(existing.freshQty) + qtyVal;
         } else {
-            list.push({ id: `des_${Date.now()}`, kariger, design, specs, code, freshQty: qtyVal });
+            list.push({
+                id: `des_${Date.now()}`,
+                kariger,
+                sareeName: sareeName || design,
+                karkhanaId: linkedKarkhanaId || 'k_main',
+                design,
+                specs,
+                code
+            });
         }
         D.set('dukan_designs', list);
-        D.toast(`✅ [${design}] save ho gaya! (+${qtyVal} Pc Fresh Stock)`);
-        editId = '';
+        D.toast(`✅ [${design}] Finished Stock se link hoke save ho gaya!`);
+        editId = ''; linkedSareeName = '';
         render('bc-kar');
     };
 
