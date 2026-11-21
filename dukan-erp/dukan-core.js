@@ -1,5 +1,5 @@
 /* ============================================================================
-   SIMPLICITY ERP (THE TALLY BRIDGE) - DUKAN CORE ENGINE (FINISHED STOCK LINKED)
+   SIMPLICITY ERP (THE TALLY BRIDGE) - DUKAN CORE ENGINE
    File: dukan-erp/dukan-core.js
 ============================================================================ */
 (() => {
@@ -76,7 +76,6 @@
         if (el) el.textContent = msg;
     };
 
-    /* -------------------- REAL FINISHED SAREE STOCK (saree_history) -------------------- */
     D.getFinishedStockRows = () => {
         const history = D.get('saree_history');
         if (typeof window.groupSareeStockByTab === 'function') {
@@ -152,6 +151,16 @@
             }
         });
         return list;
+    };
+
+    // Challan Edit/Delete par purani Finished Stock deduction wapas restore karega
+    D.restoreFinishedByRef = (refId) => {
+        if (!refId) return;
+        const target = String(refId).trim();
+        const history = D.get('saree_history').filter((x) => !x || String(x.refId || '') !== target);
+        D.set('saree_history', history);
+        if (typeof window.invalidateSareeCalcCache === 'function') window.invalidateSareeCalcCache();
+        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
     };
 
     D.deductFinishedStock = (designName, qty, meta = {}) => {
@@ -253,6 +262,16 @@
         return { items, allDone, challans, searchText: searchParts.filter(Boolean).join(' ').toLowerCase() };
     };
 
+    D.syncOrderStatus = (orderId) => {
+        if (!orderId) return;
+        const ords = D.get('dukan_orders');
+        const ord = ords.find((o) => o.id === orderId);
+        if (!ord) return;
+        const prog = D.getOrderProgress(ord);
+        ord.status = prog.allDone ? 'Complete' : 'Pending';
+        D.set('dukan_orders', ords);
+    };
+
     D.paginate = (arr, page = 1, size = D.pageSize) => {
         const total = arr.length;
         const pages = Math.max(1, Math.ceil(total / size));
@@ -281,14 +300,14 @@
         'U':'wwnnnnnnw','V':'nwwnnnnnw','W':'wwwnnnnnn','X':'nwnnwnnnw','Y':'wwnnwnnnn','Z':'nwwnwnnnn',
         '-':'nwnnnnwnw','.':'wwnnnnwnn',' ':'nwwnnnwnn','*':'nwnnwnwnn'
     };
-    D.barcodeSVG = (txt, h = 38) => {
+    D.barcodeSVG = (txt, h = 34) => {
         const clean = `*${String(txt || 'SAREE').toUpperCase().replace(/[^0-9A-Z\-. ]/g, '')}*`;
         let x = 2; const bars = [];
         for (let i = 0; i < clean.length; i++) {
             const p = C39[clean[i]] || C39['-'];
             for (let j = 0; j < 9; j++) {
                 const w = p[j] === 'w' ? 2.8 : 1.1;
-                if (j % 2 === 0) bars.push(`<rect x="${x}" y="1" width="${w}" height="${h}" fill="#111827"/>`);
+                if (j % 2 === 0) bars.push(`<rect x="${x}" y="1" width="${w}" height="${h}" fill="#000"/>`);
                 x += w;
             }
             x += 1.4;
@@ -321,6 +340,7 @@
             .dk-btn { border:1px solid #d1d5db; background:#f9fafb; color:#374151; padding:6px 12px; border-radius:6px; font-size:12px; font-weight:700; cursor:pointer; }
             .dk-btn:hover:not(:disabled) { border-color:#d99b07; background:#fef9ea; }
             .dk-btn:disabled { opacity:0.45; cursor:not-allowed; }
+            .dk-btn-del { border:1px solid #fecaca; background:#fef2f2; color:#dc2626; padding:6px 12px; border-radius:6px; font-size:12px; font-weight:700; cursor:pointer; }
             .dk-btn-gold { background:#eab01e; border:1px solid #d99b07; color:#fff; padding:7px 16px; border-radius:6px; font-size:12.5px; font-weight:800; cursor:pointer; }
             .dk-btn-gold:focus, .dk-btn:focus { outline:2px solid #92400e; outline-offset:1px; box-shadow:0 0 0 3px rgba(234,176,30,0.35); }
             .dk-body { display:grid; grid-template-columns:1.6fr 0.85fr; gap:16px; padding:14px 18px; align-items:start; }
@@ -355,7 +375,7 @@
             .dk-accept { display:none; background:#fdf6e2; border:1.5px solid #d9b86c; border-radius:8px; padding:10px 14px; margin-top:10px; justify-content:space-between; align-items:center; gap:10px; }
             .dk-pager { display:flex; justify-content:space-between; align-items:center; margin-top:10px; font-size:11.5px; font-weight:700; color:#6b7280; flex-wrap:wrap; gap:8px; }
             .dk-foot { padding:9px 18px; border-top:1px solid #eceff3; background:#fafafa; display:flex; justify-content:space-between; font-size:11.5px; color:#92400e; font-weight:700; }
-            .dk-sticker { width:240px; border:1.5px dashed #d9b86c; border-radius:8px; padding:10px 12px; background:#fff; text-align:center; }
+            .dk-sticker { width:220px; border:1px solid #d9b86c; border-radius:6px; padding:6px 10px; background:#fff; text-align:center; }
             .dk-ord-book { border:2px solid #991b1b; border-radius:6px; background:#fff; overflow:hidden; }
             .dk-ord-hdr { background:#fff5f5; border-bottom:2px solid #991b1b; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
             .dk-ord-grid { display:grid; grid-template-columns:1fr 245px; }
@@ -518,9 +538,9 @@
     const GW_ITEMS = [
         { k: 'c', label: '<span class="dk-gw-key">C</span>reate (Firm / Party / Alter)', meta: 'Master Setup', fn: () => D.openCreate() },
         { k: 'p', label: '<span class="dk-gw-key">P</span>arty Register', meta: 'Party → Pending / Complete', fn: () => D.openPartyRegister() },
-        { k: 'n', label: '<span class="dk-gw-key">N</span>aming &amp; Barcoding', meta: 'Finished → Sticker', fn: () => D.openBarcode() },
-        { k: 'o', label: '<span class="dk-gw-key">O</span>rder Form', meta: 'Batch Format', fn: () => D.openOrderForm() },
-        { k: 'h', label: 'C<span class="dk-gw-key">h</span>allan &amp; Packing Slip', meta: 'Finished Minus + Slip', fn: () => D.openChallan() },
+        { k: 'n', label: '<span class="dk-gw-key">N</span>aming &amp; Barcoding', meta: 'TSC 2-Up Sticker', fn: () => D.openBarcode() },
+        { k: 'o', label: '<span class="dk-gw-key">O</span>rder Form', meta: 'Create / Edit / Print', fn: () => D.openOrderForm() },
+        { k: 'h', label: 'C<span class="dk-gw-key">h</span>allan &amp; Packing Slip', meta: 'Manual + A5 Print', fn: () => D.openChallan() },
         { k: 'd', label: 'Pen<span class="dk-gw-key">d</span>ing Order (All)', meta: 'Party Wise', fn: () => D.openAllOrders('Pending') },
         { k: 'l', label: 'Comp<span class="dk-gw-key">l</span>ete Order (All)', meta: 'Party Wise', fn: () => D.openAllOrders('Complete') }
     ];
