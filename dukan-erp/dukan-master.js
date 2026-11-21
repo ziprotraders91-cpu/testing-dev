@@ -11,6 +11,7 @@
     D.openCreate = (initMode = 'create', initType = 'Party') => {
         D.screen = 'create';
         D.onEsc = null;
+        D.onCustomFieldEnter = null;
         mode = initMode; type = initType; editId = '';
         render('dm-name');
     };
@@ -43,6 +44,9 @@
             ` : `
                 <div class="dk-row"><label>Email ID :</label><input id="dm-email" value="${D.esc(rec?.email || '')}" placeholder="firm@gmail.com"></div>
             `}
+            <div style="text-align:right; margin-top:10px;">
+                <button type="button" class="dk-btn-gold" onclick="DukanERP.askMasterSave()">Save [Ctrl+Enter]</button>
+            </div>
             <div class="dk-accept" id="dk-accept-box">
                 <strong>${rec ? 'Update' : 'Accept & Save'} ${type}?</strong>
                 <div style="display:flex; gap:8px;">
@@ -52,7 +56,7 @@
             </div>
         `;
 
-        D.renderShell(headL, left, '[Enter / ↓] Agla Box · [↑ ↓] List Chunein · [Ctrl+Enter] Save');
+        D.renderShell(headL, left);
 
         const focusOrder = mode === 'alter'
             ? (type === 'Party'
@@ -98,21 +102,22 @@
                 { label: `Total Parties: ${parties.length}`, meta: 'Saved' },
                 { label: `Total Firms: ${firms.length}`, meta: 'Saved' }
             ], false),
-            onFinishForm: () => {
-                const nm = (document.getElementById('dm-name')?.value || '').trim();
-                if (!nm) return D.focusField('dm-name');
-                D.askAccept(() => D.saveMaster());
-            }
+            onFinishForm: () => D.askMasterSave()
         });
 
         D.focusField(focusId);
     }
 
     D.setMasterMode = (m) => { mode = m; editId = ''; render(m === 'alter' ? 'dm-pick' : 'dm-name'); };
+    D.askMasterSave = () => {
+        const nm = (document.getElementById('dm-name')?.value || '').trim();
+        if (!nm) { D.toast('⚠️ Pehle Name bharein!'); return D.focusField('dm-name'); }
+        D.askAccept(() => D.saveMaster());
+    };
 
     D.saveMaster = () => {
         const name = (document.getElementById('dm-name')?.value || '').trim().toUpperCase();
-        if (!name) return alert(`${type} Name bharein!`);
+        if (!name) return D.focusField('dm-name');
         const key = type === 'Firm' ? 'dukan_firms' : 'dukan_parties';
         const list = D.get(key);
         const obj = {
@@ -132,6 +137,7 @@
             if (idx >= 0) list[idx] = obj;
         } else list.push(obj);
         D.set(key, list);
+        D.toast(`✅ ${type} [${name}] save ho gaya!`);
         editId = '';
         render(mode === 'alter' ? 'dm-pick' : 'dm-name');
     };
