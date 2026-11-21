@@ -1,5 +1,5 @@
 /* ============================================================================
-   NAMING & BARCODING: Linked to Real Saree Finished Stock (saree_history)
+   NAMING & BARCODING: Finished Stock Link + Edit/Delete + TSC 2-Up Sticker Print
    File: dukan-erp/dukan-barcode.js
 ============================================================================ */
 (() => {
@@ -34,21 +34,22 @@
             <div class="dk-row"><label>Finished Kariger :</label><input id="bc-kar" value="${D.esc(curKar)}" placeholder="Finished Stock / Kariger chunein..." autocomplete="off"></div>
             <div class="dk-row"><label>Saree (Finished) :</label><input id="bc-saree" value="${D.esc(curSaree)}" placeholder="Finished stage ka saree naam" autocomplete="off"></div>
             <div class="dk-row"><label>Design Name :</label><input id="bc-des" value="${D.esc(cur?.design || '')}" placeholder="Jaise: RASHMIKA" oninput="DukanERP.updSticker()" autocomplete="off"></div>
-            <div class="dk-row"><label>Top Specs Line :</label><input id="bc-spec" value="${D.esc(cur?.specs || '3.60 CM EMB JHALAR')}" oninput="DukanERP.updSticker()" autocomplete="off"></div>
-            <div class="dk-row"><label>Barcode Code :</label><input id="bc-code" value="${D.esc(cur?.code || '')}" placeholder="Jaise: RASHMIKA KT" oninput="DukanERP.updSticker()" autocomplete="off"></div>
+            <div class="dk-row"><label>Top Specs Line :</label><input id="bc-spec" value="${D.esc(cur?.specs || '3.60 CM EMB. JHALAR')}" oninput="DukanERP.updSticker()" autocomplete="off"></div>
+            <div class="dk-row"><label>Barcode Code :</label><input id="bc-code" value="${D.esc(cur?.code || '')}" placeholder="Jaise: RASHMIKA-KT" oninput="DukanERP.updSticker()" autocomplete="off"></div>
             <div class="dk-row"><label>Finished Stock (Live) :</label><input id="bc-fin" value="${liveFin} Pcs (Saree Finished Tab)" readonly style="background:#f9fafb;color:#15803d;"></div>
-            <div class="dk-row"><label>Print Stickers :</label><input type="number" id="bc-pqty" value="${liveFin > 0 ? liveFin : 10}"></div>
+            <div class="dk-row"><label>Print Stickers (Qty) :</label><input type="number" id="bc-pqty" value="${liveFin > 0 ? liveFin : 10}"></div>
 
             <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap; background:#fdf6e2; border:1px solid #e5d5a7; padding:10px; border-radius:8px; margin:8px 0;">
                 <div class="dk-sticker" id="dk-sticker-prev"></div>
-                <div style="display:flex; flex-direction:column; gap:8px;">
-                    <button type="button" class="dk-btn-gold" onclick="DukanERP.askBarcodeSave()">💾 Save Naming [Ctrl+Enter]</button>
-                    <button type="button" class="dk-btn" onclick="DukanERP.printStickers()">🖨️ Print Stickers</button>
+                <div style="display:flex; flex-direction:column; gap:7px;">
+                    <button type="button" class="dk-btn-gold" onclick="DukanERP.askBarcodeSave()">💾 ${cur ? 'Update' : 'Save'} Naming [Ctrl+Enter]</button>
+                    <button type="button" class="dk-btn" onclick="DukanERP.printStickers()">🏷️ Print TSC 2-Up Stickers</button>
+                    ${cur ? `<button type="button" class="dk-btn-del" onclick="DukanERP.deleteDesign('${cur.id}')">🗑️ Delete Design</button>` : ''}
                 </div>
             </div>
 
             <div class="dk-accept" id="dk-accept-box">
-                <strong>Save Design &amp; Barcode Link?</strong>
+                <strong>${cur ? 'Update' : 'Save'} Design &amp; Barcode Link?</strong>
                 <div style="display:flex; gap:8px;">
                     <button type="button" class="dk-btn-gold" id="dk-accept-yes" onclick="DukanERP.saveDesign()">Yes (Y)</button>
                     <button type="button" class="dk-btn" id="dk-accept-no" onclick="document.getElementById('dk-accept-box').style.display='none'; DukanERP.focusField('bc-spec');">No (N)</button>
@@ -73,7 +74,7 @@
             ${D.pagerHTML(pg, 'dkBcPage')}
         `;
 
-        D.renderShell(`<h2>Naming &amp; Barcoding (Finished Stock Linked)</h2>`, left, 'Bagal me Finished Saree Stock dikhega · Kariger chunein -> Design / Specs save karein');
+        D.renderShell(`<h2>Naming &amp; Barcoding (TSC 2-Up Roll)</h2>`, left, 'Click karke kisi bhi Design ko Edit/Delete/Print karein');
         D.updSticker();
 
         D.bindFormControls({
@@ -147,7 +148,7 @@
                         const typed = (document.getElementById('bc-des')?.value || '').trim().toUpperCase();
                         if (typed && typed !== it.label) {
                             const cd = document.getElementById('bc-code');
-                            if (cd && !cd.value.trim()) cd.value = `${typed} KT`;
+                            if (cd && !cd.value.trim()) cd.value = `${typed}-KT`;
                             D.updSticker();
                             D.focusField('bc-spec');
                         } else {
@@ -168,16 +169,16 @@
     D.loadDesign = (id) => { editId = id; render('bc-spec'); };
 
     D.updSticker = () => {
-        const sp = (document.getElementById('bc-spec')?.value || '3.60 CM EMB JHALAR').toUpperCase();
+        const sp = (document.getElementById('bc-spec')?.value || '3.60 CM EMB. JHALAR').toUpperCase();
         const nm = (document.getElementById('bc-des')?.value || 'RASHMIKA').toUpperCase();
-        const cd = (document.getElementById('bc-code')?.value || (nm ? `${nm} KT` : 'RASHMIKA KT')).toUpperCase();
+        const cd = (document.getElementById('bc-code')?.value || (nm ? `${nm}-KT` : 'RASHMIKA-KT')).toUpperCase();
         const box = document.getElementById('dk-sticker-prev');
         if (!box) return;
         box.innerHTML = `
-            <div style="font-size:11px; font-weight:800;">${D.esc(sp)}</div>
-            <div style="font-size:18px; font-weight:800; margin:2px 0;">${D.esc(nm)}</div>
-            ${D.barcodeSVG(cd, 34)}
-            <div style="font-size:12px; font-weight:800;">${D.esc(cd)}</div>
+            <div style="font-size:10.5px; font-weight:800; line-height:1.15;">${D.esc(sp)}</div>
+            <div style="font-size:16px; font-weight:800; line-height:1.1; margin:1px 0 3px;">${D.esc(nm)}</div>
+            <div style="width:86%; margin:0 auto;">${D.barcodeSVG(cd, 28)}</div>
+            <div style="font-size:11.5px; font-weight:800; line-height:1.15; margin-top:2px;">${D.esc(cd)}</div>
         `;
     };
 
@@ -193,7 +194,7 @@
         const design = (document.getElementById('bc-des')?.value || '').trim().toUpperCase();
         if (!design) return D.focusField('bc-des');
         const specs = (document.getElementById('bc-spec')?.value || '').trim().toUpperCase();
-        const code = (document.getElementById('bc-code')?.value || `${design} KT`).trim().toUpperCase();
+        const code = (document.getElementById('bc-code')?.value || `${design}-KT`).trim().toUpperCase();
 
         const list = D.get('dukan_designs');
         const existing = editId ? list.find((x) => x.id === editId) : list.find((x) => x.design === design);
@@ -216,16 +217,52 @@
             });
         }
         D.set('dukan_designs', list);
-        D.toast(`✅ [${design}] Finished Stock se link hoke save ho gaya!`);
+        D.toast(`✅ [${design}] save ho gaya!`);
         editId = ''; linkedSareeName = '';
         render('bc-kar');
     };
 
+    D.deleteDesign = (id) => {
+        if (!confirm('Kya aap is Design / Barcode ko delete karna chahte hain?')) return;
+        D.set('dukan_designs', D.get('dukan_designs').filter((x) => x.id !== id));
+        D.toast('🗑️ Design delete ho gaya!');
+        editId = '';
+        render('bc-kar');
+    };
+
+    // Exact TSC 2-Up (50mm x 25mm x 2) Thermal Barcode Roll Print
     D.printStickers = () => {
         const count = Math.max(1, parseInt(document.getElementById('bc-pqty')?.value || 1, 10));
-        const html = document.getElementById('dk-sticker-prev')?.innerHTML || '';
-        const w = window.open('', '_blank', 'width=800,height=600');
-        w.document.write(`<html><head><style>body{font-family:Inter,sans-serif;display:flex;flex-wrap:wrap;gap:8px;padding:10px}.st{width:50mm;border:1px dashed #ccc;padding:6px;text-align:center;page-break-inside:avoid}</style></head><body>${Array(count).fill(`<div class="st">${html}</div>`).join('')}</body></html>`);
-        w.document.close(); w.print();
+        const sp = (document.getElementById('bc-spec')?.value || '3.60 CM EMB. JHALAR').toUpperCase();
+        const nm = (document.getElementById('bc-des')?.value || 'RASHMIKA').toUpperCase();
+        const cd = (document.getElementById('bc-code')?.value || (nm ? `${nm}-KT` : 'RASHMIKA-KT')).toUpperCase();
+        const cellHTML = `
+            <div class="lbl">
+                <div class="t1">${D.esc(sp)}</div>
+                <div class="t2">${D.esc(nm)}</div>
+                <div class="bc">${D.barcodeSVG(cd, 26)}</div>
+                <div class="t3">${D.esc(cd)}</div>
+            </div>
+        `;
+        let rowsHTML = '';
+        for (let i = 0; i < count; i += 2) {
+            rowsHTML += `<div class="row">${cellHTML}${i + 1 < count ? cellHTML : '<div class="lbl"></div>'}</div>`;
+        }
+        const w = window.open('', '_blank', 'width=500,height=400');
+        w.document.write(`<html><head><style>
+            @page { size: 102mm 25mm; margin: 0; }
+            * { box-sizing: border-box; }
+            body { margin: 0; padding: 0; font-family: Arial, Helvetica, sans-serif; color: #000; }
+            .row { width: 102mm; height: 25mm; display: flex; justify-content: space-between; align-items: center; page-break-after: always; padding: 0 1mm; }
+            .row:last-child { page-break-after: auto; }
+            .lbl { width: 49mm; height: 23mm; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; overflow: hidden; }
+            .t1 { font-size: 7.5pt; font-weight: 700; line-height: 1.1; white-space: nowrap; }
+            .t2 { font-size: 11.5pt; font-weight: 800; line-height: 1.1; margin: 0.5mm 0 1mm; white-space: nowrap; }
+            .bc { width: 38mm; height: 7.5mm; display: flex; align-items: center; }
+            .bc svg { width: 100%; height: 100%; }
+            .t3 { font-size: 8.5pt; font-weight: 700; line-height: 1.1; margin-top: 0.5mm; white-space: nowrap; }
+        </style></head><body>${rowsHTML}</body></html>`);
+        w.document.close();
+        setTimeout(() => { w.focus(); w.print(); }, 200);
     };
 })();
