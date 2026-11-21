@@ -1,32 +1,40 @@
 /* ============================================================================
-   ORDER FORM (EXACT INDIAN FABRICS PHOTO FORMAT) + BATCH ENTRY + REPORTS
+   ORDER FORM (EXACT BOOK FORMAT + FIRM HEADER + PARTY ADDRESS + PACK/FOLD SIDE LIST)
    File: dukan-erp/dukan-order.js
 ============================================================================ */
 (() => {
     const D = window.DukanERP;
     let selPartyId = '';
-    let selFirmName = 'INDIAN FABRICS';
-    let selPack = 'Box';
+    let selFirmId = '';
     let rows = [{ name: '', qty: '', rate: '', fold: 'Box Fold', cancel: '-' }];
     let repPage = 1, repStatus = 'Pending', repSearch = '', repNav = 0;
 
     D.openOrderForm = () => {
         D.screen = 'order';
         D.onEsc = null;
+        D.onCustomFieldEnter = null;
         const firms = D.get('dukan_firms');
-        if (firms[0]) selFirmName = firms[0].name;
+        selFirmId = firms.length ? firms[firms.length - 1].id : '';
         selPartyId = '';
-        selPack = 'Box';
         rows = [{ name: '', qty: '', rate: '', fold: 'Box Fold', cancel: '-' }];
-        renderForm('of-firm');
+        renderForm(firms.length ? 'of-party' : 'of-firm');
     };
+
+    function applyFirmToHeader(f) {
+        const nameEl = document.getElementById('of-firm');
+        const infoEl = document.getElementById('of-firm-info');
+        const phEl = document.getElementById('of-firm-ph');
+        const forEl = document.getElementById('of-firm-for');
+        if (nameEl) nameEl.value = f?.name || '';
+        if (infoEl) infoEl.textContent = `GSTIN: ${f?.gst || '-'} · ${f?.address || ''}${f?.email ? ' · ' + f.email : ''}`;
+        if (phEl) phEl.textContent = f?.mob ? `Mob: ${f.mob}` : '';
+        if (forEl) forEl.textContent = `For: ${f?.name || 'FIRM'}`;
+    }
 
     function bindRowEvents(i) {
         const rName = document.getElementById(`of-it-${i}-name`);
         const rCancel = document.getElementById(`of-it-${i}-cancel`);
-        if (rName) {
-            rName.addEventListener('input', () => { rows[i].name = rName.value.toUpperCase(); });
-        }
+        if (rName) rName.addEventListener('input', () => { rows[i].name = rName.value.toUpperCase(); });
         ['qty', 'rate', 'fold', 'cancel'].forEach((k) => {
             const el = document.getElementById(`of-it-${i}-${k}`);
             if (el) el.addEventListener('input', () => { rows[i][k] = el.value; });
@@ -48,7 +56,8 @@
 
     function appendBatchRow() {
         const i = rows.length;
-        rows.push({ name: '', qty: '', rate: '', fold: 'Box Fold', cancel: '-' });
+        const defFold = document.getElementById('of-fold')?.value || 'Box Fold';
+        rows.push({ name: '', qty: '', rate: '', fold: defFold, cancel: '-' });
         const tb = document.getElementById('of-items-tb');
         if (!tb) return;
         tb.insertAdjacentHTML('beforeend', `
@@ -57,7 +66,7 @@
                 <td><input id="of-it-${i}-name" placeholder="Design..." autocomplete="off"></td>
                 <td><input id="of-it-${i}-qty" type="number" placeholder="0"></td>
                 <td><input id="of-it-${i}-rate" type="number" placeholder="0"></td>
-                <td><input id="of-it-${i}-fold" value="Box Fold"></td>
+                <td><input id="of-it-${i}-fold" value="${D.esc(defFold)}"></td>
                 <td><input id="of-it-${i}-cancel" value="-"></td>
             </tr>
         `);
@@ -71,33 +80,53 @@
         const parties = D.get('dukan_parties');
         const designs = D.get('dukan_designs');
 
-        const focusOrder = ['of-firm', 'of-party'];
+        const focusOrder = ['of-firm', 'of-party', 'of-party-addr', 'of-party-mob'];
         const sideBindings = {
             'of-firm': {
-                title: 'List of Firms',
+                title: `List of Firms (${firms.length})`,
                 getItems: (q) => firms.filter((f) => !q || f.name.toLowerCase().includes(q.toLowerCase()))
-                    .map((f) => ({ label: f.name, meta: f.city || 'Firm', f })),
+                    .map((f) => ({ id: f.id, label: f.name, meta: f.city || f.gst || 'Firm', f })),
                 onPick: (it) => {
-                    selFirmName = it.label;
-                    document.getElementById('of-firm').value = it.label;
-                    const gstEl = document.getElementById('of-firm-gst');
-                    if (gstEl && it.f) gstEl.textContent = `GSTIN: ${it.f.gst || '-'} · ${it.f.address || ''}`;
+                    selFirmId = it.id;
+                    applyFirmToHeader(it.f);
                     D.focusField('of-party');
                 }
             },
             'of-party': {
                 title: `List of Parties (${parties.length})`,
-                getItems: (q) => parties.filter((x) => !q || `${x.name} ${x.city} ${x.marka}`.toLowerCase().includes(q.toLowerCase()))
+                getItems: (q) => parties.filter((x) => !q || `${x.name} ${x.city} ${x.marka} ${x.mob}`.toLowerCase().includes(q.toLowerCase()))
                     .slice(0, 60).map((x) => ({ id: x.id, label: x.name, meta: `${x.city || ''} · ${x.marka || ''}` })),
                 onPick: (it) => {
                     selPartyId = it.id;
                     const pr = parties.find((x) => x.id === it.id) || {};
                     document.getElementById('of-party').value = pr.name || '';
+                    document.getElementById('of-party-addr').value = [pr.address, pr.city].filter(Boolean).join(', ');
+                    document.getElementById('of-party-mob').value = pr.mob || '';
                     document.getElementById('of-tin').value = pr.gst || '';
                     document.getElementById('of-marka').value = pr.marka || '';
                     document.getElementById('of-tr').value = pr.transport || '';
                     document.getElementById('of-agent').value = pr.agent || '';
                     D.focusField('of-it-0-name');
+                }
+            },
+            'of-pack': {
+                title: 'Packing Type',
+                getItems: (q) => ['Box', 'Paper', 'No Box']
+                    .filter((x) => !q || x.toLowerCase().includes(q.toLowerCase()))
+                    .map((x) => ({ label: x, meta: 'Pack' })),
+                onPick: (it) => {
+                    document.getElementById('of-pack').value = it.label;
+                    D.focusField('of-fold');
+                }
+            },
+            'of-fold': {
+                title: 'Fold Type',
+                getItems: (q) => ['Box Fold', 'Book Fold', 'Patti Fold', 'Roll Fold']
+                    .filter((x) => !q || x.toLowerCase().includes(q.toLowerCase()))
+                    .map((x) => ({ label: x, meta: 'Fold' })),
+                onPick: (it) => {
+                    document.getElementById('of-fold').value = it.label;
+                    D.focusField('of-rem');
                 }
             }
         };
@@ -118,7 +147,7 @@
             };
         });
 
-        focusOrder.push('of-no', 'of-date', 'of-tin', 'of-marka', 'of-tr', 'of-agent', 'of-rem');
+        focusOrder.push('of-no', 'of-date', 'of-tin', 'of-marka', 'of-tr', 'of-agent', 'of-pack', 'of-fold', 'of-rem');
 
         D.bindFormControls({
             focusOrder,
@@ -130,9 +159,9 @@
         });
     }
 
-    function renderForm(focusId = 'of-firm') {
+    function renderForm(focusId = 'of-party') {
         const firms = D.get('dukan_firms');
-        const fObj = firms.find((x) => x.name === selFirmName) || firms[0] || {};
+        const fObj = firms.find((x) => x.id === selFirmId) || firms[0] || {};
         const orders = D.get('dukan_orders');
         const nextNo = String(197 + orders.length);
 
@@ -140,12 +169,12 @@
             <div class="dk-ord-book">
                 <div class="dk-ord-hdr">
                     <div>
-                        <input id="of-firm" value="${D.esc(selFirmName)}" style="border:none;border-bottom:1px dashed #991b1b;font-size:17px;font-weight:800;color:#991b1b;background:transparent;outline:none;width:240px;" autocomplete="off">
-                        <div id="of-firm-gst" style="font-size:10.5px;color:#7f1d1d;font-weight:700;margin-top:2px;">GSTIN: ${D.esc(fObj.gst || '-')} · ${D.esc(fObj.address || 'Handloom Saree Merchants')}</div>
+                        <input id="of-firm" value="${D.esc(fObj.name || '')}" placeholder="Apni Firm chunein / likhein..." style="border:none;border-bottom:1px dashed #991b1b;font-size:17px;font-weight:800;color:#991b1b;background:transparent;outline:none;width:270px;" autocomplete="off">
+                        <div id="of-firm-info" style="font-size:10.5px;color:#7f1d1d;font-weight:700;margin-top:2px;">GSTIN: ${D.esc(fObj.gst || '-')} · ${D.esc(fObj.address || '')}${fObj.email ? ' · ' + D.esc(fObj.email) : ''}</div>
                     </div>
                     <div style="text-align:right;">
                         <strong style="font-size:15px;color:#991b1b;letter-spacing:0.6px;">ORDER FORM</strong>
-                        <div style="font-size:10.5px;color:#7f1d1d;">Batch Mode (Enter = Next Box)</div>
+                        <div id="of-firm-ph" style="font-size:10.5px;color:#7f1d1d;font-weight:700;">${fObj.mob ? 'Mob: ' + D.esc(fObj.mob) : ''}</div>
                     </div>
                 </div>
 
@@ -155,6 +184,17 @@
                             <strong style="color:#991b1b;font-size:13px;">M/s.</strong>
                             <input id="of-party" placeholder="Party ka naam likhein ya Side List se chunein..." autocomplete="off">
                         </div>
+                        <div style="padding:5px 10px;border-bottom:1.5px solid #991b1b;display:grid;grid-template-columns:1.5fr 0.8fr;gap:8px;background:#fffafa;">
+                            <div style="display:flex;align-items:center;gap:5px;font-size:11.5px;">
+                                <strong style="color:#991b1b;">Add:</strong>
+                                <input id="of-party-addr" placeholder="Party Address &amp; City" style="flex:1;border:none;border-bottom:1px dashed #fca5a5;font-size:11.5px;font-weight:600;outline:none;background:transparent;">
+                            </div>
+                            <div style="display:flex;align-items:center;gap:5px;font-size:11.5px;">
+                                <strong style="color:#991b1b;">Mob:</strong>
+                                <input id="of-party-mob" placeholder="Mobile No." style="flex:1;border:none;border-bottom:1px dashed #fca5a5;font-size:11.5px;font-weight:600;outline:none;background:transparent;">
+                            </div>
+                        </div>
+
                         <table class="dk-ord-tbl">
                             <thead>
                                 <tr>
@@ -178,9 +218,10 @@
                                     </tr>`).join('')}
                             </tbody>
                         </table>
+
                         <div style="margin-top:auto;padding:8px 10px;border-top:1px solid #fca5a5;display:flex;justify-content:space-between;font-size:10.5px;color:#7f1d1d;">
                             <span>1. Subject to Jurisdiction · 2. No Rate Difference</span>
-                            <strong>For: ${D.esc(selFirmName)}</strong>
+                            <strong id="of-firm-for">For: ${D.esc(fObj.name || 'FIRM')}</strong>
                         </div>
                     </div>
 
@@ -193,12 +234,8 @@
                         <div class="dk-ord-box"><label>Marka / Through</label><input id="of-marka" placeholder="Marka"></div>
                         <div class="dk-ord-box"><label>Transport</label><input id="of-tr" placeholder="Transport"></div>
                         <div class="dk-ord-box"><label>Agent Name</label><input id="of-agent" placeholder="Agent Name"></div>
-                        <div class="dk-ord-box">
-                            <label>Packing</label>
-                            <div class="dk-pack-3">
-                                ${['Box', 'Paper', 'No Box'].map((pk) => `<div class="dk-pack-opt ${selPack === pk ? 'active' : ''}" onclick="DukanERP.ofSetPack('${pk}', this)">${pk}</div>`).join('')}
-                            </div>
-                        </div>
+                        <div class="dk-ord-box"><label>Box / Paper / No Box</label><input id="of-pack" value="Box" placeholder="Box / Paper / No Box" autocomplete="off"></div>
+                        <div class="dk-ord-box"><label>Fold</label><input id="of-fold" value="Box Fold" placeholder="Box Fold / Book Fold..." autocomplete="off"></div>
                         <div class="dk-ord-box" style="border-bottom:none;"><label>Remarks</label><input id="of-rem" placeholder="Enter = Save"></div>
                     </div>
                 </div>
@@ -225,12 +262,6 @@
         D.focusField(focusId);
     }
 
-    D.ofSetPack = (pk, el) => {
-        selPack = pk;
-        document.querySelectorAll('.dk-pack-opt').forEach((x) => x.classList.remove('active'));
-        if (el) el.classList.add('active');
-    };
-
     D.askOrderSave = () => {
         const partyTxt = (document.getElementById('of-party')?.value || '').trim();
         if (!partyTxt) { D.toast('⚠️ M/s. Party Name bharein!'); return D.focusField('of-party'); }
@@ -249,14 +280,18 @@
             id: `ord_${Date.now()}`,
             no: document.getElementById('of-no').value.trim(),
             date: document.getElementById('of-date').value,
-            firmName: document.getElementById('of-firm').value.trim(),
+            firmId: selFirmId,
+            firmName: (document.getElementById('of-firm').value || '').trim().toUpperCase(),
             partyId: selPartyId || partyTxt,
             partyName: partyTxt,
+            partyAddress: document.getElementById('of-party-addr').value,
+            partyMob: document.getElementById('of-party-mob').value,
             gst: document.getElementById('of-tin').value,
             marka: document.getElementById('of-marka').value,
             transport: document.getElementById('of-tr').value,
             agent: document.getElementById('of-agent').value,
-            pack: selPack,
+            pack: document.getElementById('of-pack').value,
+            fold: document.getElementById('of-fold').value,
             remarks: document.getElementById('of-rem').value,
             status: 'Pending',
             items: valid.map((r) => ({ ...r, qty: D.num(r.qty), rate: D.num(r.rate) }))
@@ -267,9 +302,19 @@
     };
 
     D.printOrderBook = () => {
-        const html = document.querySelector('.dk-ord-book')?.outerHTML || '';
+        const book = document.querySelector('.dk-ord-book');
+        if (!book) return;
+        const clone = book.cloneNode(true);
+        clone.querySelectorAll('input').forEach((inp) => {
+            const orig = document.getElementById(inp.id);
+            const val = orig ? orig.value : inp.value;
+            const span = document.createElement('span');
+            span.textContent = val;
+            span.style.cssText = inp.style.cssText + ';display:inline-block;border:none;';
+            inp.replaceWith(span);
+        });
         const w = window.open('', '_blank', 'width=900,height=700');
-        w.document.write(`<html><head><style>body{font-family:Inter,sans-serif;padding:14px}input{border:none!important;background:transparent!important}.dk-ord-book{border:2px solid #991b1b}.dk-ord-hdr{background:#fff5f5;border-bottom:2px solid #991b1b;padding:10px;display:flex;justify-content:space-between}.dk-ord-grid{display:grid;grid-template-columns:1fr 230px}.dk-ord-main{border-right:1.5px solid #991b1b}.dk-ord-ms{padding:8px;border-bottom:1.5px solid #991b1b;display:flex;gap:8px}.dk-ord-tbl{width:100%;border-collapse:collapse}.dk-ord-tbl th,.dk-ord-tbl td{border:1px solid #fca5a5;padding:5px;font-size:12px}.dk-ord-box,.dk-ord-2{border-bottom:1px solid #fca5a5;padding:5px 8px;font-size:11px}.dk-ord-2{display:grid;grid-template-columns:1fr 1fr}.dk-pack-3{display:flex;gap:6px}.dk-pack-opt.active{font-weight:800;text-decoration:underline}</style></head><body>${html}</body></html>`);
+        w.document.write(`<html><head><style>body{font-family:Inter,sans-serif;padding:14px}.dk-ord-book{border:2px solid #991b1b}.dk-ord-hdr{background:#fff5f5;border-bottom:2px solid #991b1b;padding:10px;display:flex;justify-content:space-between}.dk-ord-grid{display:grid;grid-template-columns:1fr 230px}.dk-ord-main{border-right:1.5px solid #991b1b}.dk-ord-ms{padding:8px;border-bottom:1.5px solid #991b1b;display:flex;gap:8px}.dk-ord-tbl{width:100%;border-collapse:collapse}.dk-ord-tbl th,.dk-ord-tbl td{border:1px solid #fca5a5;padding:5px;font-size:12px}.dk-ord-box,.dk-ord-2{border-bottom:1px solid #fca5a5;padding:5px 8px;font-size:11px}.dk-ord-2{display:grid;grid-template-columns:1fr 1fr}</style></head><body>${clone.outerHTML}</body></html>`);
         w.document.close(); w.print();
     };
 
