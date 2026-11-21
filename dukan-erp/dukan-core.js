@@ -1,5 +1,5 @@
 /* ============================================================================
-   SIMPLICITY ERP (THE TALLY BRIDGE) - DUKAN CORE ENGINE (CAPTURE KEYBOARD)
+   SIMPLICITY ERP (THE TALLY BRIDGE) - DUKAN CORE ENGINE
    File: dukan-erp/dukan-core.js
 ============================================================================ */
 (() => {
@@ -13,6 +13,7 @@
         sideBindings: {},
         sideItems: [],
         sideIdx: -1,
+        sideNavigated: false,
         activeSideId: null,
         listNav: null,
         onFinishForm: null,
@@ -62,6 +63,27 @@
         D.lastToast = msg;
         const el = document.getElementById('dk-toast-msg');
         if (el) el.textContent = msg;
+    };
+
+    // Order Item Progress: Kitna Order, Kitna Gaya (Challan), Kitna Baki
+    D.getOrderProgress = (ord) => {
+        const challans = D.get('dukan_challans').filter((c) => c.orderId === ord.id);
+        const sentMap = {};
+        challans.forEach((c) => {
+            (c.items || []).forEach((it) => {
+                const k = String(it.name || '').trim().toUpperCase();
+                sentMap[k] = (sentMap[k] || 0) + D.num(it.qty);
+            });
+        });
+        const items = (ord.items || []).map((it) => {
+            const k = String(it.name || '').trim().toUpperCase();
+            const ordered = D.num(it.qty);
+            const sent = ord.status === 'Complete' && !challans.length ? ordered : (sentMap[k] || 0);
+            const baki = Math.max(0, ordered - sent);
+            return { ...it, ordered, sent, baki };
+        });
+        const allDone = items.length > 0 && items.every((x) => x.baki <= 0);
+        return { items, allDone };
     };
 
     D.paginate = (arr, page = 1, size = D.pageSize) => {
@@ -159,7 +181,7 @@
             .dk-btn:disabled { opacity:0.45; cursor:not-allowed; }
             .dk-btn-gold { background:#eab01e; border:1px solid #d99b07; color:#fff; padding:7px 16px; border-radius:6px; font-size:12.5px; font-weight:800; cursor:pointer; }
             .dk-body { display:grid; grid-template-columns:1.6fr 0.85fr; gap:16px; padding:14px 18px; align-items:start; }
-            .dk-row { display:grid; grid-template-columns:150px 1fr; align-items:center; gap:10px; margin-bottom:8px; }
+            .dk-row { display:grid; grid-template-columns:155px 1fr; align-items:center; gap:10px; margin-bottom:8px; }
             .dk-row label { font-size:12.5px; font-weight:700; color:#374151; }
             .dk-row input, .dk-row select { width:100%; padding:7px 10px; border:1px solid #d1d5db; border-radius:5px; font-size:12.5px; font-weight:600; outline:none; background:#fff; }
             .dk-row input:focus, .dk-row select:focus { border-color:#eab01e; background:#fffdf5; box-shadow:0 0 0 2px rgba(234,176,30,0.22); }
@@ -181,7 +203,7 @@
             .dk-nav-row { cursor:pointer; }
             .dk-nav-row:hover { background:#fef9ea; }
             .dk-nav-row.active { background:#eab01e !important; color:#fff !important; font-weight:700; }
-            .dk-nav-row.active small { color:#fff !important; }
+            .dk-nav-row.active small, .dk-nav-row.active span { color:#fff !important; }
             .dk-choice-btn { width:100%; border:1.5px solid #e5d5a7; background:#fff; border-radius:8px; padding:13px 16px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; margin-bottom:10px; font-size:14px; font-weight:700; color:#1f2937; text-align:left; }
             .dk-choice-btn:hover { background:#fef9ea; }
             .dk-choice-btn.active { background:#eab01e; border-color:#d99b07; color:#fff; }
@@ -191,15 +213,12 @@
             .dk-pager { display:flex; justify-content:space-between; align-items:center; margin-top:10px; font-size:11.5px; font-weight:700; color:#6b7280; flex-wrap:wrap; gap:8px; }
             .dk-foot { padding:9px 18px; border-top:1px solid #eceff3; background:#fafafa; display:flex; justify-content:space-between; font-size:11.5px; color:#92400e; font-weight:700; }
             .dk-sticker { width:240px; border:1.5px dashed #d9b86c; border-radius:8px; padding:10px 12px; background:#fff; text-align:center; }
-
-            /* PHOTO ORDER BOOK LAYOUT */
             .dk-ord-book { border:2px solid #991b1b; border-radius:6px; background:#fff; overflow:hidden; }
             .dk-ord-hdr { background:#fff5f5; border-bottom:2px solid #991b1b; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
             .dk-ord-grid { display:grid; grid-template-columns:1fr 245px; }
             .dk-ord-main { border-right:1.5px solid #991b1b; display:flex; flex-direction:column; }
-            .dk-ord-ms { padding:8px 10px; border-bottom:1.5px solid #991b1b; display:flex; align-items:center; gap:8px; background:#fffafa; }
+            .dk-ord-ms { padding:7px 10px; border-bottom:1.5px solid #991b1b; display:flex; align-items:center; gap:8px; background:#fffafa; }
             .dk-ord-ms input { flex:1; border:none; border-bottom:1px dashed #991b1b; font-size:13.5px; font-weight:800; outline:none; background:transparent; padding:3px 4px; }
-            .dk-ord-ms input:focus { background:#fffdf5; border-bottom-color:#eab01e; }
             .dk-ord-tbl { width:100%; border-collapse:collapse; font-size:12px; }
             .dk-ord-tbl th { background:#fef2f2; color:#991b1b; border-bottom:1.5px solid #991b1b; border-right:1px solid #fca5a5; padding:6px; font-weight:800; }
             .dk-ord-tbl td { border-bottom:1px solid #fecaca; border-right:1px solid #fecaca; padding:4px; }
@@ -208,17 +227,13 @@
             .dk-ord-side { background:#fffdfd; display:flex; flex-direction:column; }
             .dk-ord-box { border-bottom:1px solid #fca5a5; padding:6px 8px; }
             .dk-ord-box label { display:block; font-size:10.5px; font-weight:800; color:#991b1b; margin-bottom:2px; }
-            .dk-ord-box input, .dk-ord-box select { width:100%; border:1px solid #e5e7eb; border-radius:3px; padding:4px 6px; font-size:12px; font-weight:700; outline:none; }
-            .dk-ord-box input:focus, .dk-ord-box select:focus { border-color:#eab01e; background:#fffbeb; }
+            .dk-ord-box input { width:100%; border:1px solid #e5e7eb; border-radius:3px; padding:4px 6px; font-size:12px; font-weight:700; outline:none; }
+            .dk-ord-box input:focus { border-color:#eab01e; background:#fffbeb; }
             .dk-ord-2 { display:grid; grid-template-columns:1fr 1fr; border-bottom:1px solid #fca5a5; }
             .dk-ord-2 > div { padding:6px 8px; }
             .dk-ord-2 > div:first-child { border-right:1px solid #fca5a5; }
             .dk-ord-2 label { display:block; font-size:10.5px; font-weight:800; color:#991b1b; margin-bottom:2px; }
             .dk-ord-2 input { width:100%; border:1px solid #e5e7eb; border-radius:3px; padding:4px 6px; font-size:12px; font-weight:700; outline:none; }
-            .dk-pack-3 { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; text-align:center; font-size:11px; font-weight:700; }
-            .dk-pack-opt { border:1px solid #fca5a5; border-radius:3px; padding:4px 2px; cursor:pointer; background:#fff; }
-            .dk-pack-opt.active { background:#991b1b; color:#fff; border-color:#991b1b; }
-
             @media (max-width:900px) { .dk-body, .dk-ord-grid { grid-template-columns:1fr; } .dk-ord-main { border-right:none; border-bottom:1.5px solid #991b1b; } .dk-row { grid-template-columns:1fr; gap:4px; } }
         `;
         document.head.appendChild(st);
@@ -237,7 +252,7 @@
         tEl.textContent = title;
         if (sEl) sEl.textContent = sub;
         if (!D.sideItems.length) {
-            lEl.innerHTML = `<div style="padding:16px; text-align:center; color:#9ca3af; font-size:12px;">Koi list item nahi — type karke Enter dabaye</div>`;
+            lEl.innerHTML = `<div style="padding:16px; text-align:center; color:#9ca3af; font-size:12px;">Koi list item nahi</div>`;
             return;
         }
         lEl.innerHTML = D.sideItems.map((it, i) => `
@@ -261,18 +276,23 @@
         D.listNav = cfg.listNav || null;
         D.onFinishForm = cfg.onFinishForm || null;
         D.activeSideId = null;
+        D.sideNavigated = false;
 
         Object.keys(D.sideBindings).forEach((fid) => {
             const el = document.getElementById(fid);
             if (!el) return;
             const b = D.sideBindings[fid];
-            const refreshSide = (autoHl) => {
+            const refreshSide = (isTyping) => {
                 D.activeSideId = fid;
-                const items = b.getItems(el.value || '');
-                D.renderSide(b.title, `${items.length} Found`, items, autoHl);
+                const val = el.value || '';
+                const items = b.getItems(val);
+                const hl = isTyping ? Boolean(val.trim()) : !b.noAutoHighlight;
+                if (!isTyping) D.sideNavigated = false;
+                else if (val.trim()) D.sideNavigated = true;
+                D.renderSide(b.title, `${items.length} Found`, items, hl);
             };
-            el.addEventListener('focus', () => refreshSide(true));
-            el.addEventListener('click', () => refreshSide(true));
+            el.addEventListener('focus', () => refreshSide(false));
+            el.addEventListener('click', () => refreshSide(false));
             el.addEventListener('input', () => refreshSide(true));
         });
 
@@ -282,6 +302,7 @@
             if (!el) return;
             el.addEventListener('focus', () => {
                 D.activeSideId = null;
+                D.sideNavigated = false;
                 if (cfg.defaultSide) cfg.defaultSide();
             });
         });
@@ -353,12 +374,12 @@
 
     const GW_ITEMS = [
         { k: 'c', label: '<span class="dk-gw-key">C</span>reate (Firm / Party / Alter)', meta: 'Master Setup', fn: () => D.openCreate() },
-        { k: 'p', label: '<span class="dk-gw-key">P</span>arty Register', meta: 'Pending / Completed', fn: () => D.openPartyRegister() },
+        { k: 'p', label: '<span class="dk-gw-key">P</span>arty Register', meta: 'Party → Pending / Complete', fn: () => D.openPartyRegister() },
         { k: 'n', label: '<span class="dk-gw-key">N</span>aming &amp; Barcoding', meta: 'Kariger → Sticker', fn: () => D.openBarcode() },
         { k: 'o', label: '<span class="dk-gw-key">O</span>rder Form', meta: 'Book Format', fn: () => D.openOrderForm() },
-        { k: 'h', label: 'C<span class="dk-gw-key">h</span>allan &amp; Packing Slip', meta: 'Stock Minus + Slip', fn: () => D.openChallan() },
-        { k: 'd', label: 'Pen<span class="dk-gw-key">d</span>ing Order (All)', meta: 'All Parties', fn: () => D.openAllOrders('Pending') },
-        { k: 'l', label: 'Comp<span class="dk-gw-key">l</span>ete Order (All)', meta: 'All Parties', fn: () => D.openAllOrders('Complete') }
+        { k: 'h', label: 'C<span class="dk-gw-key">h</span>allan &amp; Packing Slip', meta: 'Manual No + Combo Print', fn: () => D.openChallan() },
+        { k: 'd', label: 'Pen<span class="dk-gw-key">d</span>ing Order (All)', meta: 'Party Wise', fn: () => D.openAllOrders('Pending') },
+        { k: 'l', label: 'Comp<span class="dk-gw-key">l</span>ete Order (All)', meta: 'Party Wise', fn: () => D.openAllOrders('Complete') }
     ];
 
     window.openDukanGateway = function () {
@@ -408,12 +429,10 @@
 
     D.runGw = (i) => { D.gwIdx = i; if (GW_ITEMS[i]) GW_ITEMS[i].fn(); };
 
-    /* CAPTURE-PHASE KEYBOARD HANDLER (Runs BEFORE tally-master / other scripts) */
     document.addEventListener('keydown', (e) => {
         const sec = document.getElementById('dukan-section');
         if (!sec || sec.style.display === 'none') return;
 
-        // 1. Gateway of Dukan Management
         if (D.screen === 'gateway') {
             if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); window.backToDashboard(); return; }
             if (e.key === 'ArrowDown') { e.preventDefault(); e.stopImmediatePropagation(); D.gwIdx = (D.gwIdx + 1) % GW_ITEMS.length; window.openDukanGateway(); return; }
@@ -426,14 +445,12 @@
             return;
         }
 
-        // 2. Escape
         if (e.key === 'Escape') {
             e.preventDefault(); e.stopImmediatePropagation();
             D.handleEsc();
             return;
         }
 
-        // 3. Accept? Box
         const acc = document.getElementById('dk-accept-box');
         if (acc && acc.style.display === 'flex') {
             if (e.key.toLowerCase() === 'y' || (e.key === 'Enter' && document.activeElement?.id !== 'dk-accept-no')) {
@@ -448,7 +465,6 @@
             }
         }
 
-        // 4. Ctrl+Enter Save
         if (e.ctrlKey && (e.key === 'Enter' || e.key.toLowerCase() === 'a')) {
             if (typeof D.onFinishForm === 'function') {
                 e.preventDefault(); e.stopImmediatePropagation();
@@ -460,28 +476,27 @@
         const activeEl = document.activeElement;
         const activeId = activeEl?.id || '';
 
-        // Never hijack Enter on explicit buttons (except choice buttons)
         if (activeEl?.tagName === 'BUTTON' && !activeEl.classList.contains('dk-choice-btn')) {
             return;
         }
 
-        // 5. Shift+Enter ALWAYS goes to previous box (Universal)
         if (e.key === 'Enter' && e.shiftKey && activeId && D.focusOrder.includes(activeId)) {
             e.preventDefault(); e.stopImmediatePropagation();
             D.moveFocus(activeId, -1);
             return;
         }
 
-        // 6. Side-Linked Input
         if (activeId && D.sideBindings[activeId]) {
             D.activeSideId = activeId;
             const b = D.sideBindings[activeId];
             if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                 if (!D.sideItems.length) return;
                 e.preventDefault(); e.stopImmediatePropagation();
-                D.sideIdx = e.key === 'ArrowDown'
+                D.sideNavigated = true;
+                if (D.sideIdx < 0) D.sideIdx = e.key === 'ArrowDown' ? 0 : D.sideItems.length - 1;
+                else D.sideIdx = e.key === 'ArrowDown'
                     ? (D.sideIdx + 1) % D.sideItems.length
-                    : (D.sideIdx <= 0 ? D.sideItems.length - 1 : D.sideIdx - 1);
+                    : (D.sideIdx - 1 + D.sideItems.length) % D.sideItems.length;
                 const opts = Array.from(document.querySelectorAll('#dk-side-items .dk-side-opt'));
                 opts.forEach((o, i) => o.classList.toggle('selected', i === D.sideIdx));
                 opts[D.sideIdx]?.scrollIntoView({ block: 'nearest' });
@@ -489,7 +504,9 @@
             }
             if (e.key === 'Enter') {
                 e.preventDefault(); e.stopImmediatePropagation();
-                if (typeof b.onEmptyEnter === 'function' && !String(activeEl.value || '').trim()) {
+                const valTrim = String(activeEl.value || '').trim();
+                // Agar user ne box khali chhoda aur ↑↓ bhi nahi dabaya -> Finish/Skip (e.g. end of item table)
+                if (typeof b.onEmptyEnter === 'function' && !valTrim && !D.sideNavigated) {
                     b.onEmptyEnter();
                     return;
                 }
@@ -502,7 +519,6 @@
             }
         }
 
-        // 7. List Navigation (Only when NOT inside a form input except searchId)
         if (D.listNav) {
             const rows = Array.from(document.querySelectorAll(D.listNav.selector));
             const inSearch = Boolean(D.listNav.searchId && activeId === D.listNav.searchId);
@@ -527,7 +543,6 @@
             }
         }
 
-        // 8. Standard Form Box Navigation
         if (activeId && D.focusOrder.includes(activeId)) {
             if (e.key === 'Enter') {
                 e.preventDefault(); e.stopImmediatePropagation();
