@@ -1,30 +1,52 @@
 /* ============================================================================
    CHALLAN & PACKING SLIP:
+   - 2-Button Menu: [Challan & Packing Slip] & [Challan Register]
    - Manual Mode (Option 1: Order se auto-add nahi, Side List me Baki items)
-   - Saved Challan Edit / Update / Delete (Auto Stock Restore + Order Status Recalc)
-   - Exact A5 Paper Print (Challan + Packing Slip)
+   - Dedicated Challan Register with Universal Search + Edit / Delete / A5 Print
+   - Edit / Delete par Finished Stock auto-restore + Order Status auto-update
    File: dukan-erp/dukan-challan.js
 ============================================================================ */
 (() => {
     const D = window.DukanERP;
+    let viewMode = 'choice'; // 'choice' | 'form' | 'register'
+    let choiceIdx = 0;
     let editChallanId = '';
+    let fromRegister = false;
     let selFirmId = '';
     let selPartyId = '';
     let linkedOrderId = '';
     let oldOrderId = '';
     let chBatch = [];
-    let listSearch = '';
-    let listPage = 1;
+    let regSearch = '';
+    let regPage = 1;
+    let regNav = 0;
+
+    function bindEscHandler() {
+        D.onEsc = () => {
+            if (viewMode === 'form') {
+                viewMode = fromRegister ? 'register' : 'choice';
+                editChallanId = '';
+                fromRegister = false;
+                render();
+            } else if (viewMode === 'register') {
+                viewMode = 'choice';
+                render();
+            } else {
+                window.openDukanGateway();
+            }
+        };
+    }
 
     D.openChallan = (chId = '') => {
         D.screen = 'challan';
-        D.onEsc = null;
         D.onCustomFieldEnter = null;
-        editChallanId = chId || '';
+        bindEscHandler();
 
-        if (editChallanId) {
-            const rec = D.get('dukan_challans').find((c) => c.id === editChallanId);
+        if (chId) {
+            const rec = D.get('dukan_challans').find((c) => c.id === chId);
             if (rec) {
+                viewMode = 'form';
+                editChallanId = rec.id;
                 selFirmId = rec.firmId || '';
                 selPartyId = rec.partyId || '';
                 linkedOrderId = rec.orderId || '';
@@ -33,24 +55,40 @@
                 render('ch-cur-name', rec);
                 return;
             }
-            editChallanId = '';
         }
 
+        viewMode = 'choice';
+        choiceIdx = 0;
+        editChallanId = '';
+        fromRegister = false;
         selFirmId = '';
         selPartyId = '';
         linkedOrderId = '';
         oldOrderId = '';
         chBatch = [];
-        render('ch-firm', null);
+        regSearch = '';
+        regPage = 1;
+        regNav = 0;
+        render();
     };
 
-    D.loadChallan = (chId) => D.openChallan(chId);
+    D.loadChallan = (chId) => {
+        fromRegister = false;
+        D.openChallan(chId);
+    };
+
+    D.chEditFromReg = (chId) => {
+        fromRegister = true;
+        D.openChallan(chId);
+    };
 
     // Manual Mode (Option 1): Order se auto-add nahi hoga, bagal me Order ke Baki items dikhenge
     D.loadOrderInChallan = (partyId, orderId) => {
         D.screen = 'challan';
-        D.onEsc = null;
         D.onCustomFieldEnter = null;
+        bindEscHandler();
+        viewMode = 'form';
+        fromRegister = false;
         editChallanId = '';
         oldOrderId = '';
         selPartyId = partyId || '';
@@ -64,9 +102,37 @@
         }
     };
 
-    window.dkChPage = (p) => {
-        listPage = p;
-        renderSavedChallans();
+    D.chOpenChoice = (idx) => {
+        choiceIdx = idx;
+        editChallanId = '';
+        fromRegister = false;
+        if (idx === 0) {
+            viewMode = 'form';
+            selFirmId = '';
+            selPartyId = '';
+            linkedOrderId = '';
+            oldOrderId = '';
+            chBatch = [];
+            render('ch-firm', null);
+        } else {
+            viewMode = 'register';
+            regPage = 1;
+            regNav = 0;
+            render();
+        }
+    };
+
+    D.chBackToChoice = () => {
+        viewMode = 'choice';
+        editChallanId = '';
+        fromRegister = false;
+        render();
+    };
+
+    window.dkChRegPage = (p) => {
+        regPage = p;
+        regNav = 0;
+        render();
     };
 
     function getOrderPendingItems(ord) {
@@ -164,47 +230,165 @@
         D.focusField('ch-cur-name');
     };
 
-    function renderSavedChallans() {
-        const tb = document.getElementById('ch-saved-tb');
-        const pgBox = document.getElementById('ch-saved-pg');
-        if (!tb) return;
+    function renderChoiceScreen() {
+        const challans = D.get('dukan_challans');
+        const pendOrders = D.get('dukan_orders').filter((o) => o.status !== 'Complete').length;
 
-        const all = D.get('dukan_challans').slice().reverse();
-        const orders = D.get('dukan_orders');
-        const q = listSearch.trim().toLowerCase();
-        const filtered = all.filter((c) => {
-            if (!q) return true;
-            const itemTxt = (c.items || []).map((i) => `${i.name} ${i.qty}`).join(' ');
-            const blob = `${c.no} ${c.date} ${D.fmtDate(c.date)} ${c.partyName} ${c.marka} ${c.firmName} ${itemTxt}`.toLowerCase();
-            return blob.includes(q);
+        const left = `
+            <div style="background:#fdf6e2; border:1px solid #e5d5a7; border-radius:8px; padding:12px; margin-bottom:14px;">
+                <strong style="font-size:15px;">Challan &amp; Packing Slip Menu</strong>
+                <div style="font-size:12px; color:#6b7280; margin-top:2px;">
+                    Naya Challan (Manual Mode) banane ya Saved Challan Register dekhne ke liye option chunein
+                </div>
+            </div>
+            <button type="button" class="dk-choice-btn ${choiceIdx === 0 ? 'active' : ''}" onclick="DukanERP.chOpenChoice(0)">
+                <span>📦 Challan &amp; Packing Slip (Manual Mode)</span>
+                <span class="dk-cnt-pill">${pendOrders} Pend Ord</span>
+            </button>
+            <button type="button" class="dk-choice-btn ${choiceIdx === 1 ? 'active' : ''}" onclick="DukanERP.chOpenChoice(1)">
+                <span>📋 Challan Register (All Saved List)</span>
+                <span class="dk-cnt-pill">${challans.length}</span>
+            </button>
+        `;
+
+        D.renderShell(`<h2>Challan &amp; Packing Slip</h2>`, left, '[↑ ↓] Option Chunein · [Enter] Kholein · [Esc] Back');
+        D.renderSide('Challan Summary', `${challans.length} Saved`, [
+            { label: 'Challan & Packing Slip', meta: 'Manual + A5 Print', active: choiceIdx === 0 },
+            { label: 'Challan Register', meta: `${challans.length} Challans Saved`, active: choiceIdx === 1 },
+            { label: 'Pending Orders', meta: `${pendOrders} Baki` }
+        ], false);
+
+        D.bindFormControls({
+            listNav: {
+                selector: '#dk-left .dk-choice-btn',
+                getIdx: () => choiceIdx,
+                setIdx: (i) => { choiceIdx = i; },
+                onEnter: (i) => D.chOpenChoice(i)
+            }
         });
-
-        const pg = D.paginate(filtered, listPage);
-        tb.innerHTML = pg.rows.length ? pg.rows.map((c) => {
-            const ord = c.orderId ? orders.find((o) => o.id === c.orderId) : null;
-            const totPcs = (c.items || []).reduce((a, b) => a + D.num(b.qty), 0);
-            const itemsSummary = (c.items || []).map((i) => `${D.esc(i.name)}:${i.qty}`).join(', ');
-            return `
-                <tr class="dk-nav-row ${c.id === editChallanId ? 'active' : ''}" onclick="DukanERP.loadChallan('${c.id}')">
-                    <td><strong>#${D.esc(c.no)}</strong><br><small>${D.fmtDate(c.date)}</small></td>
-                    <td><strong>${D.esc(c.partyName)}</strong><br><small>Marka: ${D.esc(c.marka || '-')}</small></td>
-                    <td><strong>${totPcs} Pc</strong><br><small>${itemsSummary}</small></td>
-                    <td>${ord ? `#${D.esc(ord.no)}` : '-'}</td>
-                    <td style="white-space:nowrap;">
-                        <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.loadChallan('${c.id}')">✏️ Edit</button>
-                        <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.printSavedChallan('${c.id}')">🖨️ A5</button>
-                        <button type="button" class="dk-btn-del" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.deleteChallan('${c.id}')">🗑️</button>
-                    </td>
-                </tr>`;
-        }).join('') : `<tr><td colspan="5" style="text-align:center;color:#9ca3af;">Koi saved challan nahi mila</td></tr>`;
-
-        if (pgBox) pgBox.innerHTML = D.pagerHTML(pg, 'dkChPage');
+        setTimeout(() => document.querySelectorAll('#dk-left .dk-choice-btn')[choiceIdx]?.focus(), 20);
     }
 
-    function render(focusId = 'ch-firm', rec = null) {
+    function renderRegisterScreen() {
+        const challans = D.get('dukan_challans').slice().reverse();
+        const orders = D.get('dukan_orders');
+
+        const getFiltered = () => {
+            const q = regSearch.trim().toLowerCase();
+            if (!q) return challans;
+            return challans.filter((c) => {
+                const ord = c.orderId ? orders.find((o) => o.id === c.orderId) : null;
+                const itemTxt = (c.items || []).map((i) => `${i.name} ${i.qty}`).join(' ');
+                const blob = `${c.no} ${c.date} ${D.fmtDate(c.date)} ${c.partyName} ${c.city} ${c.marka} ${c.firmName} ${ord ? ord.no : ''} ${itemTxt}`.toLowerCase();
+                return blob.includes(q);
+            });
+        };
+
+        const showRegSide = (c) => {
+            if (!c) return D.renderSide('Challan Register', '0', [], false);
+            const ord = c.orderId ? orders.find((o) => o.id === c.orderId) : null;
+            const totPcs = (c.items || []).reduce((a, b) => a + D.num(b.qty), 0);
+            D.renderSide(`Challan #${c.no}`, `${D.fmtDate(c.date)} · ${totPcs} Pc`, [
+                { label: `Party: ${c.partyName}`, meta: c.city || '', active: true },
+                { label: `Marka: ${c.marka || '-'}`, meta: ord ? `Order #${ord.no}` : 'Manual' },
+                ...(c.items || []).map((it) => ({
+                    label: it.name,
+                    meta: `${it.qty} Pc · ₹${D.num(it.rate)}`
+                }))
+            ], false);
+        };
+
+        const drawRows = () => {
+            const flt = getFiltered();
+            const pg = D.paginate(flt, regPage);
+            if (regNav >= pg.rows.length) regNav = 0;
+
+            const tb = document.getElementById('ch-reg-tb');
+            if (tb) {
+                tb.innerHTML = pg.rows.length ? pg.rows.map((c, i) => {
+                    const ord = c.orderId ? orders.find((o) => o.id === c.orderId) : null;
+                    const totPcs = (c.items || []).reduce((a, b) => a + D.num(b.qty), 0);
+                    const itemsSummary = (c.items || []).map((it) => `${D.esc(it.name)}:${it.qty}`).join(', ');
+                    return `
+                        <tr class="dk-nav-row ${i === regNav ? 'active' : ''}" onclick="DukanERP.chEditFromReg('${c.id}')">
+                            <td><strong>#${D.esc(c.no)}</strong><br><small>${D.fmtDate(c.date)}</small></td>
+                            <td><strong>${D.esc(c.partyName)}</strong><br><small>Marka: ${D.esc(c.marka || '-')}</small></td>
+                            <td><strong>${totPcs} Pc</strong><br><small>${itemsSummary}</small></td>
+                            <td>${ord ? `#${D.esc(ord.no)}` : '-'}</td>
+                            <td style="white-space:nowrap;">
+                                <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.chEditFromReg('${c.id}')">✏️ Edit</button>
+                                <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.printSavedChallan('${c.id}')">🖨️ A5</button>
+                                <button type="button" class="dk-btn-del" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.deleteChallan('${c.id}')">🗑️ Del</button>
+                            </td>
+                        </tr>`;
+                }).join('') : `<tr><td colspan="5" style="text-align:center;color:#9ca3af;">Koi saved challan nahi mila</td></tr>`;
+            }
+
+            const pgBox = document.getElementById('ch-reg-pg');
+            if (pgBox) pgBox.innerHTML = D.pagerHTML(pg, 'dkChRegPage');
+            showRegSide(pg.rows[regNav]);
+        };
+
+        const headL = `
+            <h2>Challan Register (${challans.length})</h2>
+            <button type="button" class="dk-tab" onclick="DukanERP.chOpenChoice(0)">+ New Challan</button>
+            <button type="button" class="dk-btn" onclick="DukanERP.chBackToChoice()">← Menu</button>
+        `;
+
+        const left = `
+            <div class="dk-row">
+                <label>🔍 Universal Search :</label>
+                <input id="ch-reg-q" value="${D.esc(regSearch)}" placeholder="Challan #, Party, Marka, Design, Order # ya Date likhein..." autocomplete="off">
+            </div>
+            <table class="dk-tbl">
+                <thead>
+                    <tr>
+                        <th>Challan # / Date</th>
+                        <th>Party / Marka</th>
+                        <th>Items &amp; Total</th>
+                        <th>Order #</th>
+                        <th>Action (Edit / Del / Print)</th>
+                    </tr>
+                </thead>
+                <tbody id="ch-reg-tb"></tbody>
+            </table>
+            <div id="ch-reg-pg"></div>
+        `;
+
+        D.renderShell(headL, left, '[↑ ↓] Select · [Enter / Click] Edit & Delete kholein · [Esc] Menu');
+        drawRows();
+
+        const qEl = document.getElementById('ch-reg-q');
+        if (qEl) {
+            qEl.addEventListener('input', () => {
+                regSearch = qEl.value;
+                regPage = 1;
+                regNav = 0;
+                drawRows();
+            });
+            qEl.focus();
+        }
+
+        D.bindFormControls({
+            listNav: {
+                selector: '#ch-reg-tb .dk-nav-row',
+                searchId: 'ch-reg-q',
+                getIdx: () => regNav,
+                setIdx: (i) => { regNav = i; },
+                onHighlight: (i) => showRegSide(D.paginate(getFiltered(), regPage).rows[i]),
+                onEnter: (i) => {
+                    const row = D.paginate(getFiltered(), regPage).rows[i];
+                    if (row) D.chEditFromReg(row.id);
+                }
+            }
+        });
+    }
+
+    function renderFormScreen(focusId = 'ch-firm', rec = null) {
         const firms = D.get('dukan_firms');
         const parties = D.get('dukan_parties');
         const orders = D.get('dukan_orders');
+        const challans = D.get('dukan_challans');
         const designOpts = D.getSellableDesignOptions();
 
         const fObj = selFirmId ? (firms.find((x) => x.id === selFirmId) || {}) : {};
@@ -225,7 +409,8 @@
 
         const headL = `
             <h2>Challan &amp; Packing Slip (${rec ? `Edit #${D.esc(rec.no)}` : 'Manual Mode'})</h2>
-            ${rec ? `<button type="button" class="dk-tab active" onclick="DukanERP.openChallan('')">+ New Challan</button>` : ''}
+            <button type="button" class="dk-tab" onclick="DukanERP.chOpenChoice(1)">📋 Challan Register (${challans.length})</button>
+            <button type="button" class="dk-btn" onclick="DukanERP.chBackToChoice()">← Menu</button>
         `;
 
         const left = `
@@ -249,7 +434,7 @@
                 <button type="button" id="ch-add-btn" class="dk-btn-gold" style="padding:7px 12px;" onclick="DukanERP.chAddBatchItem()">+ Add</button>
             </div>
 
-            <div style="max-height:200px;overflow-y:auto;">
+            <div style="max-height:220px;overflow-y:auto;">
                 <table class="dk-tbl">
                     <thead><tr><th>#</th><th>Design</th><th>Finished Avail</th><th>Qty</th><th>Rate</th><th>Amount</th><th>Del</th></tr></thead>
                     <tbody id="ch-items-tb"></tbody>
@@ -273,28 +458,10 @@
                     <button type="button" class="dk-btn" id="dk-accept-no" onclick="document.getElementById('dk-accept-box').style.display='none'; DukanERP.focusField('ch-cur-name');">No (N)</button>
                 </div>
             </div>
-
-            <div class="dk-sec">Saved Challans Register (Click karke Edit / Delete / A5 Print karein)</div>
-            <div class="dk-row"><label>🔍 Search Challan :</label><input id="ch-list-q" value="${D.esc(listSearch)}" placeholder="Challan #, Party, Marka, Design ya Date..." autocomplete="off"></div>
-            <table class="dk-tbl">
-                <thead><tr><th>Challan # / Date</th><th>Party / Marka</th><th>Items &amp; Total</th><th>Order #</th><th>Action</th></tr></thead>
-                <tbody id="ch-saved-tb"></tbody>
-            </table>
-            <div id="ch-saved-pg"></div>
         `;
 
-        D.renderShell(headL, left, 'Manual Mode · Click karke koi bhi Saved Challan Edit, Delete (Stock Restore) ya A5 Print karein');
+        D.renderShell(headL, left, '[Enter] Agla Box · [Ctrl+Enter] Save · [Esc] Back');
         renderChBatchTable();
-        renderSavedChallans();
-
-        const lqEl = document.getElementById('ch-list-q');
-        if (lqEl) {
-            lqEl.addEventListener('input', () => {
-                listSearch = lqEl.value;
-                listPage = 1;
-                renderSavedChallans();
-            });
-        }
 
         D.bindFormControls({
             focusOrder: ['ch-firm', 'ch-party', 'ch-ord', 'ch-addr', 'ch-mob', 'ch-gst', 'ch-no', 'ch-date', 'ch-marka', 'ch-cur-name', 'ch-cur-qty', 'ch-cur-rate', 'ch-add-btn'],
@@ -353,8 +520,7 @@
                         const ql = q.toLowerCase();
                         const items = [];
                         if (ordObj) {
-                            const bakiList = getOrderPendingItems(ordObj);
-                            bakiList
+                            getOrderPendingItems(ordObj)
                                 .filter((x) => !ql || x.name.toLowerCase().includes(ql))
                                 .forEach((x) => {
                                     items.push({
@@ -404,6 +570,12 @@
         D.focusField(focusId);
     }
 
+    function render(focusId = 'ch-firm', rec = null) {
+        if (viewMode === 'choice') return renderChoiceScreen();
+        if (viewMode === 'register') return renderRegisterScreen();
+        return renderFormScreen(focusId, rec);
+    }
+
     D.askChallanSave = () => {
         const partyTxt = (document.getElementById('ch-party')?.value || '').trim();
         const chNo = (document.getElementById('ch-no')?.value || '').trim();
@@ -424,7 +596,6 @@
         const prevRec = editChallanId ? challans.find((c) => c.id === editChallanId) : null;
         const chId = editChallanId || `ch_${Date.now()}`;
 
-        // Edit/Update par purani Finished Stock deduction pehle restore karein
         if (editChallanId) {
             D.restoreFinishedStockByRef(editChallanId);
         }
@@ -475,7 +646,22 @@
         D.toast(editChallanId
             ? `✅ Challan #${rec.no} update hua (Stock adjust + Order status update)!`
             : `✅ Challan #${rec.no} save hua aur Finished Stock se minus ho gaya!`);
-        D.openChallan('');
+
+        editChallanId = '';
+        selFirmId = '';
+        selPartyId = '';
+        linkedOrderId = '';
+        oldOrderId = '';
+        chBatch = [];
+
+        if (fromRegister) {
+            fromRegister = false;
+            viewMode = 'register';
+            render();
+        } else {
+            viewMode = 'form';
+            render('ch-firm', null);
+        }
     };
 
     D.deleteChallan = (chId) => {
@@ -490,7 +676,21 @@
         if (target.orderId) D.recalcOrderStatus(target.orderId);
 
         D.toast(`🗑️ Challan #${target.no} delete hua aur Finished Stock restore ho gaya!`);
-        D.openChallan('');
+        editChallanId = '';
+        chBatch = [];
+
+        if (fromRegister || viewMode === 'register') {
+            fromRegister = false;
+            viewMode = 'register';
+            render();
+        } else {
+            viewMode = 'form';
+            selFirmId = '';
+            selPartyId = '';
+            linkedOrderId = '';
+            oldOrderId = '';
+            render('ch-firm', null);
+        }
     };
 
     function buildChallanA5HTML(data) {
