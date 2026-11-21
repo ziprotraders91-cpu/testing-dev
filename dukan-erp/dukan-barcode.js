@@ -1,34 +1,241 @@
 /* ============================================================================
-   NAMING & BARCODING: Finished Stock Link + Edit/Delete + TSC 2-Up Sticker Print
+   NAMING & BARCODING:
+   - 2-Button Menu: [Design & Barcode] & [Barcode Register]
+   - Clean Form (No Register Clutter)
+   - Dedicated Barcode Register with Universal Search + Edit / Delete / TSC Print
    File: dukan-erp/dukan-barcode.js
 ============================================================================ */
 (() => {
     const D = window.DukanERP;
+    let viewMode = 'choice'; // 'choice' | 'form' | 'register'
+    let choiceIdx = 0;
     let editId = '';
+    let fromRegister = false;
     let linkedSareeName = '';
     let linkedKarkhanaId = 'k_main';
-    let page = 1;
+    let regSearch = '';
+    let regPage = 1;
+    let regNav = 0;
 
     D.openBarcode = () => {
         D.screen = 'barcode';
-        D.onEsc = null;
         D.onCustomFieldEnter = null;
-        editId = ''; linkedSareeName = ''; linkedKarkhanaId = 'k_main'; page = 1;
-        render('bc-kar');
+        viewMode = 'choice';
+        choiceIdx = 0;
+        editId = '';
+        fromRegister = false;
+        linkedSareeName = '';
+        linkedKarkhanaId = 'k_main';
+        regSearch = '';
+        regPage = 1;
+        regNav = 0;
+        D.onEsc = () => {
+            if (viewMode === 'form') {
+                viewMode = fromRegister ? 'register' : 'choice';
+                editId = '';
+                fromRegister = false;
+                render();
+            } else if (viewMode === 'register') {
+                viewMode = 'choice';
+                render();
+            } else {
+                window.openDukanGateway();
+            }
+        };
+        render();
     };
 
-    window.dkBcPage = (p) => { page = p; render('bc-kar'); };
+    D.bcOpenChoice = (idx) => {
+        choiceIdx = idx;
+        if (idx === 0) {
+            viewMode = 'form';
+            editId = '';
+            fromRegister = false;
+            linkedSareeName = '';
+            linkedKarkhanaId = 'k_main';
+            render('bc-kar');
+        } else {
+            viewMode = 'register';
+            regPage = 1;
+            regNav = 0;
+            render();
+        }
+    };
 
-    function render(focusId = 'bc-kar') {
+    D.bcBackToChoice = () => {
+        viewMode = 'choice';
+        editId = '';
+        fromRegister = false;
+        render();
+    };
+
+    window.dkBcRegPage = (p) => {
+        regPage = p;
+        regNav = 0;
+        render();
+    };
+
+    function renderChoiceScreen() {
+        const designs = D.get('dukan_designs');
+        const finRows = D.getFinishedStockRows();
+
+        const left = `
+            <div style="background:#fdf6e2; border:1px solid #e5d5a7; border-radius:8px; padding:12px; margin-bottom:14px;">
+                <strong style="font-size:15px;">Naming &amp; Barcoding Menu</strong>
+                <div style="font-size:12px; color:#6b7280; margin-top:2px;">
+                    Naya Design/Sticker banane ya Saved Barcode Register dekhne ke liye option chunein
+                </div>
+            </div>
+            <button type="button" class="dk-choice-btn ${choiceIdx === 0 ? 'active' : ''}" onclick="DukanERP.bcOpenChoice(0)">
+                <span>🏷️ Design &amp; Barcode (New / Sticker Print)</span>
+                <span class="dk-cnt-pill">${finRows.length} Fin</span>
+            </button>
+            <button type="button" class="dk-choice-btn ${choiceIdx === 1 ? 'active' : ''}" onclick="DukanERP.bcOpenChoice(1)">
+                <span>📋 Barcode Register (All Saved List)</span>
+                <span class="dk-cnt-pill">${designs.length}</span>
+            </button>
+        `;
+
+        D.renderShell(`<h2>Naming &amp; Barcoding (TSC 2-Up Sticker)</h2>`, left, '[↑ ↓] Option Chunein · [Enter] Kholein · [Esc] Back');
+        D.renderSide('Barcoding Summary', `${designs.length} Saved`, [
+            { label: 'Design & Barcode', meta: 'Naya Naming / Print', active: choiceIdx === 0 },
+            { label: 'Barcode Register', meta: `${designs.length} Designs Saved`, active: choiceIdx === 1 },
+            { label: 'Finished Stock Items', meta: `${finRows.length} Active` }
+        ], false);
+
+        D.bindFormControls({
+            listNav: {
+                selector: '#dk-left .dk-choice-btn',
+                getIdx: () => choiceIdx,
+                setIdx: (i) => { choiceIdx = i; },
+                onEnter: (i) => D.bcOpenChoice(i)
+            }
+        });
+        setTimeout(() => document.querySelectorAll('#dk-left .dk-choice-btn')[choiceIdx]?.focus(), 20);
+    }
+
+    function renderRegisterScreen() {
+        const designs = D.get('dukan_designs');
+        const getFiltered = () => {
+            const q = regSearch.trim().toLowerCase();
+            if (!q) return designs;
+            return designs.filter((d) => {
+                const bachi = D.getDesignFinishedStock(d);
+                const blob = `${d.design} ${d.kariger} ${d.sareeName} ${d.specs} ${d.code} ${bachi}`.toLowerCase();
+                return blob.includes(q);
+            });
+        };
+
+        const showRegSide = (d) => {
+            if (!d) return D.renderSide('Barcode Register', '0', [], false);
+            const bachi = D.getDesignFinishedStock(d);
+            D.renderSide(d.design, d.code || '-', [
+                { label: `Code: ${d.code || '-'}`, meta: 'Barcode', active: true },
+                { label: `Specs: ${d.specs || '-'}`, meta: 'Top Line' },
+                { label: `Kariger: ${d.kariger || '-'}`, meta: d.sareeName || '' },
+                { label: `Finished Bachi: ${bachi} Pc`, meta: 'Live Stock' }
+            ], false);
+        };
+
+        const drawRows = () => {
+            const flt = getFiltered();
+            const pg = D.paginate(flt, regPage);
+            if (regNav >= pg.rows.length) regNav = 0;
+
+            const tb = document.getElementById('bc-reg-tb');
+            if (tb) {
+                tb.innerHTML = pg.rows.length ? pg.rows.map((d, i) => {
+                    const bachi = D.getDesignFinishedStock(d);
+                    return `
+                        <tr class="dk-nav-row ${i === regNav ? 'active' : ''}" onclick="DukanERP.bcEditFromReg('${d.id}')">
+                            <td><strong>${D.esc(d.design)}</strong><br><small>${D.esc(d.specs || '-')}</small></td>
+                            <td><b>${D.esc(d.code || '-')}</b></td>
+                            <td>${D.esc(d.kariger || '-')}<br><small>${D.esc(d.sareeName || '-')}</small></td>
+                            <td><strong style="color:#15803d;">${bachi} Pc</strong></td>
+                            <td style="white-space:nowrap;">
+                                <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.bcEditFromReg('${d.id}')">✏️ Edit</button>
+                                <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.bcQuickPrint('${d.id}')">🖨️ TSC</button>
+                                <button type="button" class="dk-btn-del" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.deleteDesignById('${d.id}')">🗑️ Del</button>
+                            </td>
+                        </tr>`;
+                }).join('') : `<tr><td colspan="5" style="text-align:center;color:#9ca3af;">Koi barcode / design nahi mila</td></tr>`;
+            }
+
+            const pgBox = document.getElementById('bc-reg-pg');
+            if (pgBox) pgBox.innerHTML = D.pagerHTML(pg, 'dkBcRegPage');
+            showRegSide(pg.rows[regNav]);
+        };
+
+        const headL = `
+            <h2>Barcode Register (${designs.length})</h2>
+            <button type="button" class="dk-tab" onclick="DukanERP.bcOpenChoice(0)">+ Design &amp; Barcode</button>
+            <button type="button" class="dk-btn" onclick="DukanERP.bcBackToChoice()">← Menu</button>
+        `;
+
+        const left = `
+            <div class="dk-row">
+                <label>🔍 Universal Search :</label>
+                <input id="bc-reg-q" value="${D.esc(regSearch)}" placeholder="Design, Barcode Code, Kariger, Saree ya Specs likhein..." autocomplete="off">
+            </div>
+            <table class="dk-tbl">
+                <thead>
+                    <tr>
+                        <th>Design / Specs</th>
+                        <th>Barcode Code</th>
+                        <th>Kariger / Saree</th>
+                        <th>Finished Bachi</th>
+                        <th>Action (Edit / Del / Print)</th>
+                    </tr>
+                </thead>
+                <tbody id="bc-reg-tb"></tbody>
+            </table>
+            <div id="bc-reg-pg"></div>
+        `;
+
+        D.renderShell(headL, left, '[↑ ↓] Select · [Enter / Click] Edit & Delete kholein · [Esc] Menu');
+        drawRows();
+
+        const qEl = document.getElementById('bc-reg-q');
+        if (qEl) {
+            qEl.addEventListener('input', () => {
+                regSearch = qEl.value;
+                regPage = 1;
+                regNav = 0;
+                drawRows();
+            });
+            qEl.focus();
+        }
+
+        D.bindFormControls({
+            listNav: {
+                selector: '#bc-reg-tb .dk-nav-row',
+                searchId: 'bc-reg-q',
+                getIdx: () => regNav,
+                setIdx: (i) => { regNav = i; },
+                onHighlight: (i) => showRegSide(D.paginate(getFiltered(), regPage).rows[i]),
+                onEnter: (i) => {
+                    const row = D.paginate(getFiltered(), regPage).rows[i];
+                    if (row) D.bcEditFromReg(row.id);
+                }
+            }
+        });
+    }
+
+    function renderFormScreen(focusId = 'bc-kar') {
         const designs = D.get('dukan_designs');
         const finRows = D.getFinishedStockRows();
         const karigers = D.getKarigers();
         const cur = editId ? designs.find((x) => x.id === editId) : null;
-        const pg = D.paginate(designs, page);
 
         const curKar = cur?.kariger || '';
         const curSaree = cur?.sareeName || linkedSareeName || '';
         const liveFin = cur ? D.getDesignFinishedStock(cur) : 0;
+
+        const headL = `
+            <h2>Design &amp; Barcode (${cur ? `Edit: ${D.esc(cur.design)}` : 'New Naming'})</h2>
+            <button type="button" class="dk-tab" onclick="DukanERP.bcOpenChoice(1)">📋 Barcode Register (${designs.length})</button>
+            <button type="button" class="dk-btn" onclick="DukanERP.bcBackToChoice()">← Menu</button>
+        `;
 
         const left = `
             <div class="dk-row"><label>Finished Kariger :</label><input id="bc-kar" value="${D.esc(curKar)}" placeholder="Finished Stock / Kariger chunein..." autocomplete="off"></div>
@@ -37,44 +244,36 @@
             <div class="dk-row"><label>Top Specs Line :</label><input id="bc-spec" value="${D.esc(cur?.specs || '3.60 CM EMB. JHALAR')}" oninput="DukanERP.updSticker()" autocomplete="off"></div>
             <div class="dk-row"><label>Barcode Code :</label><input id="bc-code" value="${D.esc(cur?.code || '')}" placeholder="Jaise: RASHMIKA-KT" oninput="DukanERP.updSticker()" autocomplete="off"></div>
             <div class="dk-row"><label>Finished Stock (Live) :</label><input id="bc-fin" value="${liveFin} Pcs (Saree Finished Tab)" readonly style="background:#f9fafb;color:#15803d;"></div>
-            <div class="dk-row"><label>Print Stickers (Qty) :</label><input type="number" id="bc-pqty" value="${liveFin > 0 ? liveFin : 10}"></div>
+            <div class="dk-row"><label>Sticker Qty &amp; Size :</label>
+                <div style="display:flex; gap:8px;">
+                    <input type="number" id="bc-pqty" value="${liveFin > 0 ? liveFin : 10}" style="width:90px;">
+                    <select id="bc-psize">
+                        <option value="tsc2up">TSC 2-Up Roll (50×25mm × 2)</option>
+                        <option value="tsc1up">TSC 1-Up Roll (50×25mm)</option>
+                        <option value="a4">A4 Sticker Sheet</option>
+                    </select>
+                </div>
+            </div>
 
-            <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap; background:#fdf6e2; border:1px solid #e5d5a7; padding:10px; border-radius:8px; margin:8px 0;">
+            <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap; background:#fdf6e2; border:1px solid #e5d5a7; padding:12px; border-radius:8px; margin:10px 0;">
                 <div class="dk-sticker" id="dk-sticker-prev"></div>
                 <div style="display:flex; flex-direction:column; gap:7px;">
                     <button type="button" class="dk-btn-gold" onclick="DukanERP.askBarcodeSave()">💾 ${cur ? 'Update' : 'Save'} Naming [Ctrl+Enter]</button>
-                    <button type="button" class="dk-btn" onclick="DukanERP.printStickers()">🏷️ Print TSC 2-Up Stickers</button>
-                    ${cur ? `<button type="button" class="dk-btn-del" onclick="DukanERP.deleteDesign('${cur.id}')">🗑️ Delete Design</button>` : ''}
+                    <button type="button" class="dk-btn" onclick="DukanERP.printStickers()">🖨️ Print TSC Stickers</button>
+                    ${cur ? `<button type="button" class="dk-btn-del" onclick="DukanERP.deleteDesign()">🗑️ Delete Design</button>` : ''}
                 </div>
             </div>
 
             <div class="dk-accept" id="dk-accept-box">
-                <strong>${cur ? 'Update' : 'Save'} Design &amp; Barcode Link?</strong>
+                <strong>${cur ? 'Update' : 'Save'} Design &amp; Barcode?</strong>
                 <div style="display:flex; gap:8px;">
                     <button type="button" class="dk-btn-gold" id="dk-accept-yes" onclick="DukanERP.saveDesign()">Yes (Y)</button>
                     <button type="button" class="dk-btn" id="dk-accept-no" onclick="document.getElementById('dk-accept-box').style.display='none'; DukanERP.focusField('bc-spec');">No (N)</button>
                 </div>
             </div>
-
-            <table class="dk-tbl">
-                <thead><tr><th>Kariger</th><th>Finished Saree</th><th>Design Name</th><th>Specs / Code</th><th>Finished Bachi</th></tr></thead>
-                <tbody>${pg.rows.length ? pg.rows.map((d) => {
-                    const bachi = D.getDesignFinishedStock(d);
-                    return `
-                    <tr class="dk-nav-row ${d.id === editId ? 'active' : ''}" onclick="DukanERP.loadDesign('${d.id}')">
-                        <td>${D.esc(d.kariger)}</td>
-                        <td>${D.esc(d.sareeName || '-')}</td>
-                        <td><strong>${D.esc(d.design)}</strong></td>
-                        <td><small>${D.esc(d.specs)}<br><b>${D.esc(d.code)}</b></small></td>
-                        <td><strong style="color:#15803d;">${bachi} Pc</strong></td>
-                    </tr>`;
-                }).join('') : `<tr><td colspan="5" style="text-align:center;color:#9ca3af;">Abhi koi design naming nahi hui</td></tr>`}
-                </tbody>
-            </table>
-            ${D.pagerHTML(pg, 'dkBcPage')}
         `;
 
-        D.renderShell(`<h2>Naming &amp; Barcoding (TSC 2-Up Roll)</h2>`, left, 'Click karke kisi bhi Design ko Edit/Delete/Print karein');
+        D.renderShell(headL, left, '[Enter] Agla Box · [Ctrl+Enter] Save · [Esc] Back');
         D.updSticker();
 
         D.bindFormControls({
@@ -166,7 +365,24 @@
         D.focusField(focusId);
     }
 
-    D.loadDesign = (id) => { editId = id; render('bc-spec'); };
+    function render(focusId = 'bc-kar') {
+        if (viewMode === 'choice') return renderChoiceScreen();
+        if (viewMode === 'register') return renderRegisterScreen();
+        return renderFormScreen(focusId);
+    }
+
+    D.bcEditFromReg = (id) => {
+        editId = id;
+        fromRegister = true;
+        viewMode = 'form';
+        render('bc-spec');
+    };
+
+    D.loadDesign = (id) => {
+        editId = id;
+        viewMode = 'form';
+        render('bc-spec');
+    };
 
     D.updSticker = () => {
         const sp = (document.getElementById('bc-spec')?.value || '3.60 CM EMB. JHALAR').toUpperCase();
@@ -175,10 +391,10 @@
         const box = document.getElementById('dk-sticker-prev');
         if (!box) return;
         box.innerHTML = `
-            <div style="font-size:10.5px; font-weight:800; line-height:1.15;">${D.esc(sp)}</div>
-            <div style="font-size:16px; font-weight:800; line-height:1.1; margin:1px 0 3px;">${D.esc(nm)}</div>
-            <div style="width:86%; margin:0 auto;">${D.barcodeSVG(cd, 28)}</div>
-            <div style="font-size:11.5px; font-weight:800; line-height:1.15; margin-top:2px;">${D.esc(cd)}</div>
+            <div style="font-size:10.5px; font-weight:800; color:#000; line-height:1.15;">${D.esc(sp)}</div>
+            <div style="font-size:16px; font-weight:800; color:#000; line-height:1.15; margin:1px 0;">${D.esc(nm)}</div>
+            <div style="padding:0 10px;">${D.barcodeSVG(cd, 28)}</div>
+            <div style="font-size:11.5px; font-weight:800; color:#000; line-height:1.15;">${D.esc(cd)}</div>
         `;
     };
 
@@ -218,51 +434,91 @@
         }
         D.set('dukan_designs', list);
         D.toast(`✅ [${design}] save ho gaya!`);
-        editId = ''; linkedSareeName = '';
-        render('bc-kar');
-    };
-
-    D.deleteDesign = (id) => {
-        if (!confirm('Kya aap is Design / Barcode ko delete karna chahte hain?')) return;
-        D.set('dukan_designs', D.get('dukan_designs').filter((x) => x.id !== id));
-        D.toast('🗑️ Design delete ho gaya!');
         editId = '';
+        linkedSareeName = '';
+        if (fromRegister) {
+            fromRegister = false;
+            viewMode = 'register';
+        }
         render('bc-kar');
     };
 
-    // Exact TSC 2-Up (50mm x 25mm x 2) Thermal Barcode Roll Print
-    D.printStickers = () => {
-        const count = Math.max(1, parseInt(document.getElementById('bc-pqty')?.value || 1, 10));
-        const sp = (document.getElementById('bc-spec')?.value || '3.60 CM EMB. JHALAR').toUpperCase();
-        const nm = (document.getElementById('bc-des')?.value || 'RASHMIKA').toUpperCase();
-        const cd = (document.getElementById('bc-code')?.value || (nm ? `${nm}-KT` : 'RASHMIKA-KT')).toUpperCase();
+    D.deleteDesign = () => {
+        if (!editId) return;
+        D.deleteDesignById(editId);
+    };
+
+    D.deleteDesignById = (id) => {
+        const list = D.get('dukan_designs');
+        const target = list.find((x) => x.id === id);
+        if (!target) return;
+        if (!confirm(`Kya aap [${target.design}] Design & Barcode delete karna chahte hain?`)) return;
+        D.set('dukan_designs', list.filter((x) => x.id !== id));
+        D.toast(`🗑️ [${target.design}] delete ho gaya!`);
+        editId = '';
+        if (fromRegister || viewMode === 'register') {
+            fromRegister = false;
+            viewMode = 'register';
+        }
+        render('bc-kar');
+    };
+
+    function printStickerJob(sp, nm, cd, count, mode) {
+        const svg = D.barcodeSVG(cd, 26);
         const cellHTML = `
             <div class="lbl">
-                <div class="t1">${D.esc(sp)}</div>
-                <div class="t2">${D.esc(nm)}</div>
-                <div class="bc">${D.barcodeSVG(cd, 26)}</div>
-                <div class="t3">${D.esc(cd)}</div>
-            </div>
-        `;
-        let rowsHTML = '';
-        for (let i = 0; i < count; i += 2) {
-            rowsHTML += `<div class="row">${cellHTML}${i + 1 < count ? cellHTML : '<div class="lbl"></div>'}</div>`;
+                <div class="sp">${D.esc(sp)}</div>
+                <div class="nm">${D.esc(nm)}</div>
+                <div class="bc">${svg}</div>
+                <div class="cd">${D.esc(cd)}</div>
+            </div>`;
+
+        let bodyHTML = '';
+        let pageCSS = '';
+
+        if (mode === 'tsc2up') {
+            pageCSS = `@page{size:104mm 25mm;margin:0} body{margin:0;padding:0} .row2{width:104mm;height:25mm;display:flex;justify-content:space-between;align-items:center;page-break-after:always;overflow:hidden} .lbl{width:50mm;height:24mm;padding:1mm 2mm;box-sizing:border-box;text-align:center;display:flex;flex-direction:column;justify-content:center;align-items:center}`;
+            for (let i = 0; i < count; i += 2) {
+                bodyHTML += `<div class="row2">${cellHTML}${i + 1 < count ? cellHTML : '<div class="lbl"></div>'}</div>`;
+            }
+        } else if (mode === 'tsc1up') {
+            pageCSS = `@page{size:50mm 25mm;margin:0} body{margin:0;padding:0} .lbl{width:50mm;height:25mm;padding:1mm 2mm;box-sizing:border-box;text-align:center;display:flex;flex-direction:column;justify-content:center;align-items:center;page-break-after:always;overflow:hidden}`;
+            bodyHTML = Array(count).fill(cellHTML).join('');
+        } else {
+            pageCSS = `@page{size:A4;margin:8mm} body{margin:0;display:flex;flex-wrap:wrap;gap:4mm} .lbl{width:50mm;height:25mm;border:1px dashed #ccc;padding:1mm 2mm;box-sizing:border-box;text-align:center;display:flex;flex-direction:column;justify-content:center;align-items:center;page-break-inside:avoid}`;
+            bodyHTML = Array(count).fill(cellHTML).join('');
         }
-        const w = window.open('', '_blank', 'width=500,height=400');
+
+        const w = window.open('', '_blank', 'width=850,height=600');
         w.document.write(`<html><head><style>
-            @page { size: 102mm 25mm; margin: 0; }
-            * { box-sizing: border-box; }
-            body { margin: 0; padding: 0; font-family: Arial, Helvetica, sans-serif; color: #000; }
-            .row { width: 102mm; height: 25mm; display: flex; justify-content: space-between; align-items: center; page-break-after: always; padding: 0 1mm; }
-            .row:last-child { page-break-after: auto; }
-            .lbl { width: 49mm; height: 23mm; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; overflow: hidden; }
-            .t1 { font-size: 7.5pt; font-weight: 700; line-height: 1.1; white-space: nowrap; }
-            .t2 { font-size: 11.5pt; font-weight: 800; line-height: 1.1; margin: 0.5mm 0 1mm; white-space: nowrap; }
-            .bc { width: 38mm; height: 7.5mm; display: flex; align-items: center; }
-            .bc svg { width: 100%; height: 100%; }
-            .t3 { font-size: 8.5pt; font-weight: 700; line-height: 1.1; margin-top: 0.5mm; white-space: nowrap; }
-        </style></head><body>${rowsHTML}</body></html>`);
+            ${pageCSS}
+            *{font-family:Arial,Helvetica,sans-serif;color:#000}
+            .sp{font-size:8.5pt;font-weight:700;line-height:1.1;white-space:nowrap;overflow:hidden;max-width:46mm}
+            .nm{font-size:12.5pt;font-weight:800;line-height:1.1;margin:0.5mm 0}
+            .bc{width:38mm;height:7mm;display:flex;align-items:center}
+            .bc svg{width:100%;height:100%}
+            .cd{font-size:9.5pt;font-weight:700;line-height:1.1;margin-top:0.5mm}
+        </style></head><body>${bodyHTML}</body></html>`);
         w.document.close();
-        setTimeout(() => { w.focus(); w.print(); }, 200);
+        setTimeout(() => w.print(), 150);
+    }
+
+    D.printStickers = () => {
+        const count = Math.max(1, parseInt(document.getElementById('bc-pqty')?.value || 1, 10));
+        const mode = document.getElementById('bc-psize')?.value || 'tsc2up';
+        const sp = (document.getElementById('bc-spec')?.value || '3.60 CM EMB. JHALAR').toUpperCase();
+        const nm = (document.getElementById('bc-des')?.value || 'RASHMIKA').toUpperCase();
+        const cd = (document.getElementById('bc-code')?.value || `${nm}-KT`).toUpperCase();
+        printStickerJob(sp, nm, cd, count, mode);
+    };
+
+    D.bcQuickPrint = (id) => {
+        const d = D.get('dukan_designs').find((x) => x.id === id);
+        if (!d) return;
+        const bachi = D.getDesignFinishedStock(d);
+        const qtyStr = prompt(`[${d.design}] ke kitne TSC 2-Up stickers print karne hain?`, String(bachi > 0 ? bachi : 10));
+        if (!qtyStr) return;
+        const count = Math.max(1, parseInt(qtyStr, 10) || 1);
+        printStickerJob(d.specs || '3.60 CM EMB. JHALAR', d.design, d.code || `${d.design}-KT`, count, 'tsc2up');
     };
 })();
