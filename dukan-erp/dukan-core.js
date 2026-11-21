@@ -1,5 +1,5 @@
 /* ============================================================================
-   SIMPLICITY ERP (THE TALLY BRIDGE) - DUKAN CORE ENGINE (100% KEYBOARD)
+   SIMPLICITY ERP (THE TALLY BRIDGE) - DUKAN CORE ENGINE (CAPTURE KEYBOARD)
    File: dukan-erp/dukan-core.js
 ============================================================================ */
 (() => {
@@ -12,11 +12,12 @@
         focusOrder: [],
         sideBindings: {},
         sideItems: [],
-        sideIdx: 0,
+        sideIdx: -1,
         activeSideId: null,
         listNav: null,
         onFinishForm: null,
-        onEsc: null
+        onEsc: null,
+        lastToast: ''
     };
 
     D.esc = (s) => String(s ?? '').replace(/[&<>"']/g, (m) => ({
@@ -55,6 +56,12 @@
     D.getKarigers = () => {
         if (typeof window.sanitizeKarigerList === 'function') return window.sanitizeKarigerList();
         return D.get('kariger_list').filter((k) => k && k.name);
+    };
+
+    D.toast = (msg) => {
+        D.lastToast = msg;
+        const el = document.getElementById('dk-toast-msg');
+        if (el) el.textContent = msg;
     };
 
     D.paginate = (arr, page = 1, size = D.pageSize) => {
@@ -141,26 +148,26 @@
             .dk-gw-row.active small { color:#fef9ea; }
             .dk-gw-key { text-decoration:underline; font-weight:800; color:#b45309; }
             .dk-gw-row.active .dk-gw-key { color:#fff; }
-            .dk-card { width:100%; max-width:1080px; margin:6px auto; background:rgba(255,255,255,0.97); border:1px solid #e5e7eb; border-radius:10px; box-shadow:0 12px 32px rgba(0,0,0,0.08); overflow:hidden; }
-            .dk-head { padding:12px 18px; border-bottom:1px solid #eceff3; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; }
+            .dk-card { width:100%; max-width:1160px; margin:6px auto; background:rgba(255,255,255,0.97); border:1px solid #e5e7eb; border-radius:10px; box-shadow:0 12px 32px rgba(0,0,0,0.08); overflow:hidden; }
+            .dk-head { padding:11px 18px; border-bottom:1px solid #eceff3; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; }
             .dk-head-l { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-            .dk-head h2 { margin:0; font-size:16.5px; font-weight:800; color:#1f2937; }
+            .dk-head h2 { margin:0; font-size:16px; font-weight:800; color:#1f2937; }
             .dk-tab { border:1px solid #d1d5db; background:#fff; color:#374151; padding:5px 12px; border-radius:999px; font-size:11.5px; font-weight:700; cursor:pointer; }
             .dk-tab.active { background:#eab01e; border-color:#d99b07; color:#fff; }
             .dk-btn { border:1px solid #d1d5db; background:#f9fafb; color:#374151; padding:6px 12px; border-radius:6px; font-size:12px; font-weight:700; cursor:pointer; }
             .dk-btn:hover:not(:disabled) { border-color:#d99b07; background:#fef9ea; }
             .dk-btn:disabled { opacity:0.45; cursor:not-allowed; }
             .dk-btn-gold { background:#eab01e; border:1px solid #d99b07; color:#fff; padding:7px 16px; border-radius:6px; font-size:12.5px; font-weight:800; cursor:pointer; }
-            .dk-body { display:grid; grid-template-columns:1.5fr 0.9fr; gap:18px; padding:16px 20px; align-items:start; }
+            .dk-body { display:grid; grid-template-columns:1.6fr 0.85fr; gap:16px; padding:14px 18px; align-items:start; }
             .dk-row { display:grid; grid-template-columns:150px 1fr; align-items:center; gap:10px; margin-bottom:8px; }
             .dk-row label { font-size:12.5px; font-weight:700; color:#374151; }
             .dk-row input, .dk-row select { width:100%; padding:7px 10px; border:1px solid #d1d5db; border-radius:5px; font-size:12.5px; font-weight:600; outline:none; background:#fff; }
             .dk-row input:focus, .dk-row select:focus { border-color:#eab01e; background:#fffdf5; box-shadow:0 0 0 2px rgba(234,176,30,0.22); }
-            .dk-sec { font-size:10.5px; font-weight:800; color:#92400e; text-transform:uppercase; letter-spacing:0.4px; margin:11px 0 8px; padding-top:8px; border-top:1px dashed #e5e7eb; }
+            .dk-sec { font-size:10.5px; font-weight:800; color:#92400e; text-transform:uppercase; letter-spacing:0.4px; margin:10px 0 7px; padding-top:8px; border-top:1px dashed #e5e7eb; }
             .dk-side-box { background:#fff; border:1px solid #e5d5a7; border-radius:6px; overflow:hidden; position:sticky; top:10px; }
             .dk-side-head { padding:9px 14px; font-size:12.5px; font-weight:800; border-bottom:1px solid #e5d5a7; background:#fdf6e2; display:flex; justify-content:space-between; }
             .dk-side-head small { color:#92400e; font-weight:700; }
-            .dk-side-list { max-height:400px; overflow-y:auto; }
+            .dk-side-list { max-height:420px; overflow-y:auto; }
             .dk-side-opt { padding:8px 13px; border-bottom:1px solid #f3f4f6; cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12.5px; font-weight:600; }
             .dk-side-opt:hover { background:#fef9ea; }
             .dk-side-opt.selected { background:#eab01e; color:#fff; font-weight:700; }
@@ -168,8 +175,8 @@
             .dk-side-opt.selected small { color:#fff; }
             .dk-tbl { width:100%; border-collapse:collapse; margin-top:6px; border:1px solid #e5e7eb; font-size:12px; background:#fff; }
             .dk-tbl th { background:#fdf6e2; padding:7px 8px; text-align:left; font-weight:800; border-bottom:1px solid #e5d5a7; }
-            .dk-tbl td { padding:6px 8px; border-bottom:1px solid #f3f4f6; }
-            .dk-tbl input { width:100%; padding:5px 7px; border:1px solid #d1d5db; border-radius:4px; font-size:12px; font-weight:600; outline:none; }
+            .dk-tbl td { padding:5px 7px; border-bottom:1px solid #f3f4f6; }
+            .dk-tbl input { width:100%; padding:5px 6px; border:1px solid #d1d5db; border-radius:4px; font-size:12px; font-weight:600; outline:none; }
             .dk-tbl input:focus { border-color:#eab01e; background:#fffdf5; }
             .dk-nav-row { cursor:pointer; }
             .dk-nav-row:hover { background:#fef9ea; }
@@ -178,13 +185,41 @@
             .dk-choice-btn { width:100%; border:1.5px solid #e5d5a7; background:#fff; border-radius:8px; padding:13px 16px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; margin-bottom:10px; font-size:14px; font-weight:700; color:#1f2937; text-align:left; }
             .dk-choice-btn:hover { background:#fef9ea; }
             .dk-choice-btn.active { background:#eab01e; border-color:#d99b07; color:#fff; }
-            .dk-cnt-pill { background:#fdf6e2; border:1px solid #d9b86c; color:#92400e; padding:3px 11px; border-radius:999px; font-size:12px; font-weight:800; }
+            .dk-cnt-pill { background:#fdf6e2; border:1px solid #d9b86c; color:#92400e; padding:3px 12px; border-radius:999px; font-size:12px; font-weight:800; }
             .dk-choice-btn.active .dk-cnt-pill { background:#fff; color:#1f2937; }
             .dk-accept { display:none; background:#fdf6e2; border:1.5px solid #d9b86c; border-radius:8px; padding:10px 14px; margin-top:10px; justify-content:space-between; align-items:center; gap:10px; }
             .dk-pager { display:flex; justify-content:space-between; align-items:center; margin-top:10px; font-size:11.5px; font-weight:700; color:#6b7280; flex-wrap:wrap; gap:8px; }
-            .dk-foot { padding:9px 18px; border-top:1px solid #eceff3; background:#fafafa; display:flex; justify-content:space-between; font-size:11px; color:#6b7280; font-weight:600; }
+            .dk-foot { padding:9px 18px; border-top:1px solid #eceff3; background:#fafafa; display:flex; justify-content:space-between; font-size:11.5px; color:#92400e; font-weight:700; }
             .dk-sticker { width:240px; border:1.5px dashed #d9b86c; border-radius:8px; padding:10px 12px; background:#fff; text-align:center; }
-            @media (max-width:860px) { .dk-body { grid-template-columns:1fr; } .dk-row { grid-template-columns:1fr; gap:4px; } }
+
+            /* PHOTO ORDER BOOK LAYOUT */
+            .dk-ord-book { border:2px solid #991b1b; border-radius:6px; background:#fff; overflow:hidden; }
+            .dk-ord-hdr { background:#fff5f5; border-bottom:2px solid #991b1b; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+            .dk-ord-grid { display:grid; grid-template-columns:1fr 245px; }
+            .dk-ord-main { border-right:1.5px solid #991b1b; display:flex; flex-direction:column; }
+            .dk-ord-ms { padding:8px 10px; border-bottom:1.5px solid #991b1b; display:flex; align-items:center; gap:8px; background:#fffafa; }
+            .dk-ord-ms input { flex:1; border:none; border-bottom:1px dashed #991b1b; font-size:13.5px; font-weight:800; outline:none; background:transparent; padding:3px 4px; }
+            .dk-ord-ms input:focus { background:#fffdf5; border-bottom-color:#eab01e; }
+            .dk-ord-tbl { width:100%; border-collapse:collapse; font-size:12px; }
+            .dk-ord-tbl th { background:#fef2f2; color:#991b1b; border-bottom:1.5px solid #991b1b; border-right:1px solid #fca5a5; padding:6px; font-weight:800; }
+            .dk-ord-tbl td { border-bottom:1px solid #fecaca; border-right:1px solid #fecaca; padding:4px; }
+            .dk-ord-tbl input { width:100%; border:none; padding:4px 5px; font-size:12px; font-weight:600; outline:none; background:transparent; }
+            .dk-ord-tbl input:focus { background:#fffbeb; }
+            .dk-ord-side { background:#fffdfd; display:flex; flex-direction:column; }
+            .dk-ord-box { border-bottom:1px solid #fca5a5; padding:6px 8px; }
+            .dk-ord-box label { display:block; font-size:10.5px; font-weight:800; color:#991b1b; margin-bottom:2px; }
+            .dk-ord-box input, .dk-ord-box select { width:100%; border:1px solid #e5e7eb; border-radius:3px; padding:4px 6px; font-size:12px; font-weight:700; outline:none; }
+            .dk-ord-box input:focus, .dk-ord-box select:focus { border-color:#eab01e; background:#fffbeb; }
+            .dk-ord-2 { display:grid; grid-template-columns:1fr 1fr; border-bottom:1px solid #fca5a5; }
+            .dk-ord-2 > div { padding:6px 8px; }
+            .dk-ord-2 > div:first-child { border-right:1px solid #fca5a5; }
+            .dk-ord-2 label { display:block; font-size:10.5px; font-weight:800; color:#991b1b; margin-bottom:2px; }
+            .dk-ord-2 input { width:100%; border:1px solid #e5e7eb; border-radius:3px; padding:4px 6px; font-size:12px; font-weight:700; outline:none; }
+            .dk-pack-3 { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; text-align:center; font-size:11px; font-weight:700; }
+            .dk-pack-opt { border:1px solid #fca5a5; border-radius:3px; padding:4px 2px; cursor:pointer; background:#fff; }
+            .dk-pack-opt.active { background:#991b1b; color:#fff; border-color:#991b1b; }
+
+            @media (max-width:900px) { .dk-body, .dk-ord-grid { grid-template-columns:1fr; } .dk-ord-main { border-right:none; border-bottom:1.5px solid #991b1b; } .dk-row { grid-template-columns:1fr; gap:4px; } }
         `;
         document.head.appendChild(st);
     };
@@ -202,7 +237,7 @@
         tEl.textContent = title;
         if (sEl) sEl.textContent = sub;
         if (!D.sideItems.length) {
-            lEl.innerHTML = `<div style="padding:16px; text-align:center; color:#9ca3af; font-size:12px;">Koi record nahi — naya type karke Enter dabaye</div>`;
+            lEl.innerHTML = `<div style="padding:16px; text-align:center; color:#9ca3af; font-size:12px;">Koi list item nahi — type karke Enter dabaye</div>`;
             return;
         }
         lEl.innerHTML = D.sideItems.map((it, i) => `
@@ -253,8 +288,10 @@
     };
 
     D.focusField = (id) => {
-        const el = document.getElementById(id);
-        if (el) { el.focus(); if (el.select) el.select(); }
+        setTimeout(() => {
+            const el = document.getElementById(id);
+            if (el) { el.focus(); if (el.select) el.select(); }
+        }, 15);
     };
 
     D.moveFocus = (curId, dir = 1) => {
@@ -274,12 +311,14 @@
         box.style.display = 'flex';
         D._acceptYes = yesFn;
         D._acceptNo = noFn || (() => { box.style.display = 'none'; });
-        document.getElementById('dk-accept-yes')?.focus();
+        setTimeout(() => document.getElementById('dk-accept-yes')?.focus(), 15);
     };
 
-    D.renderShell = (headLeftHTML, leftBodyHTML, footLeft = '[Enter / ↓] Agla Box · [↑ ↓] Side List · [Ctrl+Enter] Save · [Esc] Back') => {
+    D.renderShell = (headLeftHTML, leftBodyHTML, footLeft = '[Enter] Agla Box · [Shift+Enter] Pichhla Box · [Ctrl+Enter] Save · [Esc] Back') => {
         const sec = document.getElementById('dukan-section');
         if (!sec) return;
+        const msg = D.lastToast || footLeft;
+        D.lastToast = '';
         sec.innerHTML = `
             <div class="dk-card">
                 <div class="dk-head">
@@ -294,7 +333,7 @@
                     </div>
                 </div>
                 <div class="dk-foot">
-                    <span>${D.esc(footLeft)}</span>
+                    <span id="dk-toast-msg">${D.esc(msg)}</span>
                     <span>Simplicity · The Tally Bridge</span>
                 </div>
             </div>
@@ -316,7 +355,7 @@
         { k: 'c', label: '<span class="dk-gw-key">C</span>reate (Firm / Party / Alter)', meta: 'Master Setup', fn: () => D.openCreate() },
         { k: 'p', label: '<span class="dk-gw-key">P</span>arty Register', meta: 'Pending / Completed', fn: () => D.openPartyRegister() },
         { k: 'n', label: '<span class="dk-gw-key">N</span>aming &amp; Barcoding', meta: 'Kariger → Sticker', fn: () => D.openBarcode() },
-        { k: 'o', label: '<span class="dk-gw-key">O</span>rder Form', meta: 'Batch Entry', fn: () => D.openOrderForm() },
+        { k: 'o', label: '<span class="dk-gw-key">O</span>rder Form', meta: 'Book Format', fn: () => D.openOrderForm() },
         { k: 'h', label: 'C<span class="dk-gw-key">h</span>allan &amp; Packing Slip', meta: 'Stock Minus + Slip', fn: () => D.openChallan() },
         { k: 'd', label: 'Pen<span class="dk-gw-key">d</span>ing Order (All)', meta: 'All Parties', fn: () => D.openAllOrders('Pending') },
         { k: 'l', label: 'Comp<span class="dk-gw-key">l</span>ete Order (All)', meta: 'All Parties', fn: () => D.openAllOrders('Complete') }
@@ -369,7 +408,7 @@
 
     D.runGw = (i) => { D.gwIdx = i; if (GW_ITEMS[i]) GW_ITEMS[i].fn(); };
 
-    /* -------------------- GLOBAL TALLY KEYBOARD ENGINE -------------------- */
+    /* CAPTURE-PHASE KEYBOARD HANDLER (Runs BEFORE tally-master / other scripts) */
     document.addEventListener('keydown', (e) => {
         const sec = document.getElementById('dukan-section');
         if (!sec || sec.style.display === 'none') return;
@@ -377,8 +416,8 @@
         // 1. Gateway of Dukan Management
         if (D.screen === 'gateway') {
             if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); window.backToDashboard(); return; }
-            if (e.key === 'ArrowDown') { e.preventDefault(); D.gwIdx = (D.gwIdx + 1) % GW_ITEMS.length; window.openDukanGateway(); return; }
-            if (e.key === 'ArrowUp') { e.preventDefault(); D.gwIdx = (D.gwIdx - 1 + GW_ITEMS.length) % GW_ITEMS.length; window.openDukanGateway(); return; }
+            if (e.key === 'ArrowDown') { e.preventDefault(); e.stopImmediatePropagation(); D.gwIdx = (D.gwIdx + 1) % GW_ITEMS.length; window.openDukanGateway(); return; }
+            if (e.key === 'ArrowUp') { e.preventDefault(); e.stopImmediatePropagation(); D.gwIdx = (D.gwIdx - 1 + GW_ITEMS.length) % GW_ITEMS.length; window.openDukanGateway(); return; }
             if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); D.runGw(D.gwIdx); return; }
             if (!e.ctrlKey && !e.altKey && e.key.length === 1) {
                 const idx = GW_ITEMS.findIndex((x) => x.k === e.key.toLowerCase());
@@ -387,14 +426,14 @@
             return;
         }
 
-        // 2. Escape Back
+        // 2. Escape
         if (e.key === 'Escape') {
             e.preventDefault(); e.stopImmediatePropagation();
             D.handleEsc();
             return;
         }
 
-        // 3. Accept? Box (Y / N / Enter)
+        // 3. Accept? Box
         const acc = document.getElementById('dk-accept-box');
         if (acc && acc.style.display === 'flex') {
             if (e.key.toLowerCase() === 'y' || (e.key === 'Enter' && document.activeElement?.id !== 'dk-accept-no')) {
@@ -409,7 +448,7 @@
             }
         }
 
-        // 4. Ctrl+Enter Save Shortcut
+        // 4. Ctrl+Enter Save
         if (e.ctrlKey && (e.key === 'Enter' || e.key.toLowerCase() === 'a')) {
             if (typeof D.onFinishForm === 'function') {
                 e.preventDefault(); e.stopImmediatePropagation();
@@ -421,12 +460,25 @@
         const activeEl = document.activeElement;
         const activeId = activeEl?.id || '';
 
-        // 5. Side-Linked Input (Type + ↑ ↓ + Enter)
-        if (D.activeSideId && activeId === D.activeSideId && D.sideBindings[activeId]) {
+        // Never hijack Enter on explicit buttons (except choice buttons)
+        if (activeEl?.tagName === 'BUTTON' && !activeEl.classList.contains('dk-choice-btn')) {
+            return;
+        }
+
+        // 5. Shift+Enter ALWAYS goes to previous box (Universal)
+        if (e.key === 'Enter' && e.shiftKey && activeId && D.focusOrder.includes(activeId)) {
+            e.preventDefault(); e.stopImmediatePropagation();
+            D.moveFocus(activeId, -1);
+            return;
+        }
+
+        // 6. Side-Linked Input
+        if (activeId && D.sideBindings[activeId]) {
+            D.activeSideId = activeId;
             const b = D.sideBindings[activeId];
             if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                 if (!D.sideItems.length) return;
-                e.preventDefault();
+                e.preventDefault(); e.stopImmediatePropagation();
                 D.sideIdx = e.key === 'ArrowDown'
                     ? (D.sideIdx + 1) % D.sideItems.length
                     : (D.sideIdx <= 0 ? D.sideItems.length - 1 : D.sideIdx - 1);
@@ -436,24 +488,29 @@
                 return;
             }
             if (e.key === 'Enter') {
-                e.preventDefault();
-                if (e.shiftKey) { D.moveFocus(activeId, -1); return; }
-                if (typeof b.onCustomEnter === 'function' && b.onCustomEnter(activeEl.value)) return;
+                e.preventDefault(); e.stopImmediatePropagation();
+                if (typeof b.onEmptyEnter === 'function' && !String(activeEl.value || '').trim()) {
+                    b.onEmptyEnter();
+                    return;
+                }
                 if (D.sideIdx >= 0 && D.sideItems[D.sideIdx]) {
                     D.pickSide(D.sideIdx);
-                } else if (b.allowCustom) {
+                } else {
                     D.moveFocus(activeId, 1);
                 }
                 return;
             }
         }
 
-        // 6. List Navigation (Party List / Choice Buttons / Order Reports)
+        // 7. List Navigation (Only when NOT inside a form input except searchId)
         if (D.listNav) {
             const rows = Array.from(document.querySelectorAll(D.listNav.selector));
-            if (rows.length && (!activeId || activeId === D.listNav.searchId || activeEl?.tagName === 'BODY' || activeEl?.classList.contains('dk-choice-btn'))) {
+            const inSearch = Boolean(D.listNav.searchId && activeId === D.listNav.searchId);
+            const onChoice = Boolean(activeEl?.classList.contains('dk-choice-btn'));
+            const onBody = (!activeEl || activeEl === document.body);
+            if (rows.length && (inSearch || onChoice || onBody)) {
                 if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-                    e.preventDefault();
+                    e.preventDefault(); e.stopImmediatePropagation();
                     let cur = D.listNav.getIdx();
                     cur = e.key === 'ArrowDown' ? (cur + 1) % rows.length : (cur - 1 + rows.length) % rows.length;
                     D.listNav.setIdx(cur);
@@ -470,18 +527,18 @@
             }
         }
 
-        // 7. Standard Input Enter / Arrow Navigation
-        const fIdx = D.focusOrder.indexOf(activeId);
-        if (fIdx >= 0) {
+        // 8. Standard Form Box Navigation
+        if (activeId && D.focusOrder.includes(activeId)) {
             if (e.key === 'Enter') {
-                e.preventDefault();
-                D.moveFocus(activeId, e.shiftKey ? -1 : 1);
+                e.preventDefault(); e.stopImmediatePropagation();
+                if (typeof D.onCustomFieldEnter === 'function' && D.onCustomFieldEnter(activeId)) return;
+                D.moveFocus(activeId, 1);
                 return;
             }
             if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && activeEl.tagName !== 'SELECT') {
-                e.preventDefault();
+                e.preventDefault(); e.stopImmediatePropagation();
                 D.moveFocus(activeId, e.key === 'ArrowDown' ? 1 : -1);
             }
         }
-    });
+    }, true);
 })();
