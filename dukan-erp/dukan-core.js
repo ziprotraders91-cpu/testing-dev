@@ -34,6 +34,12 @@
         ? window.getTodayDate()
         : new Date().toISOString().split('T')[0];
 
+    D.fmtDate = (iso) => {
+        const s = String(iso || '').trim();
+        const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        return m ? `${m[3]}-${m[2]}-${m[1]}` : s;
+    };
+
     D.get = (key) => {
         try {
             if (typeof window.getStore === 'function') {
@@ -65,7 +71,7 @@
         if (el) el.textContent = msg;
     };
 
-    // Order Item Progress: Kitna Order, Kitna Gaya (Challan), Kitna Baki
+    // Order Progress + Kis Marka, Kis Date me, Kitni Pcs Gayi + Universal Search Index
     D.getOrderProgress = (ord) => {
         const challans = D.get('dukan_challans').filter((c) => c.orderId === ord.id);
         const sentMap = {};
@@ -83,7 +89,22 @@
             return { ...it, ordered, sent, baki };
         });
         const allDone = items.length > 0 && items.every((x) => x.baki <= 0);
-        return { items, allDone };
+
+        const searchParts = [
+            ord.no, ord.date, D.fmtDate(ord.date), ord.marka, ord.partyName, ord.agent, ord.transport,
+            ...items.map((x) => x.name),
+            ...challans.flatMap((c) => [
+                c.no, c.date, D.fmtDate(c.date), c.marka,
+                ...(c.items || []).map((ci) => `${ci.name} ${ci.qty}`)
+            ])
+        ];
+
+        return {
+            items,
+            allDone,
+            challans,
+            searchText: searchParts.filter(Boolean).join(' ').toLowerCase()
+        };
     };
 
     D.paginate = (arr, page = 1, size = D.pageSize) => {
@@ -193,17 +214,17 @@
             .dk-side-opt { padding:8px 13px; border-bottom:1px solid #f3f4f6; cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12.5px; font-weight:600; }
             .dk-side-opt:hover { background:#fef9ea; }
             .dk-side-opt.selected { background:#eab01e; color:#fff; font-weight:700; }
-            .dk-side-opt small { font-size:11px; color:#6b7280; font-weight:600; }
+            .dk-side-opt small { font-size:11px; color:#6b7280; font-weight:600; text-align:right; }
             .dk-side-opt.selected small { color:#fff; }
             .dk-tbl { width:100%; border-collapse:collapse; margin-top:6px; border:1px solid #e5e7eb; font-size:12px; background:#fff; }
             .dk-tbl th { background:#fdf6e2; padding:7px 8px; text-align:left; font-weight:800; border-bottom:1px solid #e5d5a7; }
-            .dk-tbl td { padding:5px 7px; border-bottom:1px solid #f3f4f6; }
+            .dk-tbl td { padding:5px 7px; border-bottom:1px solid #f3f4f6; vertical-align:top; }
             .dk-tbl input { width:100%; padding:5px 6px; border:1px solid #d1d5db; border-radius:4px; font-size:12px; font-weight:600; outline:none; }
             .dk-tbl input:focus { border-color:#eab01e; background:#fffdf5; }
             .dk-nav-row { cursor:pointer; }
             .dk-nav-row:hover { background:#fef9ea; }
-            .dk-nav-row.active { background:#eab01e !important; color:#fff !important; font-weight:700; }
-            .dk-nav-row.active small, .dk-nav-row.active span { color:#fff !important; }
+            .dk-nav-row.active { background:#eab01e !important; color:#111827 !important; font-weight:700; }
+            .dk-nav-row.active small, .dk-nav-row.active span { color:#1f2937 !important; }
             .dk-choice-btn { width:100%; border:1.5px solid #e5d5a7; background:#fff; border-radius:8px; padding:13px 16px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; margin-bottom:10px; font-size:14px; font-weight:700; color:#1f2937; text-align:left; }
             .dk-choice-btn:hover { background:#fef9ea; }
             .dk-choice-btn.active { background:#eab01e; border-color:#d99b07; color:#fff; }
@@ -376,7 +397,7 @@
         { k: 'c', label: '<span class="dk-gw-key">C</span>reate (Firm / Party / Alter)', meta: 'Master Setup', fn: () => D.openCreate() },
         { k: 'p', label: '<span class="dk-gw-key">P</span>arty Register', meta: 'Party → Pending / Complete', fn: () => D.openPartyRegister() },
         { k: 'n', label: '<span class="dk-gw-key">N</span>aming &amp; Barcoding', meta: 'Kariger → Sticker', fn: () => D.openBarcode() },
-        { k: 'o', label: '<span class="dk-gw-key">O</span>rder Form', meta: 'Book Format', fn: () => D.openOrderForm() },
+        { k: 'o', label: '<span class="dk-gw-key">O</span>rder Form', meta: 'Batch Format', fn: () => D.openOrderForm() },
         { k: 'h', label: 'C<span class="dk-gw-key">h</span>allan &amp; Packing Slip', meta: 'Manual No + Combo Print', fn: () => D.openChallan() },
         { k: 'd', label: 'Pen<span class="dk-gw-key">d</span>ing Order (All)', meta: 'Party Wise', fn: () => D.openAllOrders('Pending') },
         { k: 'l', label: 'Comp<span class="dk-gw-key">l</span>ete Order (All)', meta: 'Party Wise', fn: () => D.openAllOrders('Complete') }
@@ -505,7 +526,6 @@
             if (e.key === 'Enter') {
                 e.preventDefault(); e.stopImmediatePropagation();
                 const valTrim = String(activeEl.value || '').trim();
-                // Agar user ne box khali chhoda aur ↑↓ bhi nahi dabaya -> Finish/Skip (e.g. end of item table)
                 if (typeof b.onEmptyEnter === 'function' && !valTrim && !D.sideNavigated) {
                     b.onEmptyEnter();
                     return;
