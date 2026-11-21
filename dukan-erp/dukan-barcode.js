@@ -1,5 +1,5 @@
 /* ============================================================================
-   NAMING & BARCODING: Asli Kariger List + Design Naming + Sticker Print
+   NAMING & BARCODING: Kariger ka Design Auto-Link + Top Specs/Code + Stock Add
    File: dukan-erp/dukan-barcode.js
 ============================================================================ */
 (() => {
@@ -24,11 +24,11 @@
         const pg = D.paginate(designs, page);
 
         const left = `
-            <div class="dk-row"><label>Kariger (Baithak) :</label><input id="bc-kar" value="${D.esc(cur?.kariger || '')}" placeholder="Type karein ya Side List se chunein..." autocomplete="off"></div>
+            <div class="dk-row"><label>Kariger (Baithak) :</label><input id="bc-kar" value="${D.esc(cur?.kariger || '')}" placeholder="Kariger chunein (Purana design khud aayega)" autocomplete="off"></div>
             <div class="dk-row"><label>Design Name :</label><input id="bc-des" value="${D.esc(cur?.design || '')}" placeholder="Jaise: RASHMIKA" oninput="DukanERP.updSticker()" autocomplete="off"></div>
             <div class="dk-row"><label>Top Specs Line :</label><input id="bc-spec" value="${D.esc(cur?.specs || '3.60 CM EMB JHALAR')}" oninput="DukanERP.updSticker()" autocomplete="off"></div>
             <div class="dk-row"><label>Barcode Code :</label><input id="bc-code" value="${D.esc(cur?.code || '')}" placeholder="Jaise: RASHMIKA KT" oninput="DukanERP.updSticker()" autocomplete="off"></div>
-            <div class="dk-row"><label>Fresh Qty (Pcs) :</label><input type="number" id="bc-qty" value="${D.num(cur?.freshQty || 20)}"></div>
+            <div class="dk-row"><label>${cur ? `Add Finished Qty (+${D.num(cur.freshQty)} Avail) :` : 'Fresh Qty (Pcs) :'}</label><input type="number" id="bc-qty" value="${cur ? '' : '20'}" placeholder="${cur ? 'Nayi finished pcs daalein (e.g. 20)' : '20'}"></div>
             <div class="dk-row"><label>Print Stickers :</label><input type="number" id="bc-pqty" value="10"></div>
 
             <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap; background:#fdf6e2; border:1px solid #e5d5a7; padding:10px; border-radius:8px; margin:8px 0;">
@@ -40,10 +40,10 @@
             </div>
 
             <div class="dk-accept" id="dk-accept-box">
-                <strong>Save Design Naming?</strong>
+                <strong>Save Design &amp; Update Stock?</strong>
                 <div style="display:flex; gap:8px;">
                     <button type="button" class="dk-btn-gold" id="dk-accept-yes" onclick="DukanERP.saveDesign()">Yes (Y)</button>
-                    <button type="button" class="dk-btn" id="dk-accept-no" onclick="document.getElementById('dk-accept-box').style.display='none'; DukanERP.focusField('bc-des');">No (N)</button>
+                    <button type="button" class="dk-btn" id="dk-accept-no" onclick="document.getElementById('dk-accept-box').style.display='none'; DukanERP.focusField('bc-spec');">No (N)</button>
                 </div>
             </div>
 
@@ -59,7 +59,7 @@
             ${D.pagerHTML(pg, 'dkBcPage')}
         `;
 
-        D.renderShell(`<h2>Naming &amp; Barcoding</h2>`, left);
+        D.renderShell(`<h2>Naming &amp; Barcoding</h2>`, left, 'Kariger select karte hi uska purana Design khud load hoga (Top Spec & Code badal sakte hain)');
         D.updSticker();
 
         D.bindFormControls({
@@ -70,24 +70,39 @@
                     getItems: (q) => karigers
                         .filter((k) => !q || `${k.name} ${k.saree} ${k.karkhanaName}`.toLowerCase().includes(q.toLowerCase()))
                         .slice(0, 60)
-                        .map((k) => ({ label: k.name, meta: k.saree || k.karkhanaName || 'Kariger', name: k.name })),
+                        .map((k) => {
+                            const ex = designs.find((d) => String(d.kariger || '').toUpperCase() === String(k.name).toUpperCase());
+                            return { label: k.name, meta: ex ? `Design: ${ex.design}` : (k.saree || 'New'), name: k.name, existingId: ex?.id || '' };
+                        }),
                     onPick: (it) => {
-                        const el = document.getElementById('bc-kar');
-                        if (el) el.value = it.name;
-                        D.focusField('bc-des');
+                        if (it.existingId) {
+                            // Kariger ka pehle se barcode bana hai -> usi design me load, cursor Top Specs par!
+                            editId = it.existingId;
+                            D.toast(`🔗 [${it.name}] ka purana design load hua — Top Specs / Code & Qty update karein!`);
+                            render('bc-spec');
+                        } else {
+                            editId = '';
+                            const el = document.getElementById('bc-kar');
+                            if (el) el.value = it.name;
+                            D.focusField('bc-des');
+                        }
                     }
                 },
                 'bc-des': {
                     title: 'List of Existing Designs',
-                    getItems: (q) => designs
-                        .filter((d) => !q || `${d.design} ${d.kariger}`.toLowerCase().includes(q.toLowerCase()))
-                        .slice(0, 60)
-                        .map((d) => ({ id: d.id, label: d.design, meta: `${d.kariger} · ${D.num(d.freshQty)} Pc` })),
+                    noAutoHighlight: true,
+                    getItems: (q) => {
+                        const kar = (document.getElementById('bc-kar')?.value || '').trim().toUpperCase();
+                        return designs
+                            .filter((d) => (!q && (!kar || d.kariger === kar)) || `${d.design} ${d.kariger}`.toLowerCase().includes(q.toLowerCase()))
+                            .slice(0, 60)
+                            .map((d) => ({ id: d.id, label: d.design, meta: `${d.kariger} · ${D.num(d.freshQty)} Pc` }));
+                    },
                     onPick: (it) => {
-                        const val = (document.getElementById('bc-des')?.value || '').trim().toUpperCase();
-                        if (val && val !== it.label) {
+                        const typed = (document.getElementById('bc-des')?.value || '').trim().toUpperCase();
+                        if (typed && typed !== it.label) {
                             const cd = document.getElementById('bc-code');
-                            if (cd && !cd.value.trim()) cd.value = `${val} KT`;
+                            if (cd && !cd.value.trim()) cd.value = `${typed} KT`;
                             D.updSticker();
                             D.focusField('bc-spec');
                         } else {
@@ -105,7 +120,7 @@
         D.focusField(focusId);
     }
 
-    D.loadDesign = (id) => { editId = id; render('bc-des'); };
+    D.loadDesign = (id) => { editId = id; render('bc-spec'); };
 
     D.updSticker = () => {
         const sp = (document.getElementById('bc-spec')?.value || '3.60 CM EMB JHALAR').toUpperCase();
@@ -133,16 +148,22 @@
         if (!design) return D.focusField('bc-des');
         const specs = (document.getElementById('bc-spec')?.value || '').trim().toUpperCase();
         const code = (document.getElementById('bc-code')?.value || `${design} KT`).trim().toUpperCase();
-        const freshQty = D.num(document.getElementById('bc-qty')?.value);
+        const qtyVal = D.num(document.getElementById('bc-qty')?.value);
 
         const list = D.get('dukan_designs');
-        const obj = { id: editId || `des_${Date.now()}`, kariger, design, specs, code, freshQty };
-        if (editId) {
-            const idx = list.findIndex((x) => x.id === editId);
-            if (idx >= 0) list[idx] = obj;
-        } else list.push(obj);
+        const existing = editId ? list.find((x) => x.id === editId) : list.find((x) => x.design === design);
+        if (existing) {
+            existing.kariger = kariger || existing.kariger;
+            existing.design = design;
+            existing.specs = specs;
+            existing.code = code;
+            // Existing design me finished aayi nayi qty add hogi
+            existing.freshQty = D.num(existing.freshQty) + qtyVal;
+        } else {
+            list.push({ id: `des_${Date.now()}`, kariger, design, specs, code, freshQty: qtyVal });
+        }
         D.set('dukan_designs', list);
-        D.toast(`✅ Design [${design}] save ho gaya!`);
+        D.toast(`✅ [${design}] save ho gaya! (+${qtyVal} Pc Fresh Stock)`);
         editId = '';
         render('bc-kar');
     };
