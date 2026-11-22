@@ -367,11 +367,13 @@
 
     J.syncVchMetaFromDom = () => {
         const dEl = document.getElementById('jwt-vch-date');
+        const fEl = document.getElementById('jwt-vch-firm');
         const jEl = document.getElementById('jwt-vch-jwno');
         const tEl = document.getElementById('jwt-vch-trans');
         const lEl = document.getElementById('jwt-vch-lr');
         const nEl = document.getElementById('jwt-vch-design');
         if (dEl) J.s.vchMeta.date = dEl.value || J.getTodayIso();
+        if (fEl) J.s.vchMeta.firmName = fEl.value;
         if (jEl) J.s.vchMeta.jwNo = jEl.value;
         if (tEl) J.s.vchMeta.transport = tEl.value;
         if (lEl) J.s.vchMeta.lrNo = lEl.value;
@@ -389,7 +391,7 @@
             isOutstation: true,
             title: 'JOB WORK CHALLAN',
             groupLabel: J.grpLabel(worker.group),
-            firm: J.getFirmProfile(),
+            firm: J.getFirmProfile(row.firmId, row.firmName),
             worker: {
                 name: worker.name,
                 address: worker.address || '',
@@ -462,6 +464,8 @@
                     damageAmt: 0,
                     isTrailV2: true,
                     isOutstation: isOutstationOut,
+                    firmId: isOutstationOut ? (J.s.vchMeta.firmId || '') : '',
+                    firmName: isOutstationOut ? (J.s.vchMeta.firmName || '') : '',
                     jwNo: isOutstationOut ? (J.s.vchMeta.jwNo || J.getNextChallanNo()).trim() : '',
                     transport: isOutstationOut ? (J.s.vchMeta.transport || '').trim() : '',
                     lrNo: isOutstationOut ? (J.s.vchMeta.lrNo || '').trim() : '',
@@ -527,6 +531,7 @@
                 };
             }
 
+            const defFirm = J.getFirmProfile();
             J.s.vchBatch = [];
             J.s.vchAcceptOpen = false;
             J.s.vchPickStep = 'kariger';
@@ -535,6 +540,8 @@
             J.s.vchRightIdx = 0;
             J.s.vchMeta = {
                 date: J.getTodayIso(),
+                firmId: isOutstationOut ? defFirm.id : '',
+                firmName: isOutstationOut ? defFirm.name : '',
                 jwNo: isOutstationOut ? J.getNextChallanNo() : '',
                 transport: '',
                 lrNo: '',
