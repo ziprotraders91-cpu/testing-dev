@@ -128,10 +128,18 @@
             #jw-trail-section .jwt-footer { background: #fdf6e2; border-top: 1px solid #e5d5a7; padding: 7px 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 11px; color: #92400e; font-weight: 700; }
             #jwt-toast { position: fixed; bottom: 16px; right: 16px; z-index: 999999; padding: 9px 16px; border-radius: 6px; font-size: 12.5px; font-weight: 700; display: none; box-shadow: 0 8px 20px rgba(0,0,0,0.28); }
             @media (max-width: 860px) {
+                #jw-trail-section { overflow: visible !important; }
+                #jw-trail-section .jwt-topbar { padding: 10px 12px; }
+                #jw-trail-section .jwt-menu-shell { max-width: 100%; margin: 4px 0; }
                 #jw-trail-section .jwt-split { grid-template-columns: 1fr; }
-                #jw-trail-section .jwt-pane-l { border-right: none; border-bottom: 1.5px solid #e5d5a7; }
+                #jw-trail-section .jwt-pane-l { border-right: none; border-bottom: 1.5px solid #e5d5a7; padding: 12px; }
+                #jw-trail-section .jwt-pane-r { padding: 12px; }
                 #jw-trail-section .jwt-kpi-5, #jw-trail-section .jwt-kpi-4, #jw-trail-section .jwt-kpi-3 { grid-template-columns: repeat(2, 1fr); }
                 #jw-trail-section .jwt-frow { grid-template-columns: 1fr; gap: 3px; }
+                #jw-trail-section table { display: block; width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; }
+                #jw-trail-section [style*="grid-template-columns:1.5fr"],
+                #jw-trail-section [style*="grid-template-columns:140px"] { grid-template-columns: 1fr !important; }
+                #jw-trail-section .jwt-footer, #jwt-top-hint { display: none; }
             }
         `;
         document.head.appendChild(st);
@@ -219,7 +227,7 @@
                 { key: 'j', label: '<span class="jwt-menu-key">J</span>ob Work Register', val: `${snap.totals.pending} Pending`, action: "jwtGo('jw-groups')" },
                 { sec: 'Report & Stock', key: 'o', label: '<span class="jwt-menu-key">O</span>wner Report', val: `${snap.totals.total} Pcs`, action: "jwtGo('owner-menu')" },
                 { key: 's', label: '<span class="jwt-menu-key">S</span>aree Stock', val: `${snap.totals.raw + snap.totals.finished + snap.totals.lott} Pcs`, action: "jwtGo('stock-list')" },
-                { sec: 'Out & Account', key: 'f', label: '<span class="jwt-menu-key">F</span>inal Out (Dispatch)', val: 'Batch Out', action: "jwtOpenFinalOut()" },
+                { sec: 'Out & Account', key: 'f', label: '<span class="jwt-menu-key">F</span>inal Out (Finished Stock)', val: 'Finished', action: "jwtOpenFinalOut()" },
                 { key: 'b', label: '<span class="jwt-menu-key">B</span>ills &amp; Hisab', val: 'Hisab', action: "jwtGo('bills-menu')" }
             ];
             if (s.menuIdx >= items.length || s.menuIdx < 0) s.menuIdx = 0;
@@ -605,7 +613,6 @@
 
             const sourceBatches = isOut ? snap.godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0) : w.pendingItems;
             const totBatchPcs = s.vchBatch.reduce((sum, x) => sum + x.qty, 0);
-            const defDest = (w.group === 'calender') ? 'finished' : 'godam';
 
             body.innerHTML = `<div class="jwt-split">
                 <div class="jwt-pane-l">
@@ -626,8 +633,7 @@
                     <div class="jwt-frow"><label>Stage Batch :</label><input type="text" id="jwt-vch-stage" class="jwt-inp" readonly placeholder="Stage chunein..."></div>
                     ${!isOut ? `<div class="jwt-frow"><label>Wapas Kahan :</label>
                         <select id="jwt-vch-dest" class="jwt-inp">
-                            <option value="godam" ${defDest === 'godam' ? 'selected' : ''}>Godam (${J.esc(gLbl)} Complete)</option>
-                            <option value="finished" ${defDest === 'finished' ? 'selected' : ''}>Final Tayyar (Finished)</option>
+                            <option value="godam" selected>Godam (${J.esc(gLbl)} Complete)</option>
                             <option value="lott">Lott / Damage</option>
                         </select>
                     </div>` : ''}
