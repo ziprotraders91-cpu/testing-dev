@@ -175,8 +175,20 @@
     };
 
     /* ========================================================================
-       10. NAVIGATION HELPERS WITH EXACT CURSOR RESTORE
+       10. NAVIGATION HELPERS & CENTRAL MASTER BRIDGE
     ======================================================================== */
+    window.jwtOpenCentralCreate = () => {
+        if (typeof window.openTallyCreateModule === 'function') {
+            window.openTallyCreateModule('jobwork', () => J.openModuleAt('gateway', 'gateway'));
+        }
+    };
+
+    window.jwtOpenCentralAlter = () => {
+        if (typeof window.openTallyAlterModule === 'function') {
+            window.openTallyAlterModule('jobwork', () => J.openModuleAt('gateway', 'gateway'));
+        }
+    };
+
     window.jwtGo = (view, preserveCursor = false) => {
         if (J.s.curView) J.s.viewCursor[J.s.curView] = J.s.menuIdx;
         J.s.curView = view;
@@ -213,7 +225,7 @@
     };
 
     /* ========================================================================
-       11. SCREEN RENDERERS PART 1 (GATEWAY, MASTER, REGISTER, VOUCHER, HIST)
+       11. SCREEN RENDERERS PART 1 (GATEWAY, REGISTER, VOUCHER, HIST)
     ======================================================================== */
     J.renderScreensPart1 = (body, snap) => {
         const s = J.s;
@@ -222,8 +234,8 @@
         if (s.curView === 'gateway') {
             J.setTopHeader('JobWork Hub', '← [Esc] Dashboard', '[↑ ↓] + [Enter] · [Esc] Dashboard', false);
             const items = [
-                { sec: 'JobWork Master', key: 'c', label: '<span class="jwt-menu-key">C</span>reate (Worker / Group)', val: 'New', action: "jwtGo('create-menu')" },
-                { key: 'a', label: '<span class="jwt-menu-key">A</span>lter (Worker / Group)', val: 'Edit / Del', action: "jwtGo('alter-menu')" },
+                { sec: 'JobWork Master (Central)', key: 'c', label: '<span class="jwt-menu-key">C</span>reate (Worker / Group / Firm)', val: 'Central Hub', action: "jwtOpenCentralCreate()" },
+                { key: 'a', label: '<span class="jwt-menu-key">A</span>lter (Worker / Group / Firm)', val: 'Edit / Del', action: "jwtOpenCentralAlter()" },
                 { key: 'j', label: '<span class="jwt-menu-key">J</span>ob Work Register', val: `${snap.totals.pending} Pending`, action: "jwtGo('jw-groups')" },
                 { sec: 'Report & Stock', key: 'o', label: '<span class="jwt-menu-key">O</span>wner Report', val: `${snap.totals.total} Pcs`, action: "jwtGo('owner-menu')" },
                 { key: 's', label: '<span class="jwt-menu-key">S</span>aree Stock', val: `${snap.totals.raw + snap.totals.finished + snap.totals.lott} Pcs`, action: "jwtGo('stock-list')" },
@@ -242,282 +254,6 @@
             });
             html += `<div class="jwt-footer"><span>[&uarr; &darr;] Upar-Niche &middot; [Enter] Select</span><span>[Esc] Dashboard</span></div></div></div>`;
             body.innerHTML = html;
-            return true;
-        }
-
-        // 2. CREATE MENU (WORKER / GROUP / FIRM PROFILE)
-        if (s.curView === 'create-menu') {
-            J.setTopHeader('Create (Worker / Group / Firm)', '← [Esc] Gateway');
-            const firm = J.getFirmProfile();
-            const opts = [
-                { label: '1. Create JobWorker', val: `${snap.workers.length} Workers`, action: "jwtSetMenuIdx(0); jwtOpenCreateWorker()" },
-                { label: '2. Create New Work Group', val: `${snap.groups.length} Groups`, action: "jwtSetMenuIdx(1); jwtOpenCreateGroup()" },
-                { label: '3. Firm Profile (From Name, Address, GST)', val: firm.name, action: "jwtSetMenuIdx(2); jwtGo('firm-profile')" }
-            ];
-            if (s.menuIdx >= opts.length || s.menuIdx < 0) s.menuIdx = 0;
-            body.innerHTML = `<div style="padding:10px 16px;"><div class="jwt-menu-shell">
-                <div class="jwt-menu-head"><span>Create Master</span></div>
-                ${opts.map((o, i) => `<button type="button" class="jwt-menu-item ${i === s.menuIdx ? 'active' : ''}" onclick="${o.action}"><span>${o.label}</span><span class="jwt-menu-val">${J.esc(o.val)}</span></button>`).join('')}
-                <div class="jwt-footer"><span>[&uarr; &darr;] + [Enter]</span><span>[Esc] Gateway</span></div>
-            </div></div>`;
-            return true;
-        }
-
-        // FIRM PROFILE (FROM + GST NO.)
-        if (s.curView === 'firm-profile') {
-            const f = J.getFirmProfile();
-            J.setTopHeader('Firm Profile (Challan From & GST)', '← [Esc] Back');
-            s.crAcceptOpen = false;
-            body.innerHTML = `<div style="padding:16px; max-width:540px;">
-                <div class="jwt-frow"><label>Firm Name (From) :</label><input type="text" id="jwt-fm-name" class="jwt-inp" value="${J.esc(f.name)}" placeholder="e.g. INDIAN FABRICS"></div>
-                <div class="jwt-frow"><label>Address :</label><input type="text" id="jwt-fm-addr" class="jwt-inp" value="${J.esc(f.address)}" placeholder="e.g. Madanpura, Varanasi"></div>
-                <div class="jwt-frow"><label>Mobile No. :</label><input type="tel" id="jwt-fm-mob" class="jwt-inp" value="${J.esc(f.mobile)}" placeholder="Mobile No."></div>
-                <div class="jwt-frow"><label>GST No. (GSTIN) :</label><input type="text" id="jwt-fm-gst" class="jwt-inp" value="${J.esc(f.gst)}" placeholder="e.g. 09ABCDE1234F1Z5"></div>
-                <div id="jwt-cr-accept" class="jwt-accept-bar" style="display:none;">
-                    <strong style="font-size:12px;">Accept? Firm Details Save Karein?</strong>
-                    <div style="display:flex; gap:6px;">
-                        <button type="button" id="jwt-cr-yes" class="jwt-save" onclick="jwtSaveFirmProfile()">Yes [Y / Enter]</button>
-                        <button type="button" class="jwt-esc" onclick="jwtCancelCrAccept()">No [N / Esc]</button>
-                    </div>
-                </div>
-                <div style="text-align:right; margin-top:10px;"><button type="button" class="jwt-save" onclick="jwtAskCrAccept()">Save Firm [Enter]</button></div>
-            </div>`;
-            const order = ['jwt-fm-name', 'jwt-fm-addr', 'jwt-fm-mob', 'jwt-fm-gst'];
-            order.forEach((id, i) => {
-                const el = document.getElementById(id);
-                if (!el) return;
-                el.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter') {
-                        e.preventDefault();
-                        if (i < order.length - 1) document.getElementById(order[i + 1])?.focus();
-                        else window.jwtAskCrAccept();
-                    }
-                });
-            });
-            setTimeout(() => document.getElementById('jwt-fm-name')?.focus(), 25);
-            return true;
-        }
-
-        // 2A. CREATE JOBWORKER (WITH GST NO.)
-        if (s.curView === 'create-worker') {
-            J.setTopHeader('Create JobWorker', '← [Esc] Create Menu', '[Enter] Agla Box · [↑↓] Group Chunein · [Esc] Back');
-            const groups = snap.groups;
-            if (!groups.some((g) => g.key === s.selectedCreateGroupKey) && groups.length) s.selectedCreateGroupKey = groups[0].key;
-            s.createSideIdx = Math.max(0, groups.findIndex((g) => g.key === s.selectedCreateGroupKey));
-            s.crAcceptOpen = false;
-
-            body.innerHTML = `<div class="jwt-split">
-                <div class="jwt-pane-l">
-                    <div class="jwt-frow"><label>Worker / Party Name :</label><input type="text" id="jwt-cw-name" class="jwt-inp" placeholder="e.g. G K FABRICS"></div>
-                    <div class="jwt-frow"><label>Under (Work Group) :</label><input type="text" id="jwt-cw-grp" class="jwt-inp" readonly value="${J.esc(J.grpLabel(s.selectedCreateGroupKey))}"></div>
-                    <div class="jwt-frow"><label>Mobile No. :</label><input type="tel" id="jwt-cw-mob" maxlength="10" class="jwt-inp" placeholder="10-digit Mobile"></div>
-                    <div class="jwt-frow"><label>Address / City :</label><input type="text" id="jwt-cw-addr" class="jwt-inp" placeholder="e.g. Ring Road, Surat"></div>
-                    <div class="jwt-frow"><label>GST No. (Optional) :</label><input type="text" id="jwt-cw-gst" class="jwt-inp" placeholder="e.g. 24ABCDE1234F1Z5"></div>
-                    <div class="jwt-frow"><label>Join Date :</label><input type="date" id="jwt-cw-date" class="jwt-inp" value="${J.getTodayIso()}"></div>
-                    <div id="jwt-cr-accept" class="jwt-accept-bar" style="display:none;">
-                        <strong style="font-size:12px;">Accept? Worker Save Karein?</strong>
-                        <div style="display:flex; gap:6px;">
-                            <button type="button" id="jwt-cr-yes" class="jwt-save" onclick="jwtSaveNewWorker()">Yes [Y / Enter]</button>
-                            <button type="button" class="jwt-esc" onclick="jwtCancelCrAccept()">No [N / Esc]</button>
-                        </div>
-                    </div>
-                    <div style="text-align:right; margin-top:10px;"><button type="button" class="jwt-save" onclick="jwtAskCrAccept()">Save Worker [Ctrl+Enter]</button></div>
-                </div>
-                <div class="jwt-pane-r">
-                    <div class="jwt-sidebox">
-                        <div class="jwt-sidebox-head"><span>List of Work Groups</span><small>${groups.length}</small></div>
-                        <div id="jwt-cw-side-list" class="jwt-side-list-big">${groups.map((g, i) => `
-                            <div class="jwt-side-opt ${i === s.createSideIdx ? 'active' : ''}" onmousedown="event.preventDefault(); jwtPickCwGroup(${i})">
-                                <span>${J.esc(g.label)}</span><small>${g.outstation ? 'Bill+Slip' : 'JobWork'}</small>
-                            </div>`).join('')}
-                        </div>
-                    </div>
-                </div>
-            </div>`;
-            J.bindCreateWorkerKeys();
-            setTimeout(() => document.getElementById('jwt-cw-name')?.focus(), 25);
-            return true;
-        }
-
-        // 2B. CREATE NEW WORK GROUP (WITH OUTSTATION TICK)
-        if (s.curView === 'create-group') {
-            J.setTopHeader('Create New Work Group', '← [Esc] Create Menu');
-            s.crAcceptOpen = false;
-            body.innerHTML = `<div class="jwt-split">
-                <div class="jwt-pane-l">
-                    <div class="jwt-frow"><label>Work Group Name :</label><input type="text" id="jwt-cg-name" class="jwt-inp" placeholder="e.g. Swarovski, Jhalar, Stone"></div>
-                    <div style="margin:8px 0 10px; background:#fdfcf7; border:1px solid #e5d5a7; border-radius:5px; padding:8px 10px;">
-                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12px; font-weight:700;">
-                            <input type="checkbox" id="jwt-cg-outstation">
-                            Outstation Bill + Packing Slip Chahiye (Transport, JW No., Design)
-                        </label>
-                    </div>
-                    <div id="jwt-cr-accept" class="jwt-accept-bar" style="display:none;">
-                        <strong style="font-size:12px;">Accept? Naya Group Save Karein?</strong>
-                        <div style="display:flex; gap:6px;">
-                            <button type="button" id="jwt-cr-yes" class="jwt-save" onclick="jwtSaveNewGroup()">Yes [Y / Enter]</button>
-                            <button type="button" class="jwt-esc" onclick="jwtCancelCrAccept()">No [N / Esc]</button>
-                        </div>
-                    </div>
-                    <div style="text-align:right;"><button type="button" class="jwt-save" onclick="jwtAskCrAccept()">Save Group [Enter]</button></div>
-                </div>
-                <div class="jwt-pane-r">
-                    <div class="jwt-sidebox">
-                        <div class="jwt-sidebox-head"><span>Existing Work Groups</span><small>${snap.groups.length}</small></div>
-                        <div class="jwt-side-list-big">${snap.groups.map((g) => `<div class="jwt-side-opt"><span>${J.esc(g.label)}</span><small>${g.outstation ? 'Bill+Slip' : 'Active'}</small></div>`).join('')}</div>
-                    </div>
-                </div>
-            </div>`;
-            const gInp = document.getElementById('jwt-cg-name');
-            if (gInp) {
-                gInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); window.jwtAskCrAccept(); } });
-                setTimeout(() => gInp.focus(), 25);
-            }
-            return true;
-        }
-
-        // 3. ALTER MENU
-        if (s.curView === 'alter-menu') {
-            J.setTopHeader('Alter (Worker / Group / Firm)', '← [Esc] Gateway');
-            const firm = J.getFirmProfile();
-            const opts = [
-                { label: '1. Alter JobWorker (Edit / Delete / GST)', val: `${snap.workers.length} Workers`, action: "jwtSetMenuIdx(0); jwtGo('alter-worker-list')" },
-                { label: '2. Alter JobWork Group (Rename / Outstation / Delete)', val: `${snap.groups.length} Groups`, action: "jwtSetMenuIdx(1); jwtGo('alter-group-list')" },
-                { label: '3. Alter Firm Profile (From Name, Address, GST)', val: firm.name, action: "jwtSetMenuIdx(2); jwtGo('firm-profile')" }
-            ];
-            if (s.menuIdx >= opts.length || s.menuIdx < 0) s.menuIdx = 0;
-            body.innerHTML = `<div style="padding:10px 16px;"><div class="jwt-menu-shell">
-                <div class="jwt-menu-head"><span>Alter Master</span></div>
-                ${opts.map((o, i) => `<button type="button" class="jwt-menu-item ${i === s.menuIdx ? 'active' : ''}" onclick="${o.action}"><span>${o.label}</span><span class="jwt-menu-val">${J.esc(o.val)}</span></button>`).join('')}
-                <div class="jwt-footer"><span>[&uarr; &darr;] + [Enter]</span><span>[Esc] Gateway</span></div>
-            </div></div>`;
-            return true;
-        }
-
-        if (s.curView === 'alter-worker-list') {
-            J.setTopHeader('Alter JobWorker — List', '← [Esc] Alter Menu', '[↑ ↓] Chunein · [Enter] Edit / Delete · [/] Search');
-            const q = (document.getElementById('jwt-aw-search')?.value || '').trim().toLowerCase();
-            const list = snap.workers.filter((w) => !q || `${w.name} ${J.grpLabel(w.group)} ${w.mobile} ${w.address} ${w.gst}`.toLowerCase().includes(q));
-            if (s.menuIdx >= list.length || s.menuIdx < 0) s.menuIdx = Math.max(0, list.length - 1);
-
-            body.innerHTML = `<div style="padding:12px 16px;">
-                <input type="text" id="jwt-aw-search" class="jwt-inp" style="margin-bottom:10px;" value="${J.esc(q)}" placeholder="Search Worker..." oninput="jwtFilterList()">
-                <table>
-                    <thead><tr><th>Worker Name</th><th>Work Group</th><th>Mobile &amp; Address</th><th class="num">Pending</th><th style="text-align:right;">Action</th></tr></thead>
-                    <tbody>
-                        ${list.length ? list.map((w, i) => `
-                            <tr class="jwt-row ${i === s.menuIdx ? 'active' : ''}" onclick="jwtSetMenuIdx(${i}); jwtOpenAlterWorkerEdit('${J.esc(w.id)}')">
-                                <td><strong>${J.esc(w.name)}</strong>${w.gst ? `<div class="trail-muted">GST: ${J.esc(w.gst)}</div>` : ''}</td>
-                                <td>${J.esc(J.grpLabel(w.group))}</td>
-                                <td>${J.esc(w.mobile || '-')} &middot; ${J.esc(w.address || '-')}</td>
-                                <td class="gold-num">${w.pending} Pcs</td>
-                                <td style="text-align:right;">Edit / Del &rarr;</td>
-                            </tr>`).join('') : `<tr><td colspan="5" style="text-align:center; padding:18px; color:#6b7280;">Koi worker nahi mila.</td></tr>`}
-                    </tbody>
-                </table>
-            </div>`;
-            J.bindSearchKey('jwt-aw-search');
-            return true;
-        }
-
-        if (s.curView === 'alter-worker-edit') {
-            const w = snap.workers.find((x) => x.id === s.alterEditWorkerId);
-            if (!w) { J.jwtBackTo('alter-worker-list'); return true; }
-            J.setTopHeader(`Alter Worker: ${w.name}`, '← [Esc] Workers List');
-            const groups = snap.groups;
-            s.crAcceptOpen = false;
-
-            body.innerHTML = `<div class="jwt-split">
-                <div class="jwt-pane-l">
-                    <div class="jwt-frow"><label>Worker / Party Name :</label><input type="text" id="jwt-ew-name" class="jwt-inp" value="${J.esc(w.name)}"></div>
-                    <div class="jwt-frow"><label>Work Group :</label>
-                        <select id="jwt-ew-grp" class="jwt-inp">
-                            ${groups.map((g) => `<option value="${J.esc(g.key)}" ${g.key === w.group ? 'selected' : ''}>${J.esc(g.label)}</option>`).join('')}
-                        </select>
-                    </div>
-                    <div class="jwt-frow"><label>Mobile No. :</label><input type="tel" id="jwt-ew-mob" maxlength="10" class="jwt-inp" value="${J.esc(w.mobile)}"></div>
-                    <div class="jwt-frow"><label>Address / City :</label><input type="text" id="jwt-ew-addr" class="jwt-inp" value="${J.esc(w.address)}"></div>
-                    <div class="jwt-frow"><label>GST No. :</label><input type="text" id="jwt-ew-gst" class="jwt-inp" value="${J.esc(w.gst)}" placeholder="GSTIN"></div>
-                    <div class="jwt-frow"><label>Join Date :</label><input type="date" id="jwt-ew-date" class="jwt-inp" value="${J.esc(J.toIsoDate(w.date) || J.getTodayIso())}"></div>
-                    <div id="jwt-cr-accept" class="jwt-accept-bar" style="display:none;">
-                        <strong style="font-size:12px;">Accept? Worker Update Karein?</strong>
-                        <div style="display:flex; gap:6px;">
-                            <button type="button" id="jwt-cr-yes" class="jwt-save" onclick="jwtUpdateWorker('${J.esc(w.id)}')">Yes [Y / Enter]</button>
-                            <button type="button" class="jwt-esc" onclick="jwtCancelCrAccept()">No [N / Esc]</button>
-                        </div>
-                    </div>
-                    <div style="display:flex; justify-content:space-between; margin-top:12px; gap:8px;">
-                        <button type="button" class="jwt-del" onclick="jwtDeleteWorker('${J.esc(w.id)}')">Delete Worker</button>
-                        <button type="button" class="jwt-save" onclick="jwtAskCrAccept()">Update Worker [Ctrl+Enter]</button>
-                    </div>
-                </div>
-                <div class="jwt-pane-r">
-                    <div class="jwt-sidebox">
-                        <div class="jwt-sidebox-head"><span>Worker Stock Info</span></div>
-                        <div style="padding:12px; font-size:12.5px; line-height:1.7;">
-                            <div><strong>Diya:</strong> ${w.diya} Pcs</div>
-                            <div><strong>Aai:</strong> ${w.aai} Pcs</div>
-                            <div><strong>Pending:</strong> ${w.pending} Pcs</div>
-                        </div>
-                    </div>
-                </div>
-            </div>`;
-            setTimeout(() => document.getElementById('jwt-ew-name')?.focus(), 25);
-            return true;
-        }
-
-        if (s.curView === 'alter-group-list') {
-            J.setTopHeader('Alter JobWork Group — List', '← [Esc] Alter Menu');
-            const groups = snap.groups;
-            if (s.menuIdx >= groups.length || s.menuIdx < 0) s.menuIdx = Math.max(0, groups.length - 1);
-
-            body.innerHTML = `<div style="padding:10px 16px;"><div class="jwt-menu-shell">
-                <div class="jwt-menu-head"><span>Select Work Group to Alter / Delete</span></div>
-                ${groups.map((g, i) => {
-                    const wc = snap.workers.filter((w) => w.group === g.key).length;
-                    return `<button type="button" class="jwt-menu-item ${i === s.menuIdx ? 'active' : ''}" onclick="jwtSetMenuIdx(${i}); jwtOpenAlterGroupEdit('${J.esc(g.key)}')">
-                        <span>${J.esc(g.label)} ${g.outstation ? '<small class="trail">[Bill+Slip]</small>' : ''}</span>
-                        <span class="jwt-menu-val">${wc} Workers</span>
-                    </button>`;
-                }).join('')}
-                <div class="jwt-footer"><span>[&uarr; &darr;] + [Enter]</span><span>[Esc] Alter Menu</span></div>
-            </div></div>`;
-            return true;
-        }
-
-        if (s.curView === 'alter-group-edit') {
-            const g = snap.groups.find((x) => x.key === s.alterEditGroupKey);
-            if (!g) { J.jwtBackTo('alter-group-list'); return true; }
-            J.setTopHeader(`Alter Work Group: ${g.label}`, '← [Esc] Groups List');
-            const wc = snap.workers.filter((w) => w.group === g.key).length;
-            s.crAcceptOpen = false;
-
-            body.innerHTML = `<div style="padding:16px; max-width:540px;">
-                <div class="jwt-frow"><label>Group Name :</label><input type="text" id="jwt-eg-name" class="jwt-inp" value="${J.esc(g.label)}"></div>
-                <div style="margin:8px 0 10px; background:#fdfcf7; border:1px solid #e5d5a7; border-radius:5px; padding:8px 10px;">
-                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12px; font-weight:700;">
-                        <input type="checkbox" id="jwt-eg-outstation" ${g.outstation ? 'checked' : ''}>
-                        Outstation Bill + Packing Slip Chahiye (Transport, JW No., Design)
-                    </label>
-                </div>
-                <div style="font-size:12px; color:#6b7280; margin:6px 0 12px;">Is group me abhi <strong>${wc} Workers</strong> hain.</div>
-                <div id="jwt-cr-accept" class="jwt-accept-bar" style="display:none;">
-                    <strong style="font-size:12px;">Accept? Group Update Karein?</strong>
-                    <div style="display:flex; gap:6px;">
-                        <button type="button" id="jwt-cr-yes" class="jwt-save" onclick="jwtUpdateGroup('${J.esc(g.key)}')">Yes [Y / Enter]</button>
-                        <button type="button" class="jwt-esc" onclick="jwtCancelCrAccept()">No [N / Esc]</button>
-                    </div>
-                </div>
-                <div style="display:flex; justify-content:space-between; gap:8px; margin-top:10px;">
-                    <button type="button" class="jwt-del" onclick="jwtDeleteGroup('${J.esc(g.key)}')">Delete Group</button>
-                    <button type="button" class="jwt-save" onclick="jwtAskCrAccept()">Update Group [Enter]</button>
-                </div>
-            </div>`;
-            const el = document.getElementById('jwt-eg-name');
-            if (el) {
-                el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); window.jwtAskCrAccept(); } });
-                setTimeout(() => { el.focus(); el.select(); }, 25);
-            }
             return true;
         }
 
