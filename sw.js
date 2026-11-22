@@ -1,10 +1,10 @@
 /* ============================================================================
    SIMPLICITY ERP - HIGH-PERFORMANCE OFFLINE-FIRST PWA SERVICE WORKER
    File: sw.js • Developed by Farhan Jawed
-   Architecture: Network-First for Fresh Updates | Safe Offline Fallback (v14)
+   Architecture: Network-First for Fresh Updates | Safe Offline Fallback (v15)
 ============================================================================ */
 
-const CACHE_NAME = 'simplicity-cache-v14';
+const CACHE_NAME = 'simplicity-cache-v15';
 
 const ASSETS_TO_CACHE = [
   './',
@@ -21,7 +21,8 @@ const ASSETS_TO_CACHE = [
   './core/storage.js?v=3.2',
   './core/database.js?v=3.2',
   './core/karkhana.js?v=3.2',
-  './core/tally-master.js?v=3.6',
+  './core/tally-master.js?v=3.7',
+  './core/central-master.js?v=1.0',
 
   // Access & Profile
   './auth/auth.js?v=3.2',
@@ -67,13 +68,13 @@ const ASSETS_TO_CACHE = [
   './jobwork-trail/jwt-core.js?v=1.2',
   './jobwork-trail/jwt-engine.js?v=1.2',
   './jobwork-trail/jwt-print.js?v=1.2',
-  './jobwork-trail/jwt-screens-1.js?v=1.2',
+  './jobwork-trail/jwt-screens-1.js?v=1.3',
   './jobwork-trail/jwt-screens-2.js?v=1.2',
   './jobwork-trail/jwt-controllers.js?v=1.2',
 
   // Dukan ERP Modules
   './dukan-erp/dukan-core.js?v=1.1',
-  './dukan-erp/dukan-master.js?v=1.0',
+  './dukan-erp/dukan-master.js?v=1.1',
   './dukan-erp/dukan-party-reg.js?v=1.0',
   './dukan-erp/dukan-barcode.js?v=1.0',
   './dukan-erp/dukan-order.js?v=1.0',
