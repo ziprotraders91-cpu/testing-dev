@@ -19,6 +19,30 @@
         const listEl = document.getElementById('jwt-vch-r-list');
         if (!listEl) return;
 
+        if (s.vchPickStep === 'firm') {
+            const firms = typeof J.getFirmsList === 'function' ? J.getFirmsList() : [];
+            const fInpVal = String(document.getElementById('jwt-vch-firm')?.value || '').trim();
+            const isExactCur = fInpVal && J.normText(fInpVal) === J.normText(s.vchMeta.firmName);
+            const fQuery = isExactCur ? '' : fInpVal.toLowerCase();
+            s.vchRightItems = firms.filter((f) => !fQuery || `${f.name} ${f.city || ''} ${f.gst || ''}`.toLowerCase().includes(fQuery));
+            if (s.vchRightIdx >= s.vchRightItems.length || s.vchRightIdx < 0) {
+                const defIdx = s.vchRightItems.findIndex((f) => String(f.id) === String(s.vchMeta.firmId) || J.normText(f.name) === J.normText(s.vchMeta.firmName));
+                s.vchRightIdx = defIdx >= 0 ? defIdx : (s.vchRightItems.length ? 0 : -1);
+            }
+            if (titleEl) titleEl.textContent = 'List of Firms (Billing)';
+            if (cntEl) cntEl.textContent = `${s.vchRightItems.length} Firms`;
+
+            listEl.innerHTML = s.vchRightItems.length
+                ? s.vchRightItems.map((f, i) => `
+                    <div class="jwt-side-opt ${i === s.vchRightIdx ? 'active' : ''}" onmousedown="event.preventDefault(); jwtPickVchRight(${i})">
+                        <div><strong>${J.esc(f.name)}</strong><div class="trail-muted">${J.esc(f.gst || f.address || 'Firm')}</div></div>
+                        <small>${f.isDefault ? '★ Default' : J.esc(f.city || 'Firm')}</small>
+                    </div>`).join('')
+                : `<div style="padding:16px; text-align:center; color:#6b7280; font-size:12px;">Koi Firm saved nahi hai.</div>`;
+            listEl.querySelector('.jwt-side-opt.active')?.scrollIntoView({ block: 'nearest' });
+            return;
+        }
+
         const kQuery = document.getElementById('jwt-vch-kariger')?.value || '';
         if (s.vchPickStep === 'kariger') {
             s.vchRightItems = J.buildKarigerPickerList(sourceBatches, s.vchBatch, kQuery);
@@ -62,6 +86,18 @@
         const sourceBatches = (s.vchDir === 'out') ? snap.godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0) : (w ? w.pendingItems : []);
         const item = s.vchRightItems[idx];
         if (!item) return;
+
+        if (s.vchPickStep === 'firm') {
+            s.vchMeta.firmId = item.id || '';
+            s.vchMeta.firmName = item.name || '';
+            const fInp = document.getElementById('jwt-vch-firm');
+            if (fInp) fInp.value = item.name || '';
+            s.vchPickStep = 'kariger';
+            s.vchRightIdx = 0;
+            J.renderVchRightPanel(sourceBatches);
+            setTimeout(() => document.getElementById('jwt-vch-jwno')?.focus(), 20);
+            return;
+        }
 
         if (s.vchPickStep === 'kariger') {
             s.vchSelectedMaker = item.maker;
@@ -137,6 +173,7 @@
     J.bindVchVoucherKeys = (sourceBatches, isOutstationOut) => {
         const s = J.s;
         if (!s) return;
+        const fInp = document.getElementById('jwt-vch-firm');
         const kInp = document.getElementById('jwt-vch-kariger');
         const sInp = document.getElementById('jwt-vch-stage');
         const dSel = document.getElementById('jwt-vch-dest');
@@ -144,13 +181,20 @@
         const yesBtn = document.getElementById('jwt-vch-yes');
 
         const metaChain = isOutstationOut
-            ? ['jwt-vch-date', 'jwt-vch-jwno', 'jwt-vch-trans', 'jwt-vch-lr', 'jwt-vch-design', 'jwt-vch-kariger']
+            ? ['jwt-vch-date', 'jwt-vch-firm', 'jwt-vch-jwno', 'jwt-vch-trans', 'jwt-vch-lr', 'jwt-vch-design', 'jwt-vch-kariger']
             : ['jwt-vch-date', 'jwt-vch-kariger'];
 
         metaChain.forEach((id, i) => {
-            if (id === 'jwt-vch-kariger') return;
+            if (id === 'jwt-vch-kariger' || id === 'jwt-vch-firm') return;
             const el = document.getElementById(id);
             if (!el) return;
+            el.addEventListener('focus', () => {
+                if (s.vchPickStep === 'firm') {
+                    s.vchPickStep = 'kariger';
+                    s.vchRightIdx = 0;
+                    J.renderVchRightPanel(sourceBatches);
+                }
+            });
             el.addEventListener('input', J.syncVchMetaFromDom);
             el.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.ctrlKey) {
@@ -160,6 +204,37 @@
                 }
             });
         });
+
+        if (fInp) {
+            fInp.addEventListener('focus', () => {
+                s.vchPickStep = 'firm';
+                s.vchRightIdx = -1;
+                J.renderVchRightPanel(sourceBatches);
+            });
+            fInp.addEventListener('input', () => {
+                s.vchPickStep = 'firm';
+                s.vchRightIdx = 0;
+                s.vchMeta.firmName = fInp.value;
+                J.renderVchRightPanel(sourceBatches);
+            });
+            fInp.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    if (s.vchRightItems.length) {
+                        e.preventDefault();
+                        s.vchRightIdx = e.key === 'ArrowDown'
+                            ? (s.vchRightIdx + 1) % s.vchRightItems.length
+                            : (s.vchRightIdx - 1 + s.vchRightItems.length) % s.vchRightItems.length;
+                        J.renderVchRightPanel(sourceBatches);
+                    }
+                    return;
+                }
+                if (e.key === 'Enter' && !e.ctrlKey) {
+                    e.preventDefault();
+                    if (s.vchRightIdx >= 0 && s.vchRightItems[s.vchRightIdx]) window.jwtPickVchRight(s.vchRightIdx);
+                    else document.getElementById('jwt-vch-jwno')?.focus();
+                }
+            });
+        }
 
         if (kInp) {
             kInp.addEventListener('focus', () => {
@@ -422,7 +497,15 @@
         const address = String(document.getElementById('jwt-fm-addr')?.value || '').trim();
         const mobile = String(document.getElementById('jwt-fm-mob')?.value || '').trim();
         const gst = String(document.getElementById('jwt-fm-gst')?.value || '').trim().toUpperCase();
-        J.setStoreSafe(J.FIRM_STORE_KEY, { name, address, mobile, gst });
+        const firms = J.safeArr(J.getStoreSafe(J.FIRMS_LIST_KEY)).slice();
+        const defIdx = firms.findIndex((f) => f && f.isDefault);
+        const targetIdx = defIdx >= 0 ? defIdx : (firms.length ? 0 : -1);
+        if (targetIdx >= 0) {
+            firms[targetIdx] = { ...firms[targetIdx], name, address, mob: mobile, gst, isDefault: true };
+        } else {
+            firms.push({ id: `firm_${Date.now()}`, name, address, mob: mobile, gst, city: '', agent: '', email: '', isDefault: true });
+        }
+        J.setStoreSafe(J.FIRMS_LIST_KEY, firms);
         J.s.crAcceptOpen = false;
         J.toast(`✅ Firm [${name}] save ho gayi!`);
         window.jwtHandleEsc();
@@ -583,7 +666,16 @@
         s.vchRightIdx = 0;
         const w = J.getSnapshot().workers.find((x) => x.id === s.activeWorkerId);
         const isOutst = (dir === 'out' && w && J.getGroupObj(w.group).outstation);
-        s.vchMeta = { date: J.getTodayIso(), jwNo: isOutst ? J.getNextChallanNo() : '', transport: '', lrNo: '', designNote: '' };
+        const defFirm = J.getFirmProfile();
+        s.vchMeta = {
+            date: J.getTodayIso(),
+            firmId: isOutst ? defFirm.id : '',
+            firmName: isOutst ? defFirm.name : '',
+            jwNo: isOutst ? J.getNextChallanNo() : '',
+            transport: '',
+            lrNo: '',
+            designNote: ''
+        };
         window.jwtGo('jw-voucher');
     };
 
