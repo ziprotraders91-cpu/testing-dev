@@ -1,10 +1,10 @@
 /* ============================================================================
    SIMPLICITY ERP - HIGH-PERFORMANCE OFFLINE-FIRST PWA SERVICE WORKER
    File: sw.js • Developed by Farhan Jawed
-   Architecture: Network-First for Fresh Updates | Safe Offline Fallback (v13)
+   Architecture: Network-First for Fresh Updates | Safe Offline Fallback (v14)
 ============================================================================ */
 
-const CACHE_NAME = 'simplicity-cache-v13';
+const CACHE_NAME = 'simplicity-cache-v14';
 
 const ASSETS_TO_CACHE = [
   './',
@@ -64,12 +64,12 @@ const ASSETS_TO_CACHE = [
   './admin/admin.js?v=3.2',
 
   // JobWork Trail Modules
-  './jobwork-trail/jwt-core.js',
-  './jobwork-trail/jwt-engine.js',
-  './jobwork-trail/jwt-print.js',
-  './jobwork-trail/jwt-screens-1.js?v=1.1',
-  './jobwork-trail/jwt-screens-2.js?v=1.1',
-  './jobwork-trail/jwt-controllers.js?v=1.1',
+  './jobwork-trail/jwt-core.js?v=1.2',
+  './jobwork-trail/jwt-engine.js?v=1.2',
+  './jobwork-trail/jwt-print.js?v=1.2',
+  './jobwork-trail/jwt-screens-1.js?v=1.2',
+  './jobwork-trail/jwt-screens-2.js?v=1.2',
+  './jobwork-trail/jwt-controllers.js?v=1.2',
 
   // Dukan ERP Modules
   './dukan-erp/dukan-core.js?v=1.1',
