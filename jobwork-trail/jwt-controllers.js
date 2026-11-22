@@ -265,7 +265,7 @@
 
     window.jwtPickFoRight = (idx) => {
         const s = J.s;
-        const allBatches = J.getSnapshot().godamBatches.filter((b) => b.bucket !== 'lott' && b.pcs > 0);
+        const allBatches = J.getSnapshot().godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0);
         const item = s.foRightItems[idx];
         if (!item) return;
 
@@ -289,7 +289,7 @@
 
     window.jwtAddFoItem = () => {
         const s = J.s;
-        const allBatches = J.getSnapshot().godamBatches.filter((b) => b.bucket !== 'lott' && b.pcs > 0);
+        const allBatches = J.getSnapshot().godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0);
         const batch = allBatches.find((b) => b.key === s.foSelectedBatchKey);
         if (!batch) return J.toast('Pehle Kariger aur Stage chunein!', true);
 
@@ -935,7 +935,7 @@
                 const sInp = document.getElementById('jwt-fo-stage');
                 if (kInp) kInp.value = '';
                 if (sInp) sInp.value = '';
-                J.renderFoRightPanel(J.getSnapshot().godamBatches.filter((b) => b.bucket !== 'lott' && b.pcs > 0));
+                J.renderFoRightPanel(J.getSnapshot().godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0));
                 kInp?.focus();
                 return;
             }
