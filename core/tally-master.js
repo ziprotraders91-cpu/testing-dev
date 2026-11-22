@@ -425,6 +425,25 @@
                 color: #92400e;
                 font-weight: 700;
             }
+            @media (max-width: 768px) {
+                #stock-summary-section {
+                    overflow: visible !important;
+                }
+                #stock-summary-section .ss-topbar {
+                    padding: 10px 12px;
+                }
+                #stock-summary-section .ss-wrap {
+                    padding: 10px 12px;
+                    overflow-x: auto;
+                    -webkit-overflow-scrolling: touch;
+                }
+                #stock-summary-section .ss-table {
+                    min-width: 520px;
+                }
+                #stock-summary-section .ss-status-strip {
+                    display: none;
+                }
+            }
         `;
         document.head.appendChild(style);
     };
@@ -892,7 +911,6 @@
         `;
         document.head.appendChild(style);
     };
-
     const bindTallyManualNumberGuard = () => {
         if (window.__tmManualNumGuardBound) return;
         window.__tmManualNumGuardBound = true;
