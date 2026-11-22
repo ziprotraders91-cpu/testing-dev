@@ -96,7 +96,7 @@
         const clean = String(t || 'fresh').trim().toLowerCase();
         if (clean === 'cutting' || clean === 'cut') return 'cutting';
         if (clean === 'embroidery' || clean === 'emb') return 'embroidery';
-        if (clean === 'finished' || clean === 'finish' || clean === 'calender') return 'finished';
+        if (clean === 'finished' || clean === 'finish') return 'finished';
         if (clean === 'lott' || clean === 'lot' || clean === 'damage') return 'lott';
         return 'fresh';
     };
