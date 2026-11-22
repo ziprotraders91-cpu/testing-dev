@@ -13,6 +13,7 @@
     ======================================================================== */
     J.renderVchRightPanel = (sourceBatches) => {
         const s = J.s;
+        if (!s) return;
         const titleEl = document.getElementById('jwt-vch-r-title');
         const cntEl = document.getElementById('jwt-vch-r-cnt');
         const listEl = document.getElementById('jwt-vch-r-list');
@@ -55,6 +56,7 @@
 
     window.jwtPickVchRight = (idx) => {
         const s = J.s;
+        if (!s) return;
         const snap = J.getSnapshot();
         const w = snap.workers.find((x) => x.id === s.activeWorkerId);
         const sourceBatches = (s.vchDir === 'out') ? snap.godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0) : (w ? w.pendingItems : []);
@@ -84,6 +86,7 @@
 
     window.jwtAddVchItem = () => {
         const s = J.s;
+        if (!s) return;
         J.syncVchMetaFromDom();
         const snap = J.getSnapshot();
         const w = snap.workers.find((x) => x.id === s.activeWorkerId);
@@ -133,6 +136,7 @@
 
     J.bindVchVoucherKeys = (sourceBatches, isOutstationOut) => {
         const s = J.s;
+        if (!s) return;
         const kInp = document.getElementById('jwt-vch-kariger');
         const sInp = document.getElementById('jwt-vch-stage');
         const dSel = document.getElementById('jwt-vch-dest');
@@ -223,6 +227,7 @@
 
     J.renderFoRightPanel = (allBatches) => {
         const s = J.s;
+        if (!s) return;
         const titleEl = document.getElementById('jwt-fo-r-title');
         const cntEl = document.getElementById('jwt-fo-r-cnt');
         const listEl = document.getElementById('jwt-fo-r-list');
@@ -265,6 +270,7 @@
 
     window.jwtPickFoRight = (idx) => {
         const s = J.s;
+        if (!s) return;
         const allBatches = J.getSnapshot().godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0);
         const item = s.foRightItems[idx];
         if (!item) return;
@@ -289,6 +295,7 @@
 
     window.jwtAddFoItem = () => {
         const s = J.s;
+        if (!s) return;
         const allBatches = J.getSnapshot().godamBatches.filter((b) => b.bucket === 'unfinished' && b.pcs > 0);
         const batch = allBatches.find((b) => b.key === s.foSelectedBatchKey);
         if (!batch) return J.toast('Pehle Kariger aur Stage chunein!', true);
@@ -333,6 +340,7 @@
 
     J.bindFinalOutKeys = (allBatches) => {
         const s = J.s;
+        if (!s) return;
         const kInp = document.getElementById('jwt-fo-kariger');
         const sInp = document.getElementById('jwt-fo-stage');
         const qInp = document.getElementById('jwt-fo-qty');
@@ -401,7 +409,7 @@
     /* ========================================================================
        13. CREATE, ALTER, FIRM, REGISTER, STOCK, FINAL OUT, BILLS CONTROLLERS
     ======================================================================== */
-    window.jwtSetMenuIdx = (idx) => { J.s.menuIdx = J.safeInt(idx, 0); };
+    window.jwtSetMenuIdx = (idx) => { if (J.s) J.s.menuIdx = J.safeInt(idx, 0); };
 
     window.jwtOpenCreateWorker = () => {
         J.s.selectedCreateGroupKey = J.getWorkGroups()[0]?.key || 'cutting';
@@ -565,6 +573,7 @@
 
     window.jwtOpenWorkerVoucher = (dir) => {
         const s = J.s;
+        if (!s) return;
         s.vchDir = dir;
         s.vchBatch = [];
         s.vchAcceptOpen = false;
@@ -666,6 +675,7 @@
 
     window.jwtOpenFinalOutEntry = () => {
         const s = J.s;
+        if (!s) return;
         s.foBatch = []; s.foAcceptOpen = false; s.foPickStep = 'kariger';
         s.foSelectedMaker = null; s.foSelectedBatchKey = null; s.foRightIdx = 0; s.editFoId = null;
         window.jwtGo('final-out');
@@ -699,7 +709,7 @@
 
     J.renderBillWorkerList = (q) => {
         const box = document.getElementById('jwt-b-wlist');
-        if (!box) return;
+        if (!box || !J.s) return;
         const query = String(q || '').trim().toLowerCase();
         J.s.billWorkerItems = J.getSnapshot().workers.filter((w) => !query || `${w.name} ${J.grpLabel(w.group)}`.toLowerCase().includes(query));
         if (J.s.billWorkerIdx >= J.s.billWorkerItems.length) J.s.billWorkerIdx = 0;
@@ -905,6 +915,10 @@
     ======================================================================== */
     window.jwtHandleEsc = () => {
         const s = J.s;
+        if (!s) {
+            if (typeof window.backToDashboard === 'function') window.backToDashboard();
+            return;
+        }
         if (s.curView === 'jw-voucher') {
             if (s.vchAcceptOpen) { window.jwtCancelVchAccept(); return; }
             if (s.vchPickStep === 'stage') {
@@ -1027,6 +1041,7 @@
 
     J.handleKeyDown = (e) => {
         const s = J.s;
+        if (!s) return;
         if (document.getElementById('master-jobwork-express-modal')) return;
 
         const sec = document.getElementById('jw-trail-section');
@@ -1152,7 +1167,7 @@
                     rows[s.menuIdx]?.scrollIntoView({ block: 'nearest' });
                     return;
                 }
-                if (e.key === 'Enter' && !J.isNavGuarded() && s.curView !== 'jw-worker-hist') {
+                if (e.key === 'Enter' && typeof J.isNavGuarded === 'function' && !J.isNavGuarded() && s.curView !== 'jw-worker-hist') {
                     e.preventDefault(); e.stopImmediatePropagation();
                     rows[s.menuIdx]?.click();
                     return;
@@ -1171,21 +1186,23 @@
        15. ENTRY POINTS & LEGACY ERP BRIDGE
     ======================================================================== */
     J.openModuleAt = (startView, entryRoot = 'gateway') => {
+        if (!J.s) J.s = {};
         J.s.cachedSnapshot = null;
         J.s.entryRoot = entryRoot;
-        J.ensureSectionDOM();
+        if (typeof J.ensureSectionDOM === 'function') J.ensureSectionDOM();
         document.querySelectorAll('.module-section').forEach((secEl) => { secEl.style.display = 'none'; });
         const dView = document.getElementById('dashboard-view');
         if (dView) dView.style.display = 'none';
         const sec = document.getElementById('jw-trail-section');
         if (sec) sec.style.display = 'block';
-        window.jwtGo(startView || 'gateway');
+        if (typeof window.jwtGo === 'function') window.jwtGo(startView || 'gateway');
     };
 
     window.openJobWorkModule = () => J.openModuleAt('gateway', 'gateway');
     window.openSareeModule = () => J.openModuleAt('owner-menu', 'external');
 
     J.syncTallyMasterGroups = () => {
+        if (typeof J.getWorkGroups !== 'function') return;
         const listBox = document.getElementById('tm-group-list');
         if (!listBox) return;
         const groups = J.getWorkGroups();
@@ -1197,7 +1214,7 @@
                 div.dataset.grp = g.key;
                 div.dataset.label = g.label;
                 div.onclick = () => window.tmPickGroup && window.tmPickGroup(g.key, true);
-                div.innerHTML = `<span>${J.esc(g.label)}</span><small>JobWork</small>`;
+                div.innerHTML = `<span>${typeof J.esc === 'function' ? J.esc(g.label) : g.label}</span><small>JobWork</small>`;
                 listBox.appendChild(div);
             }
         });
@@ -1208,7 +1225,9 @@
         window.tmPickGroup = (grp, openSheetOrFocus) => {
             origTmPickGroup(grp, openSheetOrFocus);
             const inp = document.getElementById('tm-group');
-            if (inp && grp && grp !== 'kariger') inp.value = J.grpLabel(grp);
+            if (inp && grp && grp !== 'kariger' && typeof J.grpLabel === 'function') {
+                inp.value = J.grpLabel(grp);
+            }
         };
     }
 
@@ -1222,22 +1241,22 @@
 
     const origInvalidateJw = window.invalidateJobWorkCache;
     window.invalidateJobWorkCache = (workerId) => {
-        J.s.cachedSnapshot = null;
+        if (J.s) J.s.cachedSnapshot = null;
         if (typeof origInvalidateJw === 'function') origInvalidateJw(workerId);
     };
 
     const origInvalidateSaree = window.invalidateSareeCalcCache;
     window.invalidateSareeCalcCache = () => {
-        J.s.cachedSnapshot = null;
+        if (J.s) J.s.cachedSnapshot = null;
         if (typeof origInvalidateSaree === 'function') origInvalidateSaree();
     };
 
     const origTriggerRefresh = window.triggerActiveSectionRefresh;
     window.triggerActiveSectionRefresh = () => {
-        J.s.cachedSnapshot = null;
+        if (J.s) J.s.cachedSnapshot = null;
         if (typeof origTriggerRefresh === 'function') origTriggerRefresh();
         const sec = document.getElementById('jw-trail-section');
-        if (sec && sec.style.display !== 'none') {
+        if (sec && sec.style.display !== 'none' && typeof J.renderScreen === 'function') {
             J.renderScreen();
         }
     };
@@ -1245,10 +1264,14 @@
     window.removeEventListener('keydown', J.handleKeyDown, true);
     window.addEventListener('keydown', J.handleKeyDown, true);
 
+    const initJwtControllers = () => {
+        if (typeof J.ensureSectionDOM === 'function') J.ensureSectionDOM();
+        if (typeof J.syncTallyMasterGroups === 'function') J.syncTallyMasterGroups();
+    };
+
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => { J.ensureSectionDOM(); J.syncTallyMasterGroups(); });
+        document.addEventListener('DOMContentLoaded', initJwtControllers);
     } else {
-        J.ensureSectionDOM();
-        J.syncTallyMasterGroups();
+        initJwtControllers();
     }
 })();
