@@ -10,6 +10,7 @@
 
     J.GROUPS_STORE_KEY = 'jobwork_groups';
     J.FIRM_STORE_KEY = 'jobwork_firm_profile';
+    J.FIRMS_LIST_KEY = 'dukan_firms';
     J.SEQ_STORE_KEY = 'jw_challan_seq';
 
     J.DEFAULT_GROUPS = [
@@ -37,7 +38,7 @@
         vchRightIdx: 0,
         vchBatch: [],
         vchAcceptOpen: false,
-        vchMeta: { date: '', jwNo: '', transport: '', lrNo: '', designNote: '' },
+        vchMeta: { date: '', firmId: '', firmName: '', jwNo: '', transport: '', lrNo: '', designNote: '' },
         lastChallanObj: null,
 
         editWorkerRowInfo: null,
@@ -211,19 +212,54 @@
     };
 
     /* ========================================================================
-       3. FIRM PROFILE (FROM + GST) & DYNAMIC WORK GROUPS
+       3. UNIFIED MULTI-FIRM (dukan_firms) & DYNAMIC WORK GROUPS
     ======================================================================== */
-    J.getFirmProfile = () => {
-        const raw = J.getStoreSafe(J.FIRM_STORE_KEY);
-        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    J.getFirmsList = () => {
+        const firms = J.safeArr(J.getStoreSafe(J.FIRMS_LIST_KEY)).filter((f) => f && f.name);
+        if (firms.length) return firms;
+
+        // Auto-migrate old single jobwork_firm_profile into dukan_firms if needed
+        const legacy = J.getStoreSafe(J.FIRM_STORE_KEY);
+        if (legacy && typeof legacy === 'object' && !Array.isArray(legacy) && legacy.name) {
+            const migrated = [{
+                id: 'firm_main',
+                name: String(legacy.name || 'INDIAN FABRICS').trim().toUpperCase(),
+                address: String(legacy.address || '').trim(),
+                mob: String(legacy.mobile || legacy.mob || '').trim(),
+                gst: String(legacy.gst || '').trim().toUpperCase(),
+                city: '',
+                agent: '',
+                email: '',
+                isDefault: true
+            }];
+            J.setStoreSafe(J.FIRMS_LIST_KEY, migrated);
+            return migrated;
+        }
+        return [];
+    };
+
+    J.getFirmProfile = (firmId = '', firmName = '') => {
+        const firms = J.getFirmsList();
+        let raw = null;
+        if (firmId) raw = firms.find((f) => String(f.id) === String(firmId));
+        if (!raw && firmName) raw = firms.find((f) => J.normText(f.name) === J.normText(firmName));
+        if (!raw) raw = firms.find((f) => f.isDefault) || firms[0];
+
+        if (raw && typeof raw === 'object') {
+            const mobVal = String(raw.mobile || raw.mob || '').trim();
+            const fullAddr = [raw.address, raw.city].filter(Boolean).join(', ');
             return {
+                id: String(raw.id || ''),
                 name: String(raw.name || 'INDIAN FABRICS').trim(),
-                address: String(raw.address || '').trim(),
-                mobile: String(raw.mobile || '').trim(),
-                gst: String(raw.gst || '').trim()
+                address: fullAddr,
+                mobile: mobVal,
+                mob: mobVal,
+                gst: String(raw.gst || '').trim(),
+                isDefault: Boolean(raw.isDefault)
             };
         }
-        return { name: 'INDIAN FABRICS', address: '', mobile: '', gst: '' };
+
+        return { id: '', name: 'INDIAN FABRICS', address: '', mobile: '', mob: '', gst: '', isDefault: true };
     };
 
     J.getWorkGroups = () => {
