@@ -1,6 +1,6 @@
 /* ============================================================================
    SIMPLICITY ERP - JOBWORK EXPRESS VOUCHER (UNIFIED TRAIL & DYNAMIC GROUPS)
-   File: jobwork-express/jobwork-express.js (v3.4 - Fresh Complete Build)
+   File: jobwork-express/jobwork-express.js (v3.5 - Final Out = Finished Stock)
    100% Synced with: jobwork-trail, saree_history, jobwork_workers,
    jobwork_groups, jobwork_firm_profile, jw_challan_seq,
    jobwork_sheets_*, dukan_transfer_history
@@ -163,7 +163,7 @@
     };
 
     const grpLabel = (key) => {
-        if (key === 'dukan') return 'Final Out (Dukan)';
+        if (key === 'dukan') return 'Final Out (Finished)';
         return getGroupObj(key).label;
     };
 
@@ -438,7 +438,7 @@
     const getUsedBatchQty = (batchKey) => expressBatchItems.filter((x) => x.batchKey === batchKey).reduce((s, x) => s + safeInt(x.qty), 0);
 
     const getActiveSourceBatches = () => {
-        if (activeCategory === 'dukan') return getGodamAvailableBatches(true);
+        if (activeCategory === 'dukan') return getGodamAvailableBatches(false);
         if (movementType === 'gayi') return getGodamAvailableBatches(false);
         const wId = document.getElementById('jw-exp-worker')?.value;
         return getWorkerPendingBatches(wId);
@@ -568,6 +568,16 @@
                 display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
                 font-size: 11px; color: #92400e; font-weight: 700;
             }
+            @media (max-width: 768px) {
+                .jw-overlay { padding: 0; align-items: stretch; }
+                .jw-card { max-width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0; border: none; }
+                .jw-header { padding: 10px 12px; }
+                .jw-body { padding: 12px; }
+                .jw-row { grid-template-columns: 1fr; gap: 3px; }
+                .jw-picker-list { min-height: 150px; max-height: 220px; }
+                .jw-batch-panel > div { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+                .jw-footer { display: none; }
+            }
         `;
         document.head.appendChild(style);
     };
@@ -598,7 +608,7 @@
             <button type="button" tabindex="-1" id="jw-exp-cat-${esc(g.key)}" class="jw-pill-btn ${i === 0 ? 'active' : ''}" onclick="switchJobWorkCategory('${esc(g.key)}')">
                 ${esc(g.label)}${i < 4 ? ` [F${i + 1}]` : ''}${g.outstation ? ' ★' : ''}
             </button>
-        `).join('') + `<button type="button" tabindex="-1" id="jw-exp-cat-dukan" class="jw-pill-btn" onclick="switchJobWorkCategory('dukan')">Final Out (Dukan)</button>`;
+        `).join('') + `<button type="button" tabindex="-1" id="jw-exp-cat-dukan" class="jw-pill-btn" onclick="switchJobWorkCategory('dukan')">Final Out (Finished)</button>`;
 
         const modalHtml = `
         <div id="master-jobwork-express-modal" class="jw-overlay">
@@ -759,8 +769,8 @@
         const q = String(queryText || '').trim().toLowerCase();
         if (activeCategory === 'dukan') {
             return [
-                { label: 'Apni Main Dukan', sub: 'Main', id: 'Apni Main Dukan' },
-                { label: 'Party / Retailer', sub: 'Party', id: 'Party / Retailer' }
+                { label: 'Godam Finished', sub: 'Finished Stock', id: 'Godam Finished' },
+                { label: 'Main Godown', sub: 'Finished Stock', id: 'Main Godown' }
             ].filter((x) => !q || x.label.toLowerCase().includes(q));
         }
 
@@ -785,7 +795,7 @@
             const groups = getWorkGroups();
             jwPickerItems = [
                 ...groups.map((g, i) => ({ label: `${i + 1}. ${g.label}`, sub: g.outstation ? 'Bill+Slip' : (i < 4 ? `F${i + 1}` : 'Group'), data: g.key })),
-                { label: `${groups.length + 1}. Final Out (Dukan)`, sub: 'Dispatch', data: 'dukan' }
+                { label: `${groups.length + 1}. Final Out (Finished)`, sub: 'Finished Stock', data: 'dukan' }
             ];
             const idx = jwPickerItems.findIndex((x) => x.data === activeCategory);
             jwPickerActiveIdx = idx >= 0 ? idx : 0;
@@ -798,7 +808,7 @@
             ];
             jwPickerActiveIdx = movementType === 'aayi' ? 1 : 0;
         } else if (mode === 'worker') {
-            if (titleEl) titleEl.textContent = activeCategory === 'dukan' ? 'Dukan / Party' : `List of ${grpLabel(activeCategory)} Workers`;
+            if (titleEl) titleEl.textContent = activeCategory === 'dukan' ? 'Remark / Godam' : `List of ${grpLabel(activeCategory)} Workers`;
             if (hintEl) hintEl.textContent = '↑↓ + Enter';
             jwPickerItems = getWorkerPickerList(queryText).map((w) => ({ label: w.label, sub: w.sub, data: w }));
             const curVal = document.getElementById('jw-exp-worker')?.value;
@@ -845,8 +855,8 @@
             const wTxt = document.getElementById('jw-exp-worker-input')?.value || '-';
             pickerEl.innerHTML = `<div style="padding:12px; font-size:12.5px; line-height:1.7;">
                 <div><strong>Process:</strong> ${esc(grpLabel(activeCategory))}</div>
-                <div><strong>Len-Den:</strong> ${activeCategory === 'dukan' ? 'Final Out' : (movementType === 'gayi' ? 'Out (Bhejein)' : 'In (Wapas Lein)')}</div>
-                <div><strong>Worker / Party:</strong> ${esc(wTxt)}</div>
+                <div><strong>Len-Den:</strong> ${activeCategory === 'dukan' ? 'Final Out (Finished)' : (movementType === 'gayi' ? 'Out (Bhejein)' : 'In (Wapas Lein)')}</div>
+                <div><strong>Worker / Remark:</strong> ${esc(wTxt)}</div>
             </div>`;
             return;
         }
@@ -1253,7 +1263,7 @@
         if (catInp) catInp.value = grpLabel(activeCategory);
 
         const lblW = document.getElementById('jw-exp-lbl-worker');
-        if (lblW) lblW.textContent = activeCategory === 'dukan' ? 'Dukan / Party :' : `${grpLabel(activeCategory)} Worker :`;
+        if (lblW) lblW.textContent = activeCategory === 'dukan' ? 'Remark / Godam :' : `${grpLabel(activeCategory)} Worker :`;
     };
 
     const updateMovementUI = () => {
@@ -1293,10 +1303,8 @@
         if (thDest) thDest.style.display = isIn ? 'table-cell' : 'none';
 
         if (destSel && isIn) {
-            const def = activeCategory === 'calender' ? 'finished' : 'godam';
             destSel.innerHTML = `
-                <option value="godam" ${def === 'godam' ? 'selected' : ''}>Godam (${esc(grpLabel(activeCategory))} Complete)</option>
-                <option value="finished" ${def === 'finished' ? 'selected' : ''}>Final Tayyar (Finished)</option>
+                <option value="godam" selected>Godam (${esc(grpLabel(activeCategory))} Complete)</option>
                 <option value="lott">Lott / Damage</option>
             `;
         }
@@ -1308,8 +1316,8 @@
         if (!wHid) return;
 
         if (activeCategory === 'dukan') {
-            wHid.value = 'Apni Main Dukan';
-            if (wInp) wInp.value = 'Apni Main Dukan';
+            wHid.value = 'Godam Finished';
+            if (wInp) wInp.value = 'Godam Finished';
             return;
         }
 
@@ -1430,14 +1438,16 @@
             const sH = safeArr(getFromStore('saree_history')).slice();
 
             if (isDukan) {
-                const partyNote = workerNameInput.trim() || 'Apni Main Dukan';
+                const partyNote = workerNameInput.trim() || 'Godam Finished';
                 const dukanHist = safeArr(getFromStore('dukan_transfer_history')).slice();
 
                 expressBatchItems.forEach((it, idx) => {
-                    const trTxt = formatTrail(it.doneStages, it.bucket);
+                    const refKey = `${txnId}_${idx}`;
+                    const trTxt = formatTrail(it.doneStages, 'unfinished');
+
                     sH.push({
-                        id: `sh_fo_${txnId}_${idx}`,
-                        refId: `${txnId}_${idx}`,
+                        id: `sh_fo_out_${refKey}`,
+                        refId: refKey,
                         date: dDate,
                         sareeName: it.saree,
                         karigerName: it.maker,
@@ -1445,18 +1455,40 @@
                         partyName: partyNote,
                         targetWorker: partyNote,
                         karkhanaId: it.karkhanaId,
-                        type: legacyTypeFromTrail(it.doneStages, it.bucket),
-                        typeLabel: `🚚 Final Out ➔ ${partyNote} [${trTxt}]`,
+                        type: legacyTypeFromTrail(it.doneStages, 'unfinished'),
+                        typeLabel: `✅ Final Out ➔ Finished [${trTxt}]`,
                         aai: 0,
                         gai: it.qty,
                         isOut: true,
                         doneStages: [...it.doneStages],
-                        stageBucket: it.bucket,
+                        stageBucket: 'unfinished',
                         note: partyNote,
-                        timestamp: now + idx
+                        timestamp: now + (idx * 2)
                     });
+
+                    sH.push({
+                        id: `sh_fo_fin_${refKey}`,
+                        refId: refKey,
+                        date: dDate,
+                        sareeName: it.saree,
+                        karigerName: it.maker,
+                        kariger: it.maker,
+                        partyName: partyNote,
+                        targetWorker: partyNote,
+                        karkhanaId: it.karkhanaId,
+                        type: 'finished',
+                        typeLabel: `🟣 Finished Stock (Final Out) [${trTxt}]`,
+                        aai: it.qty,
+                        gai: 0,
+                        isOut: false,
+                        doneStages: [...it.doneStages],
+                        stageBucket: 'finished',
+                        note: partyNote,
+                        timestamp: now + (idx * 2) + 1
+                    });
+
                     dukanHist.unshift({
-                        id: `${txnId}_${idx}`,
+                        id: refKey,
                         date: dDate,
                         sareeName: it.saree,
                         karigerName: it.maker,
@@ -1464,8 +1496,8 @@
                         note: `${partyNote} [${trTxt}]`,
                         karkhanaId: it.karkhanaId,
                         doneStages: [...it.doneStages],
-                        stageBucket: it.bucket,
-                        timestamp: now + idx
+                        stageBucket: 'finished',
+                        timestamp: now + (idx * 2)
                     });
                 });
 
@@ -1474,10 +1506,10 @@
 
                 lastSavedExpressBatch = {
                     isOutstation: false,
-                    title: 'FINAL OUT (DISPATCH)',
+                    title: 'FINAL OUT (FINISHED STOCK)',
                     party: partyNote,
                     date: dDate,
-                    items: expressBatchItems.map((x) => ({ maker: x.maker, saree: x.saree, trail: formatTrail(x.doneStages, x.bucket), qty: x.qty }))
+                    items: expressBatchItems.map((x) => ({ maker: x.maker, saree: x.saree, trail: formatTrail(x.doneStages, 'unfinished'), qty: x.qty }))
                 };
                 if (typeof window.renderDukanTransferTable === 'function') { try { window.renderDukanTransferTable(); } catch (_) {} }
             } else {
@@ -1681,7 +1713,7 @@
             renderExpressBatchGrid();
 
             const statusEl = document.getElementById('jw-exp-status-msg');
-            if (statusEl) statusEl.textContent = '✅ Batch safalta-poorvak save ho gaya!';
+            if (statusEl) statusEl.textContent = isDukan ? '✅ Final Out save hua — Finished Stock me jud gaya!' : '✅ Batch safalta-poorvak save ho gaya!';
             focusFirstField('jw-exp-maker-input');
         } finally {
             isSubmitting = false;
