@@ -596,7 +596,7 @@
             return true;
         }
 
-        // VOUCHER (OUT / IN)
+        // VOUCHER (OUT / IN — WITH MULTI-FIRM RIGHT-SIDE PICKER)
         if (s.curView === 'jw-voucher') {
             const w = snap.workers.find((x) => x.id === s.activeWorkerId);
             if (!w) { J.jwtBackTo('jw-workers'); return true; }
@@ -604,7 +604,11 @@
             const gLbl = grpObj.label;
             const isOut = (s.vchDir === 'out');
             const isOutstationOut = (isOut && grpObj.outstation);
-            const firm = J.getFirmProfile();
+            const firm = J.getFirmProfile(s.vchMeta.firmId, s.vchMeta.firmName);
+            if (isOutstationOut && !s.vchMeta.firmName) {
+                s.vchMeta.firmId = firm.id;
+                s.vchMeta.firmName = firm.name;
+            }
 
             if (!s.vchMeta.date) s.vchMeta.date = J.getTodayIso();
             if (isOutstationOut && !s.vchMeta.jwNo) s.vchMeta.jwNo = J.getNextChallanNo();
@@ -619,10 +623,7 @@
                     <div class="jwt-frow"><label>Tarikh :</label><input type="date" id="jwt-vch-date" class="jwt-inp" value="${J.esc(s.vchMeta.date)}"></div>
                     ${isOutstationOut ? `
                         <div class="jwt-frow"><label>From (Firm) :</label>
-                            <div style="display:flex; gap:6px; align-items:center;">
-                                <input type="text" class="jwt-inp" readonly value="${J.esc(firm.name)}${firm.gst ? ` (GST: ${J.esc(firm.gst)})` : ''}">
-                                <button type="button" tabindex="-1" class="jwt-esc" onclick="jwtGo('firm-profile')">Edit</button>
-                            </div>
+                            <input type="text" id="jwt-vch-firm" class="jwt-inp" autocomplete="off" value="${J.esc(firm.name)}" placeholder="Side List se Apni Firm chunein...">
                         </div>
                         <div class="jwt-frow"><label>JobWork No. :</label><input type="text" id="jwt-vch-jwno" class="jwt-inp" value="${J.esc(s.vchMeta.jwNo)}"></div>
                         <div class="jwt-frow"><label>Transport :</label><input type="text" id="jwt-vch-trans" class="jwt-inp" value="${J.esc(s.vchMeta.transport)}" placeholder="e.g. Patel / VRL Transport"></div>
@@ -697,7 +698,10 @@
             </div>`;
             J.renderVchRightPanel(sourceBatches);
             J.bindVchVoucherKeys(sourceBatches, isOutstationOut);
-            const focusTarget = (isOutstationOut && s.vchBatch.length === 0 && !s.vchMeta.transport) ? 'jwt-vch-trans' : 'jwt-vch-kariger';
+            const hasMultiFirm = J.getFirmsList().length > 1;
+            const focusTarget = (isOutstationOut && s.vchBatch.length === 0 && !s.vchMeta.transport)
+                ? (hasMultiFirm ? 'jwt-vch-firm' : 'jwt-vch-trans')
+                : 'jwt-vch-kariger';
             setTimeout(() => document.getElementById(focusTarget)?.focus(), 25);
             return true;
         }
