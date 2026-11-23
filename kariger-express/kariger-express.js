@@ -5,7 +5,8 @@
    Features:
    - TallyPrime White & Gold 2-Column Voucher Layout (Matching Profile Creation)
    - Dynamic Right-Pane Picker in Main Voucher, Alt+C (Naya Kariger) & Alt+N
-   - Full Profile Creation Fields in Alt+C (Mohalla, Join Date, karkhanaName)
+   - Separate Tani/Chukka Item & Sancha Maker Pickers + Maker-Wise Stock Deduction
+   - Clean Empty Inputs (No Pre-Filled 72 / 240 / 0.311 / 0.110 Defaults)
    - Auto-Tani Detection & Carry-Forward Rollover
    - Zero-Mouse Enter Chaining, Shift+Enter Back, Arrow Navigation & A6 Print
 ============================================================================ */
@@ -26,13 +27,13 @@
     let pickerArrowUsed = false;
 
     // Alt+C Modal Right-Pane Picker State
-    let altcPickerMode = 'preview'; // 'dup_kariger' | 'karkhana' | 'design' | 'tani' | 'chukka' | 'preview'
+    let altcPickerMode = 'preview'; // 'dup_kariger' | 'karkhana' | 'design' | 'tani' | 'tani_maker' | 'chukka' | 'chukka_maker' | 'preview'
     let altcPickerItems = [];
     let altcPickerActiveIdx = 0;
     let altcPickerArrowUsed = false;
 
     // Alt+N Modal Right-Pane Picker State
-    let ntaniPickerMode = 'tani'; // 'tani' | 'preview'
+    let ntaniPickerMode = 'tani'; // 'tani' | 'tani_maker' | 'preview'
     let ntaniPickerItems = [];
     let ntaniPickerActiveIdx = 0;
     let ntaniPickerArrowUsed = false;
@@ -77,6 +78,13 @@
         return isNaN(n) || !isFinite(n) ? fallback : n;
     };
 
+    const normPerson = (p) => {
+        if (typeof window.normalizePerson === 'function') return window.normalizePerson(p);
+        const s = String(p ?? '').trim();
+        if (!s || s === '-' || s.toLowerCase() === 'undefined' || s.toLowerCase() === 'null') return '';
+        return s;
+    };
+
     const getToday = () => {
         return (typeof window.getTodayDate === 'function')
             ? window.getTodayDate()
@@ -116,12 +124,31 @@
         return item ? safeNum(item.bacha) : 0;
     };
 
-    const getSanchaStockList = (category, kGodown, queryText = '') => {
-        const rawSancha = toArray(getFromStore('sancha_items'));
+    const getSanchaStockList = (category, kGodown, queryText = '', makerFilter = '') => {
         const q = String(queryText || '').trim().toLowerCase();
         const catTarget = String(category || 'tani').toLowerCase();
+        const mFilterNorm = normPerson(makerFilter);
+        const mFilterLower = mFilterNorm.toLowerCase();
         const seen = new Map();
 
+        if (typeof window.getSanchaUniqueStockRows === 'function') {
+            const rows = window.getSanchaUniqueStockRows(catTarget, kGodown);
+            rows.forEach((r) => {
+                const nm = String(r.name || '').trim();
+                if (!nm) return;
+                if (mFilterLower && normPerson(r.person).toLowerCase() !== mFilterLower) return;
+                const key = nm.toLowerCase();
+                if (q && !key.includes(q)) return;
+                if (seen.has(key)) {
+                    seen.get(key).bacha = safeNum((seen.get(key).bacha + safeNum(r.bacha)).toFixed(2));
+                } else {
+                    seen.set(key, { name: nm, bacha: safeNum(r.bacha) });
+                }
+            });
+            return Array.from(seen.values());
+        }
+
+        const rawSancha = toArray(getFromStore('sancha_items'));
         rawSancha.forEach((s) => {
             if (!s || !s.name) return;
             const cat = String(s.category || 'tani').toLowerCase();
@@ -129,6 +156,8 @@
 
             const matchKid = !kGodown || (!s.karkhanaId && kGodown === 'k_main') || String(s.karkhanaId) === String(kGodown);
             if (!matchKid) return;
+
+            if (mFilterLower && normPerson(s.person).toLowerCase() !== mFilterLower) return;
 
             const nm = s.name.trim();
             const key = nm.toLowerCase();
@@ -143,6 +172,73 @@
         });
 
         return Array.from(seen.values());
+    };
+
+    const getSanchaMakerList = (category, kGodown, itemName = '', queryText = '') => {
+        const catTarget = String(category || 'tani').toLowerCase();
+        const itemLower = String(itemName || '').trim().toLowerCase();
+        const q = String(queryText || '').trim().toLowerCase();
+        const makerMap = new Map();
+
+        const addMaker = (rawName, bachaAdd = 0, matchesItem = false) => {
+            const per = normPerson(rawName);
+            if (!per) return;
+            const key = per.toLowerCase();
+            if (!makerMap.has(key)) {
+                makerMap.set(key, { name: per, bacha: 0, matchesItem: false });
+            }
+            const m = makerMap.get(key);
+            m.bacha = safeNum((m.bacha + safeNum(bachaAdd)).toFixed(2));
+            if (matchesItem) m.matchesItem = true;
+        };
+
+        if (typeof window.getSanchaUniqueStockRows === 'function') {
+            const rows = window.getSanchaUniqueStockRows(catTarget, kGodown);
+            rows.forEach((r) => {
+                const per = normPerson(r.person);
+                if (!per) return;
+                const matchIt = itemLower && String(r.name || '').trim().toLowerCase() === itemLower;
+                if (!itemLower || matchIt) {
+                    addMaker(per, safeNum(r.bacha), matchIt);
+                } else {
+                    addMaker(per, 0, false);
+                }
+            });
+        } else {
+            const rawSancha = toArray(getFromStore('sancha_items'));
+            rawSancha.forEach((s) => {
+                if (!s) return;
+                const cat = String(s.category || 'tani').toLowerCase();
+                if (cat !== catTarget) return;
+                const matchKid = !kGodown || (!s.karkhanaId && kGodown === 'k_main') || String(s.karkhanaId) === String(kGodown);
+                if (!matchKid) return;
+                const per = normPerson(s.person);
+                if (!per) return;
+                const bacha = safeNum(s.bacha !== undefined ? s.bacha : (safeNum(s.aaya) - safeNum(s.gaya)));
+                const matchIt = itemLower && String(s.name || '').trim().toLowerCase() === itemLower;
+                addMaker(per, (!itemLower || matchIt) ? bacha : 0, matchIt);
+            });
+        }
+
+        // Include known Sancha Makers from Tani Orders
+        if (catTarget === 'tani') {
+            toArray(getFromStore('tani_orders_list')).forEach((o) => {
+                if (o && o.sancha) addMaker(o.sancha, 0, false);
+            });
+        }
+
+        let list = Array.from(makerMap.values());
+        if (q) {
+            list = list.filter((m) => m.name.toLowerCase().includes(q));
+        }
+
+        list.sort((a, b) => {
+            if (a.matchesItem !== b.matchesItem) return a.matchesItem ? -1 : 1;
+            if (b.bacha !== a.bacha) return b.bacha - a.bacha;
+            return a.name.localeCompare(b.name);
+        });
+
+        return list;
     };
 
     const getKarigerExpressDatalists = () => {
@@ -196,14 +292,38 @@
         return { kOpts, bOpts, zOpts, taniOpts, chukkaOpts };
     };
 
-    const deductSanchaStockItem = (itemName, category, wazan, kGodown, refKey, kName) => {
+    const deductSanchaStockItem = (itemName, category, wazan, kGodown, refKey, kName, makerName = '') => {
         if (!itemName || !wazan || wazan <= 0) return;
         const sList = toArray(getFromStore('sancha_items'));
-        const found = sList.find((x) => {
+        const catLower = String(category || 'tani').toLowerCase();
+        const makerNorm = normPerson(makerName);
+        const makerLower = makerNorm.toLowerCase();
+
+        // 1. Exact match: Item + Maker + Category + Godown
+        let found = sList.find((x) => {
             const matchKid = (!x.karkhanaId && kGodown === 'k_main') || String(x.karkhanaId) === String(kGodown);
+            const xPer = normPerson(x.person).toLowerCase();
             return x && x.name && x.name.toLowerCase() === itemName.toLowerCase() &&
-                   String(x.category || 'tani').toLowerCase() === category.toLowerCase() && matchKid;
+                   String(x.category || 'tani').toLowerCase() === catLower &&
+                   matchKid &&
+                   xPer === makerLower;
         });
+
+        // 2. Fallback: if makerName wasn't provided, or only unassigned entry exists
+        if (!found && !makerNorm) {
+            found = sList.find((x) => {
+                const matchKid = (!x.karkhanaId && kGodown === 'k_main') || String(x.karkhanaId) === String(kGodown);
+                return x && x.name && x.name.toLowerCase() === itemName.toLowerCase() &&
+                       String(x.category || 'tani').toLowerCase() === catLower && matchKid;
+            });
+        } else if (!found && makerNorm) {
+            found = sList.find((x) => {
+                const matchKid = (!x.karkhanaId && kGodown === 'k_main') || String(x.karkhanaId) === String(kGodown);
+                return x && x.name && x.name.toLowerCase() === itemName.toLowerCase() &&
+                       String(x.category || 'tani').toLowerCase() === catLower &&
+                       matchKid && normPerson(x.person) === '';
+            });
+        }
 
         if (found) {
             found.gaya = Math.max(0, safeNum((safeNum(found.gaya) + safeNum(wazan)).toFixed(2)));
@@ -213,19 +333,24 @@
 
         let sHist = toArray(getFromStore('sancha_history'));
         sHist.push({
-            id: `shist_${Date.now()}_${category.charAt(0)}`,
+            id: `shist_${Date.now()}_${catLower.charAt(0)}_${Math.floor(Math.random() * 1000)}`,
             refId: refKey,
             date: getToday(),
-            category: category,
+            category: catLower,
             name: itemName,
+            person: makerNorm || '-',
+            sanchaMaker: makerNorm || '-',
             kariger: kName,
-            type: `Kariger Issue (${category === 'tani' ? 'Tani' : 'Chukka'})`,
+            type: `Kariger Issue (${catLower === 'tani' ? 'Tani' : 'Chukka'})`,
             aaya: 0,
             gaya: safeNum(wazan),
             karkhanaId: kGodown,
             timestamp: Date.now()
         });
         setToStore('sancha_history', sHist);
+
+        if (typeof window.invalidateSanchaCalcCache === 'function') window.invalidateSanchaCalcCache();
+        if (typeof window.renderSanchaTable === 'function') window.renderSanchaTable();
     };
 
     /* ========================================================================
@@ -749,8 +874,8 @@
 
         prevDeliveredSarees = safeNum(calc.totSaree);
 
-        const rateBani = safeNum(currentActiveSheet.rateBani, 240);
-        const totalTaniTarget = safeNum(currentActiveSheet.taniPcs, 72);
+        const rateBani = safeNum(currentActiveSheet.rateBani, 0);
+        const totalTaniTarget = safeNum(currentActiveSheet.taniPcs, 0);
         const taniSancha = currentActiveSheet.taniSancha || 'N/A';
         const chukkaSancha = currentActiveSheet.chukkaSancha || 'N/A';
         const taniItem = currentActiveSheet.taniItem || 'Tani';
@@ -954,9 +1079,10 @@
             toArray(getFromStore('kariger_list')).forEach(k => k && addDesign(k.saree));
             toArray(getFromStore('saree_history')).forEach(s => s && addDesign(s.sareeName));
         } else if (mode === 'tani') {
-            if (titleEl) titleEl.textContent = `List of Tani Stock (${activeK?.name || 'Godown'})`;
+            if (titleEl) titleEl.textContent = `List of Tani Items (${activeK?.name || 'Godown'})`;
             if (hintEl) hintEl.textContent = '↑↓ + Enter';
-            const list = getSanchaStockList('tani', activeKid, q);
+            const selMaker = normPerson(document.getElementById('altc-tani-sancha')?.value);
+            const list = getSanchaStockList('tani', activeKid, q, selMaker);
             list.forEach((item) => {
                 altcPickerItems.push({
                     label: item.name,
@@ -964,15 +1090,40 @@
                     data: item.name
                 });
             });
-        } else if (mode === 'chukka') {
-            if (titleEl) titleEl.textContent = `List of Chukka Stock (${activeK?.name || 'Godown'})`;
+        } else if (mode === 'tani_maker') {
+            const selItem = String(document.getElementById('altc-tani-item')?.value || '').trim();
+            if (titleEl) titleEl.textContent = selItem ? `Tani Makers (${selItem})` : `List of Tani Makers`;
             if (hintEl) hintEl.textContent = '↑↓ + Enter';
-            const list = getSanchaStockList('chukka', activeKid, q);
+            const list = getSanchaMakerList('tani', activeKid, selItem, q);
+            list.forEach((m) => {
+                altcPickerItems.push({
+                    label: m.name,
+                    sub: m.bacha > 0 ? `${m.bacha.toFixed(2)} Kg` : 'Maker',
+                    data: m.name
+                });
+            });
+        } else if (mode === 'chukka') {
+            if (titleEl) titleEl.textContent = `List of Chukka Items (${activeK?.name || 'Godown'})`;
+            if (hintEl) hintEl.textContent = '↑↓ + Enter';
+            const selMaker = normPerson(document.getElementById('altc-chukka-sancha')?.value);
+            const list = getSanchaStockList('chukka', activeKid, q, selMaker);
             list.forEach((item) => {
                 altcPickerItems.push({
                     label: item.name,
                     sub: `${item.bacha.toFixed(2)} Kg`,
                     data: item.name
+                });
+            });
+        } else if (mode === 'chukka_maker') {
+            const selItem = String(document.getElementById('altc-chukka-item')?.value || '').trim();
+            if (titleEl) titleEl.textContent = selItem ? `Chukka Makers (${selItem})` : `List of Chukka Makers`;
+            if (hintEl) hintEl.textContent = '↑↓ + Enter';
+            const list = getSanchaMakerList('chukka', activeKid, selItem, q);
+            list.forEach((m) => {
+                altcPickerItems.push({
+                    label: m.name,
+                    sub: m.bacha > 0 ? `${m.bacha.toFixed(2)} Kg` : 'Maker',
+                    data: m.name
                 });
             });
         }
@@ -991,7 +1142,9 @@
                 ? 'Koi matching purana Kariger nahi mila (Naya naam safe hai).'
                 : (altcPickerMode === 'design'
                     ? 'Naya Saree Design seedha type karein.'
-                    : 'Is Godam me koi stock item nahi mila.');
+                    : ((altcPickerMode === 'tani_maker' || altcPickerMode === 'chukka_maker')
+                        ? 'Koi Maker nahi mila — naya Maker naam type karke [Enter] dabayein.'
+                        : 'Is Godam me koi stock item nahi mila.'));
             pickerEl.innerHTML = `<div style="padding:18px 12px; text-align:center; color:#6b7280; font-size:12px;">${emptyMsg}</div>`;
             return;
         }
@@ -1035,10 +1188,18 @@
             const inp = document.getElementById('altc-tani-item');
             if (inp) inp.value = item.data;
             moveAltCField('altc-tani-item', 1);
+        } else if (altcPickerMode === 'tani_maker') {
+            const inp = document.getElementById('altc-tani-sancha');
+            if (inp) inp.value = item.data;
+            moveAltCField('altc-tani-sancha', 1);
         } else if (altcPickerMode === 'chukka') {
             const inp = document.getElementById('altc-chukka-item');
             if (inp) inp.value = item.data;
             moveAltCField('altc-chukka-item', 1);
+        } else if (altcPickerMode === 'chukka_maker') {
+            const inp = document.getElementById('altc-chukka-sancha');
+            if (inp) inp.value = item.data;
+            moveAltCField('altc-chukka-sancha', 1);
         }
         updateAltCAccountPreview();
     };
@@ -1054,8 +1215,9 @@
         const mohalla = String(document.getElementById('altc-kar-mohalla')?.value || '').trim() || '-';
         const joinDate = document.getElementById('altc-kar-date')?.value || getToday();
         const taniItem = String(document.getElementById('altc-tani-item')?.value || '').trim() || '-';
-        const taniPcs = safeNum(document.getElementById('altc-tani-pcs')?.value, 72);
-        const rateBani = safeNum(document.getElementById('altc-rate-bani')?.value, 240);
+        const taniMaker = String(document.getElementById('altc-tani-sancha')?.value || '').trim() || '-';
+        const taniPcs = safeNum(document.getElementById('altc-tani-pcs')?.value, 0);
+        const rateBani = safeNum(document.getElementById('altc-rate-bani')?.value, 0);
 
         previewEl.innerHTML = `
             <div style="border-bottom:1px solid #eadab0; padding-bottom:8px; margin-bottom:8px;">
@@ -1079,6 +1241,7 @@
             </div>
             <div style="background:#fdf6e2; border:1px solid #e5d5a7; border-radius:4px; padding:8px; margin-top:10px; font-size:12px;">
                 <div>Tani 1: <strong>${esc(taniItem)}</strong> (${taniPcs} Pcs)</div>
+                <div style="margin-top:2px;">Maker: <strong>${esc(taniMaker)}</strong></div>
                 <div style="margin-top:3px;">Bani Rate: <strong style="color:#b47d00;">₹ ${rateBani.toFixed(2)} / Saree</strong></div>
             </div>
         `;
@@ -1165,7 +1328,7 @@
                             </div>
                             <div>
                                 <label style="font-size:11px; font-weight:700; color:#374151;">Sancha Maker :</label>
-                                <input type="text" id="altc-tani-sancha" placeholder="Jaise: Azhar" class="kexp-inp" style="font-size:12px;">
+                                <input type="text" id="altc-tani-sancha" placeholder="Select Maker..." autocomplete="off" class="kexp-inp" style="font-size:12px;">
                             </div>
                             <div>
                                 <label style="font-size:11px; font-weight:700; color:#374151;">Wazan (Kg) :</label>
@@ -1173,7 +1336,7 @@
                             </div>
                             <div>
                                 <label style="font-size:11px; font-weight:700; color:#374151;">Tani Saree :</label>
-                                <input type="number" id="altc-tani-pcs" value="72" class="kexp-inp kexp-inp-num" style="font-size:12px;">
+                                <input type="number" id="altc-tani-pcs" placeholder="0" class="kexp-inp kexp-inp-num" style="font-size:12px;">
                             </div>
                         </div>
 
@@ -1185,7 +1348,7 @@
                             </div>
                             <div>
                                 <label style="font-size:11px; font-weight:700; color:#374151;">Chukka Maker :</label>
-                                <input type="text" id="altc-chukka-sancha" placeholder="Jaise: Arman" class="kexp-inp" style="font-size:12px;">
+                                <input type="text" id="altc-chukka-sancha" placeholder="Select Maker..." autocomplete="off" class="kexp-inp" style="font-size:12px;">
                             </div>
                             <div>
                                 <label style="font-size:11px; font-weight:700; color:#374151;">Wazan (Kg) :</label>
@@ -1193,7 +1356,7 @@
                             </div>
                             <div>
                                 <label style="font-size:11px; font-weight:700; color:#374151;">Chukka Pcs :</label>
-                                <input type="number" id="altc-chukka-pcs" value="72" class="kexp-inp kexp-inp-num" style="font-size:12px;">
+                                <input type="number" id="altc-chukka-pcs" placeholder="0" class="kexp-inp kexp-inp-num" style="font-size:12px;">
                             </div>
                         </div>
 
@@ -1201,15 +1364,15 @@
                         <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
                             <div>
                                 <label style="font-size:11px; font-weight:700; color:#374151;">Bani Rate (₹/Saree) :</label>
-                                <input type="number" id="altc-rate-bani" value="240" class="kexp-inp kexp-inp-num">
+                                <input type="number" id="altc-rate-bani" placeholder="0" class="kexp-inp kexp-inp-num">
                             </div>
                             <div>
                                 <label style="font-size:11px; font-weight:700; color:#374151;">Bana Rate (Kg/Saree) :</label>
-                                <input type="number" step="0.001" id="altc-rate-bana" value="0.311" class="kexp-inp kexp-inp-num">
+                                <input type="number" step="0.001" id="altc-rate-bana" placeholder="0.000" class="kexp-inp kexp-inp-num">
                             </div>
                             <div>
                                 <label style="font-size:11px; font-weight:700; color:#374151;">Zari Rate (Kg/Saree) :</label>
-                                <input type="number" step="0.001" id="altc-rate-zari" value="0.110" class="kexp-inp kexp-inp-num">
+                                <input type="number" step="0.001" id="altc-rate-zari" placeholder="0.000" class="kexp-inp kexp-inp-num">
                             </div>
                         </div>
 
@@ -1286,7 +1449,9 @@
             'altc-kar-godown': 'karkhana',
             'altc-kar-saree': 'design',
             'altc-tani-item': 'tani',
-            'altc-chukka-item': 'chukka'
+            'altc-tani-sancha': 'tani_maker',
+            'altc-chukka-item': 'chukka',
+            'altc-chukka-sancha': 'chukka_maker'
         };
 
         ALTC_FIELD_ORDER.forEach((fid) => {
@@ -1305,8 +1470,6 @@
                 if (fid === 'altc-kar-godown') {
                     el.removeAttribute('data-kid');
                     altcPickerArrowUsed = true;
-                } else if (fid === 'altc-tani-item' || fid === 'altc-chukka-item' || fid === 'altc-kar-saree') {
-                    // Only treat as list selection if user presses arrows or clicks
                 }
                 altcPickerActiveIdx = 0;
                 const mode = pickerFocusMap[fid] || 'preview';
@@ -1315,7 +1478,14 @@
 
             el.addEventListener('keydown', (e) => {
                 const mode = pickerFocusMap[fid];
-                const isNavList = (mode === 'karkhana' || mode === 'design' || mode === 'tani' || mode === 'chukka');
+                const isNavList = (
+                    mode === 'karkhana' ||
+                    mode === 'design' ||
+                    mode === 'tani' ||
+                    mode === 'tani_maker' ||
+                    mode === 'chukka' ||
+                    mode === 'chukka_maker'
+                );
 
                 if (isNavList && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
                     if (altcPickerItems.length) {
@@ -1338,15 +1508,18 @@
                         return;
                     }
 
-                    // For Karkhana: pick matched/highlighted if user typed or navigated
                     if (fid === 'altc-kar-godown' && altcPickerArrowUsed && altcPickerItems.length) {
                         window.__altcPickItem(altcPickerActiveIdx);
                         return;
                     }
 
-                    // For Design / Tani / Chukka: only pick from list if user navigated with arrows
-                    if ((fid === 'altc-kar-saree' || fid === 'altc-tani-item' || fid === 'altc-chukka-item') &&
-                        altcPickerArrowUsed && altcPickerItems.length) {
+                    if ((
+                        fid === 'altc-kar-saree' ||
+                        fid === 'altc-tani-item' ||
+                        fid === 'altc-tani-sancha' ||
+                        fid === 'altc-chukka-item' ||
+                        fid === 'altc-chukka-sancha'
+                    ) && altcPickerArrowUsed && altcPickerItems.length) {
                         window.__altcPickItem(altcPickerActiveIdx);
                         return;
                     }
@@ -1406,11 +1579,11 @@
         list.push(newKarObj);
         setToStore('kariger_list', list);
 
-        const rateBani = safeNum(document.getElementById('altc-rate-bani')?.value, 240);
-        const rateBana = safeNum(document.getElementById('altc-rate-bana')?.value, 0.311);
-        const rateZari = safeNum(document.getElementById('altc-rate-zari')?.value, 0.110);
-        const taniPcs = safeNum(document.getElementById('altc-tani-pcs')?.value, 72);
-        const chukkaPcs = safeNum(document.getElementById('altc-chukka-pcs')?.value, 72);
+        const rateBani = safeNum(document.getElementById('altc-rate-bani')?.value, 0);
+        const rateBana = safeNum(document.getElementById('altc-rate-bana')?.value, 0);
+        const rateZari = safeNum(document.getElementById('altc-rate-zari')?.value, 0);
+        const taniPcs = safeNum(document.getElementById('altc-tani-pcs')?.value, 0);
+        const chukkaPcs = safeNum(document.getElementById('altc-chukka-pcs')?.value, 0);
 
         const taniItem = String(document.getElementById('altc-tani-item')?.value || '').trim();
         const taniSancha = String(document.getElementById('altc-tani-sancha')?.value || '').trim();
@@ -1457,11 +1630,12 @@
             setToStore(`kariger_sheets_${newKarigerId}`, sheets);
         }
 
+        // Deduct from exact chosen Sancha Maker's stock
         if (taniItem && taniWazan > 0) {
-            deductSanchaStockItem(taniItem, 'tani', taniWazan, kGodown, `${newKarigerId}_tani_1_t`, name);
+            deductSanchaStockItem(taniItem, 'tani', taniWazan, kGodown, `${newKarigerId}_tani_1_t`, name, taniSancha);
         }
         if (chukkaItem && chukkaWazan > 0) {
-            deductSanchaStockItem(chukkaItem, 'chukka', chukkaWazan, kGodown, `${newKarigerId}_tani_1_c`, name);
+            deductSanchaStockItem(chukkaItem, 'chukka', chukkaWazan, kGodown, `${newKarigerId}_tani_1_c`, name, chukkaSancha);
         }
 
         if (typeof window.updateDashboardBadgeTotals === 'function') {
@@ -1491,7 +1665,7 @@
     };
 
     /* ========================================================================
-       7. NAYI TANI MODAL (2-COLUMN TALLY WHITE & GOLD WITH PICKER)
+       7. NAYI TANI MODAL (2-COLUMN TALLY WHITE & GOLD WITH ITEM + MAKER PICKER)
        ------------------------------------------------------------------------
     ======================================================================== */
     const NTANI_FIELD_ORDER = [
@@ -1535,16 +1709,29 @@
 
         pickerEl.style.display = 'block';
         previewEl.style.display = 'none';
-        if (titleEl) titleEl.textContent = 'List of Tani Stock';
-        if (hintEl) hintEl.textContent = '↑↓ + Enter';
-
         const kGodown = selectedKariger ? (selectedKariger.karkhanaId || 'k_main') : 'k_main';
-        const list = getSanchaStockList('tani', kGodown, queryText);
-        ntaniPickerItems = list.map(item => ({
-            label: item.name,
-            sub: `${item.bacha.toFixed(2)} Kg`,
-            data: item.name
-        }));
+
+        if (mode === 'tani_maker') {
+            const selItem = String(document.getElementById('ntani-tani-item')?.value || '').trim();
+            if (titleEl) titleEl.textContent = selItem ? `Tani Makers (${selItem})` : 'List of Tani Makers';
+            if (hintEl) hintEl.textContent = '↑↓ + Enter';
+            const list = getSanchaMakerList('tani', kGodown, selItem, queryText);
+            ntaniPickerItems = list.map(m => ({
+                label: m.name,
+                sub: m.bacha > 0 ? `${m.bacha.toFixed(2)} Kg` : 'Maker',
+                data: m.name
+            }));
+        } else {
+            if (titleEl) titleEl.textContent = 'List of Tani Items';
+            if (hintEl) hintEl.textContent = '↑↓ + Enter';
+            const selMaker = normPerson(document.getElementById('ntani-tani-sancha')?.value);
+            const list = getSanchaStockList('tani', kGodown, queryText, selMaker);
+            ntaniPickerItems = list.map(item => ({
+                label: item.name,
+                sub: `${item.bacha.toFixed(2)} Kg`,
+                data: item.name
+            }));
+        }
 
         if (ntaniPickerActiveIdx >= ntaniPickerItems.length) ntaniPickerActiveIdx = 0;
         if (ntaniPickerActiveIdx < 0) ntaniPickerActiveIdx = 0;
@@ -1556,7 +1743,10 @@
         if (!pickerEl) return;
 
         if (!ntaniPickerItems.length) {
-            pickerEl.innerHTML = `<div style="padding:18px 12px; text-align:center; color:#6b7280; font-size:12px;">Is Godam me koi Tani stock item nahi mila.</div>`;
+            const msg = ntaniPickerMode === 'tani_maker'
+                ? 'Koi Maker nahi mila — naya Maker naam type karke [Enter] dabayein.'
+                : 'Is Godam me koi Tani stock item nahi mila.';
+            pickerEl.innerHTML = `<div style="padding:18px 12px; text-align:center; color:#6b7280; font-size:12px;">${msg}</div>`;
             return;
         }
 
@@ -1577,9 +1767,15 @@
     window.__ntaniPickItem = (idx) => {
         const item = ntaniPickerItems[idx];
         if (!item) return;
-        const inp = document.getElementById('ntani-tani-item');
-        if (inp) inp.value = item.data;
-        moveNtaniField('ntani-tani-item', 1);
+        if (ntaniPickerMode === 'tani_maker') {
+            const inp = document.getElementById('ntani-tani-sancha');
+            if (inp) inp.value = item.data;
+            moveNtaniField('ntani-tani-sancha', 1);
+        } else {
+            const inp = document.getElementById('ntani-tani-item');
+            if (inp) inp.value = item.data;
+            moveNtaniField('ntani-tani-item', 1);
+        }
     };
 
     window.openExpressNewTaniModal = () => {
@@ -1616,7 +1812,7 @@
                 <div class="kexp-header">
                     <div>
                         <h3 class="kexp-title">Nayi Tani Chadhayein &bull; Tani ${nextNum} (${esc(selectedKariger.name)})</h3>
-                        <span style="font-size:11px; color:#6b7280;">[Enter] Next &bull; [Shift+Enter] Prev &bull; [&uarr;&darr;] Select Stock &bull; [Ctrl+Enter] Save &bull; [Esc] Close</span>
+                        <span style="font-size:11px; color:#6b7280;">[Enter] Next &bull; [Shift+Enter] Prev &bull; [&uarr;&darr;] Select List &bull; [Ctrl+Enter] Save &bull; [Esc] Close</span>
                     </div>
                     <button type="button" class="kexp-pill-btn" onclick="closeExpressNewTaniModal()">&larr; [Esc] Close</button>
                 </div>
@@ -1628,12 +1824,12 @@
                         <div class="kexp-sec-title" style="margin-top:0;">Naya Taana / Sancha Details</div>
                         <div class="kexp-row">
                             <label class="kexp-lbl">Tani Item :</label>
-                            <input type="text" id="ntani-tani-item" placeholder="Select Tani Stock..." autocomplete="off" class="kexp-inp" style="border-color:#d9a425;">
+                            <input type="text" id="ntani-tani-item" placeholder="Select Tani Item..." autocomplete="off" class="kexp-inp" style="border-color:#d9a425;">
                             <datalist id="ntani-tani-dl">${taniOpts}</datalist>
                         </div>
                         <div class="kexp-row">
                             <label class="kexp-lbl">Sancha Maker :</label>
-                            <input type="text" id="ntani-tani-sancha" value="${esc(currentActiveSheet.taniSancha || '')}" class="kexp-inp">
+                            <input type="text" id="ntani-tani-sancha" placeholder="Select Sancha Maker..." autocomplete="off" class="kexp-inp">
                         </div>
                         <div class="kexp-row-2">
                             <div class="kexp-mini-row">
@@ -1642,7 +1838,7 @@
                             </div>
                             <div class="kexp-mini-row">
                                 <label class="kexp-lbl">Target Pcs :</label>
-                                <input type="number" id="ntani-tani-pcs" value="${currentActiveSheet.taniPcs || 72}" class="kexp-inp kexp-inp-num">
+                                <input type="number" id="ntani-tani-pcs" placeholder="0" class="kexp-inp kexp-inp-num">
                             </div>
                         </div>
 
@@ -1650,15 +1846,15 @@
                         <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
                             <div>
                                 <label style="font-size:11px; font-weight:700; color:#374151;">Bani (₹/Saree) :</label>
-                                <input type="number" id="ntani-rate-bani" value="${currentActiveSheet.rateBani || 240}" class="kexp-inp kexp-inp-num">
+                                <input type="number" id="ntani-rate-bani" placeholder="0" class="kexp-inp kexp-inp-num">
                             </div>
                             <div>
                                 <label style="font-size:11px; font-weight:700; color:#374151;">Bana Rate :</label>
-                                <input type="number" step="0.001" id="ntani-rate-bana" value="${currentActiveSheet.rateBana || 0.311}" class="kexp-inp kexp-inp-num">
+                                <input type="number" step="0.001" id="ntani-rate-bana" placeholder="0.000" class="kexp-inp kexp-inp-num">
                             </div>
                             <div>
                                 <label style="font-size:11px; font-weight:700; color:#374151;">Zari Rate :</label>
-                                <input type="number" step="0.001" id="ntani-rate-zari" value="${currentActiveSheet.rateZari || 0.110}" class="kexp-inp kexp-inp-num">
+                                <input type="number" step="0.001" id="ntani-rate-zari" placeholder="0.000" class="kexp-inp kexp-inp-num">
                             </div>
                         </div>
                     </div>
@@ -1666,7 +1862,7 @@
                     <!-- RIGHT PANE -->
                     <div class="kexp-right-panel" style="min-height:260px;">
                         <div class="kexp-right-head">
-                            <span id="ntani-right-title">List of Tani Stock</span>
+                            <span id="ntani-right-title">List of Tani Items</span>
                             <span id="ntani-right-hint" style="font-size:11px; color:#6b7280; font-weight:600;">&uarr;&darr; + Enter</span>
                         </div>
                         <div id="ntani-right-picker" class="kexp-picker-list"></div>
@@ -1700,21 +1896,25 @@
             const el = document.getElementById(fid);
             if (!el) return;
 
+            const pickerKind = (fid === 'ntani-tani-item')
+                ? 'tani'
+                : (fid === 'ntani-tani-sancha' ? 'tani_maker' : 'preview');
+
             el.addEventListener('focus', () => {
                 ntaniPickerArrowUsed = false;
                 ntaniPickerActiveIdx = 0;
-                showNtaniRightPicker(fid === 'ntani-tani-item' ? 'tani' : 'preview', el.value);
+                showNtaniRightPicker(pickerKind, el.value);
             });
 
-            if (fid === 'ntani-tani-item') {
+            if (pickerKind !== 'preview') {
                 el.addEventListener('input', () => {
                     ntaniPickerActiveIdx = 0;
-                    showNtaniRightPicker('tani', el.value);
+                    showNtaniRightPicker(pickerKind, el.value);
                 });
             }
 
             el.addEventListener('keydown', (e) => {
-                if (fid === 'ntani-tani-item' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                if (pickerKind !== 'preview' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
                     if (ntaniPickerItems.length) {
                         e.preventDefault();
                         ntaniPickerArrowUsed = true;
@@ -1734,7 +1934,7 @@
                         moveNtaniField(fid, -1);
                         return;
                     }
-                    if (fid === 'ntani-tani-item' && ntaniPickerArrowUsed && ntaniPickerItems.length) {
+                    if (pickerKind !== 'preview' && ntaniPickerArrowUsed && ntaniPickerItems.length) {
                         window.__ntaniPickItem(ntaniPickerActiveIdx);
                         return;
                     }
@@ -1763,11 +1963,11 @@
         const taniItem = String(document.getElementById('ntani-tani-item')?.value || '').trim();
         const taniSancha = String(document.getElementById('ntani-tani-sancha')?.value || '').trim();
         const taniWazan = safeNum(document.getElementById('ntani-tani-wazan')?.value, 0);
-        const taniPcs = safeNum(document.getElementById('ntani-tani-pcs')?.value, 72);
+        const taniPcs = safeNum(document.getElementById('ntani-tani-pcs')?.value, 0);
 
-        const rateBani = safeNum(document.getElementById('ntani-rate-bani')?.value, 240);
-        const rateBana = safeNum(document.getElementById('ntani-rate-bana')?.value, 0.311);
-        const rateZari = safeNum(document.getElementById('ntani-rate-zari')?.value, 0.110);
+        const rateBani = safeNum(document.getElementById('ntani-rate-bani')?.value, 0);
+        const rateBana = safeNum(document.getElementById('ntani-rate-bana')?.value, 0);
+        const rateZari = safeNum(document.getElementById('ntani-rate-zari')?.value, 0);
 
         const sheets = (typeof window.getKarigerSheets === 'function') ? window.getKarigerSheets(kId) : [];
 
@@ -1783,9 +1983,9 @@
             rateZari: rateZari,
             rateBani: rateBani,
             taniPcs: taniPcs,
-            chukkaPcs: currentActiveSheet.chukkaPcs || 72,
-            taniItem: taniItem || currentActiveSheet.taniItem || '',
-            taniSancha: taniSancha || currentActiveSheet.taniSancha || '',
+            chukkaPcs: safeNum(currentActiveSheet.chukkaPcs, 0),
+            taniItem: taniItem,
+            taniSancha: taniSancha,
             taniWazan: taniWazan,
             chukkaItem: currentActiveSheet.chukkaItem || '',
             chukkaSancha: currentActiveSheet.chukkaSancha || '',
@@ -1802,8 +2002,13 @@
             setToStore(`kariger_sheets_${kId}`, sheets);
         }
 
+        // Deduct from exact chosen Sancha Maker's stock
         if (taniItem && taniWazan > 0) {
-            deductSanchaStockItem(taniItem, 'tani', taniWazan, kGodown, `${kId}_tani_${nextNum}_t`, selectedKariger.name);
+            deductSanchaStockItem(taniItem, 'tani', taniWazan, kGodown, `${kId}_tani_${nextNum}_t`, selectedKariger.name, taniSancha);
+        }
+
+        if (typeof window.updateDashboardBadgeTotals === 'function') {
+            window.updateDashboardBadgeTotals();
         }
 
         closeExpressNewTaniModal();
@@ -2102,7 +2307,7 @@
         const lott = safeNum(document.getElementById('kexp-saree-lott')?.value);
         const paid = safeNum(document.getElementById('kexp-paid-amount')?.value);
 
-        const rateBani = currentActiveSheet ? safeNum(currentActiveSheet.rateBani, 240) : 240;
+        const rateBani = currentActiveSheet ? safeNum(currentActiveSheet.rateBani, 0) : 0;
 
         let pichlaAmt = 0;
         if (currentActiveSheet && typeof window.calculateSheetTotals === 'function') {
@@ -2124,7 +2329,7 @@
 
         const progEl = document.getElementById('kexp-live-tani-progress');
         if (progEl && currentActiveSheet) {
-            const totalTaniTarget = safeNum(currentActiveSheet.taniPcs, 72);
+            const totalTaniTarget = safeNum(currentActiveSheet.taniPcs, 0);
             const liveTotalDelivered = prevDeliveredSarees + saree;
             const liveRemainingOnLoom = Math.max(0, totalTaniTarget - liveTotalDelivered);
             progEl.innerHTML = `Tani: <strong>${totalTaniTarget} Pcs</strong> &bull; Aayi: <strong>${liveTotalDelivered}</strong> &bull; Baki: <strong style="color:#b47d00;">${liveRemainingOnLoom} Pcs</strong>`;
@@ -2191,8 +2396,8 @@
                 id: 'tani_1', title: 'Tani 1',
                 pichlaBana: 0, pichlaZari: 0, pichlaBani: 0,
                 banaWaste: 0, zariWaste: 0,
-                rateBana: 0.311, rateZari: 0.110, rateBani: 240,
-                taniPcs: 72, chukkaPcs: 72, colors: [],
+                rateBana: 0, rateZari: 0, rateBani: 0,
+                taniPcs: 0, chukkaPcs: 0, colors: [],
                 note: '', rows: []
             }];
         }
@@ -2321,7 +2526,7 @@
             ? window.calculateSheetTotals(activeSheet)
             : { remainingAmt: 0, remainingBana: 0, remainingZari: 0, totSaree: 0 };
 
-        const targetTaniPcs = safeNum(activeSheet.taniPcs, 72);
+        const targetTaniPcs = safeNum(activeSheet.taniPcs, 0);
         const deliveredSoFar = safeNum(totalsAfter.totSaree);
 
         // AUTO-TANI COMPLETE & ROLLOVER TRIGGER
@@ -2347,11 +2552,11 @@
                 pichlaBani: pBani,
                 banaWaste: 0,
                 zariWaste: 0,
-                rateBana: safeNum(activeSheet.rateBana, 0.311),
-                rateZari: safeNum(activeSheet.rateZari, 0.110),
-                rateBani: safeNum(activeSheet.rateBani, 240),
+                rateBana: safeNum(activeSheet.rateBana, 0),
+                rateZari: safeNum(activeSheet.rateZari, 0),
+                rateBani: safeNum(activeSheet.rateBani, 0),
                 taniPcs: targetTaniPcs,
-                chukkaPcs: safeNum(activeSheet.chukkaPcs, 72),
+                chukkaPcs: safeNum(activeSheet.chukkaPcs, 0),
                 taniItem: activeSheet.taniItem || '',
                 taniSancha: activeSheet.taniSancha || '',
                 taniWazan: 0,
