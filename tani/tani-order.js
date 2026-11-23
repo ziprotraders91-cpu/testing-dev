@@ -84,6 +84,13 @@
         return isNaN(n) || !isFinite(n) ? fallback : n;
     };
 
+    const normPerson = (p) => {
+        if (typeof window.normalizePerson === 'function') return window.normalizePerson(p);
+        const s = String(p ?? '').trim();
+        if (!s || s === '-' || s.toLowerCase() === 'undefined' || s.toLowerCase() === 'null') return '';
+        return s;
+    };
+
     const setText = (id, val) => {
         const el = document.getElementById(id);
         if (el) el.textContent = (val !== undefined && val !== null) ? String(val) : '';
@@ -629,7 +636,7 @@
     };
 
     /* ========================================================================
-       6. SMART INLINE SUGGESTIONS & 100% MOHALLA AUTO-FILL
+       6. SMART INLINE SUGGESTIONS & 100% MOHALLA AUTO-FILL (MAKER-CLEAN)
        ======================================================================== */
     const getTaniSuggestList = (fieldId) => {
         if (fieldId === 'tani-order-kariger') {
@@ -638,13 +645,30 @@
                 .map(k => ({ value: k.name.trim(), meta: k.mohalla || k.saree || '' }));
         }
         if (fieldId === 'tani-order-sancha') {
-            const sanchaItems = toArray(getFromStore('sancha_items'))
-                .filter(s => (s?.category || 'tani').toLowerCase() === 'tani');
-            const names = [...new Set([
-                ...sanchaItems.map(s => s.name).filter(Boolean),
-                ...getTaniOrders().map(o => o.sancha).filter(Boolean)
-            ])];
-            return names.map(n => ({ value: n, meta: 'Sancha' }));
+            // Pull Sancha Makers (person) from Sancha Stock + Past Tani Orders (NOT Tani Item names!)
+            const makerMap = new Map();
+            const addMaker = (rawName, metaTxt) => {
+                const nm = normPerson(rawName);
+                if (!nm) return;
+                const key = nm.toLowerCase();
+                if (!makerMap.has(key)) {
+                    makerMap.set(key, { value: nm, meta: metaTxt });
+                }
+            };
+
+            if (typeof window.getSanchaMakersSummary === 'function') {
+                window.getSanchaMakersSummary('tani', '', 'all').forEach((m) => {
+                    addMaker(m.name, `${safeNum(m.bacha).toFixed(1)} Kg`);
+                });
+            } else {
+                const sanchaItems = toArray(getFromStore('sancha_items'))
+                    .filter(s => s && (s.category || 'tani').toLowerCase() === 'tani');
+                sanchaItems.forEach((s) => addMaker(s.person, 'Sancha Maker'));
+            }
+
+            getTaniOrders().forEach((o) => addMaker(o?.sancha, 'Past Order'));
+
+            return Array.from(makerMap.values()).sort((a, b) => a.value.localeCompare(b.value));
         }
         if (fieldId === 'tani-order-rangi') {
             const learnedRangi = toArray(getFromStore('tani_learned_rangi'));
@@ -1497,7 +1521,6 @@
     const renderTaniOrdersTable = () => {
         ensureTaniOrderChrome();
 
-        // Keep detail view synced live if SanchaPortalSync pulls an update
         if (taniViewMode === 'detail' && activeDetailOrderId) {
             openTaniDetailView(activeDetailOrderId);
         }
@@ -1507,7 +1530,6 @@
 
         let list = getTaniOrders();
 
-        // Active tabs hide mounted 'loom' orders; '5. Loom Par' shows exclusively mounted 'loom' orders
         if (window.currentTaniOrderTab !== 'loom') {
             list = list.filter(item => String(item.status || 'sancha').toLowerCase() !== 'loom');
         }
