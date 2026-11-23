@@ -6,7 +6,14 @@
    File: dukan-erp/dukan-barcode.js
 ============================================================================ */
 (() => {
+    'use strict';
+
     const D = window.DukanERP;
+    if (!D) {
+        console.error('[dukan-barcode] DukanERP core load nahi hua!');
+        return;
+    }
+
     let viewMode = 'choice'; // 'choice' | 'form' | 'register'
     let choiceIdx = 0;
     let editId = '';
@@ -118,10 +125,11 @@
         const designs = D.get('dukan_designs');
         const getFiltered = () => {
             const q = regSearch.trim().toLowerCase();
-            if (!q) return designs;
+            if (!q) return designs.filter(Boolean);
             return designs.filter((d) => {
+                if (!d) return false;
                 const bachi = D.getDesignFinishedStock(d);
-                const blob = `${d.design} ${d.kariger} ${d.sareeName} ${d.specs} ${d.code} ${bachi}`.toLowerCase();
+                const blob = `${d.design || ''} ${d.kariger || ''} ${d.sareeName || ''} ${d.specs || ''} ${d.code || ''} ${bachi}`.toLowerCase();
                 return blob.includes(q);
             });
         };
@@ -146,16 +154,17 @@
             if (tb) {
                 tb.innerHTML = pg.rows.length ? pg.rows.map((d, i) => {
                     const bachi = D.getDesignFinishedStock(d);
+                    const safeId = D.esc(String(d.id || ''));
                     return `
-                        <tr class="dk-nav-row ${i === regNav ? 'active' : ''}" onclick="DukanERP.bcEditFromReg('${d.id}')">
+                        <tr class="dk-nav-row ${i === regNav ? 'active' : ''}" onclick="DukanERP.bcEditFromReg('${safeId}')">
                             <td><strong>${D.esc(d.design)}</strong><br><small>${D.esc(d.specs || '-')}</small></td>
                             <td><b>${D.esc(d.code || '-')}</b></td>
                             <td>${D.esc(d.kariger || '-')}<br><small>${D.esc(d.sareeName || '-')}</small></td>
                             <td><strong style="color:#15803d;">${bachi} Pc</strong></td>
                             <td style="white-space:nowrap;">
-                                <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.bcEditFromReg('${d.id}')">✏️ Edit</button>
-                                <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.bcQuickPrint('${d.id}')">🖨️ TSC</button>
-                                <button type="button" class="dk-btn-del" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.deleteDesignById('${d.id}')">🗑️ Del</button>
+                                <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.bcEditFromReg('${safeId}')">✏️ Edit</button>
+                                <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.bcQuickPrint('${safeId}')">🖨️ TSC</button>
+                                <button type="button" class="dk-btn-del" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.deleteDesignById('${safeId}')">🗑️ Del</button>
                             </td>
                         </tr>`;
                 }).join('') : `<tr><td colspan="5" style="text-align:center;color:#9ca3af;">Koi barcode / design nahi mila</td></tr>`;
@@ -225,7 +234,7 @@
         const designs = D.get('dukan_designs');
         const finRows = D.getFinishedStockRows();
         const karigers = D.getKarigers();
-        const cur = editId ? designs.find((x) => x.id === editId) : null;
+        const cur = editId ? designs.find((x) => x && x.id === editId) : null;
 
         const curKar = cur?.kariger || '';
         const curSaree = cur?.sareeName || linkedSareeName || '';
@@ -285,9 +294,9 @@
                         const ql = q.toLowerCase();
                         const items = [];
                         finRows
-                            .filter((r) => !ql || `${r.karigerName} ${r.sareeName}`.toLowerCase().includes(ql))
+                            .filter((r) => r && (!ql || `${r.karigerName || ''} ${r.sareeName || ''}`.toLowerCase().includes(ql)))
                             .forEach((r) => {
-                                const ex = designs.find((d) =>
+                                const ex = designs.find((d) => d &&
                                     String(d.kariger || '').toUpperCase() === r.karigerName &&
                                     (!d.sareeName || String(d.sareeName).toUpperCase() === r.sareeName)
                                 );
@@ -302,11 +311,11 @@
                                 });
                             });
                         karigers
-                            .filter((k) => !ql || `${k.name} ${k.saree}`.toLowerCase().includes(ql))
+                            .filter((k) => k && k.name && (!ql || `${k.name} ${k.saree || ''}`.toLowerCase().includes(ql)))
                             .slice(0, 40)
                             .forEach((k) => {
                                 const nm = String(k.name).toUpperCase();
-                                const ex = designs.find((d) => String(d.kariger || '').toUpperCase() === nm);
+                                const ex = designs.find((d) => d && String(d.kariger || '').toUpperCase() === nm);
                                 items.push({
                                     label: nm,
                                     meta: ex ? `Design: ${ex.design}` : (k.saree || 'Kariger'),
@@ -340,7 +349,7 @@
                     title: 'Saved Designs',
                     noAutoHighlight: true,
                     getItems: (q) => designs
-                        .filter((d) => !q || `${d.design} ${d.kariger}`.toLowerCase().includes(q.toLowerCase()))
+                        .filter((d) => d && (!q || `${d.design || ''} ${d.kariger || ''}`.toLowerCase().includes(q.toLowerCase())))
                         .slice(0, 60)
                         .map((d) => ({ id: d.id, label: d.design, meta: `${d.kariger} · ${D.getDesignFinishedStock(d)} Pc` })),
                     onPick: (it) => {
@@ -413,7 +422,7 @@
         const code = (document.getElementById('bc-code')?.value || `${design}-KT`).trim().toUpperCase();
 
         const list = D.get('dukan_designs');
-        const existing = editId ? list.find((x) => x.id === editId) : list.find((x) => x.design === design);
+        const existing = editId ? list.find((x) => x && x.id === editId) : list.find((x) => x && x.design === design);
         if (existing) {
             existing.kariger = kariger || existing.kariger;
             existing.sareeName = sareeName || existing.sareeName || design;
@@ -450,10 +459,10 @@
 
     D.deleteDesignById = (id) => {
         const list = D.get('dukan_designs');
-        const target = list.find((x) => x.id === id);
+        const target = list.find((x) => x && x.id === id);
         if (!target) return;
         if (!confirm(`Kya aap [${target.design}] Design & Barcode delete karna chahte hain?`)) return;
-        D.set('dukan_designs', list.filter((x) => x.id !== id));
+        D.set('dukan_designs', list.filter((x) => x && x.id !== id));
         D.toast(`🗑️ [${target.design}] delete ho gaya!`);
         editId = '';
         if (fromRegister || viewMode === 'register') {
@@ -490,6 +499,10 @@
         }
 
         const w = window.open('', '_blank', 'width=850,height=600');
+        if (!w) {
+            D.toast('⚠️ Print popup block ho gaya! Browser me popup allow karein.');
+            return;
+        }
         w.document.write(`<html><head><style>
             ${pageCSS}
             *{font-family:Arial,Helvetica,sans-serif;color:#000}
@@ -513,7 +526,7 @@
     };
 
     D.bcQuickPrint = (id) => {
-        const d = D.get('dukan_designs').find((x) => x.id === id);
+        const d = D.get('dukan_designs').find((x) => x && x.id === id);
         if (!d) return;
         const bachi = D.getDesignFinishedStock(d);
         const qtyStr = prompt(`[${d.design}] ke kitne TSC 2-Up stickers print karne hain?`, String(bachi > 0 ? bachi : 10));
