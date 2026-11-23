@@ -2,6 +2,7 @@
    SIMPLICITY ERP - HIGH-PERFORMANCE OFFLINE-FIRST STORAGE & TALLY LOADER ENGINE
    File: core/storage.js • Developed by Farhan Jawed
    Architecture: L1-RAM / L2-Tiny-LS (<50KB) / L3-IndexedDB (GBs) / L4-Delta Cloud Queue
+   Upgraded: Global Master Keys + Key-Identity Support + Safe User Wipe + Queue Isolation
 ============================================================================ */
 
 (() => {
@@ -33,7 +34,18 @@
         'active_karkhana_id',
         'karkhana_transfers',
         'app_users',
-        'info_ledger'
+        'info_ledger',
+        'jobwork_groups',
+        'dukan_firms',
+        'dukan_parties',
+        'dukan_designs'
+    ]);
+
+    const PROTECTED_AUTH_LS_KEYS = new Set([
+        'app_current_user_id',
+        'app_active_session_auth',
+        'app_last_user_id',
+        'app_global_billing_config'
     ]);
 
     const DB_CONFIG = Object.freeze({
@@ -44,7 +56,7 @@
     });
 
     // Sirf chhoti aur instant startup keys localStorage me rahengi (< 50 KB)
-    // Baaki saara heavy data (800 karigers, sheets, stock, payments) sirf IndexedDB me rahega
+    // Baaki saara heavy data (karigers, sheets, stock, payments, dukan) sirf IndexedDB me rahega
     const isLightweightKey = (key) => {
         const k = String(key || '').toLowerCase();
         return (
@@ -55,7 +67,8 @@
             k.includes('karkhana_list') ||
             k.includes('active_karkhana') ||
             k.includes('billing_config') ||
-            k.includes('portal_token')
+            k.includes('portal_token') ||
+            k.includes('account_uid')
         );
     };
 
@@ -93,6 +106,9 @@
         if (!item || typeof item !== 'object') return null;
         if (item.id !== undefined && item.id !== null && String(item.id).trim() !== '') {
             return String(item.id).trim();
+        }
+        if (item.key !== undefined && item.key !== null && String(item.key).trim() !== '') {
+            return String(item.key).trim();
         }
         return null;
     };
@@ -465,6 +481,84 @@
         });
     };
 
+    /**
+     * ⭐ PERMANENT DELETE / RECREATE PROTECTION:
+     * Kisi user ka poora local RAM, localStorage, Delta Cursors, IndexedDB app_store aur sync_queue wipe karein
+     */
+    const wipeUserLocalCache = async (targetUid) => {
+        const uid = String(targetUid || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+        if (!uid) return;
+
+        clearMemoryCache();
+
+        // 1. localStorage se is user ki saari keys + delta sync cursors hatayein
+        try {
+            const toDel = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (!k || PROTECTED_AUTH_LS_KEYS.has(k)) continue;
+                const kl = k.toLowerCase();
+                if (
+                    kl.startsWith(`${uid}_`) ||
+                    kl.includes(`_${uid}_`) ||
+                    kl === `erp_account_uid_${uid}`
+                ) {
+                    toDel.push(k);
+                }
+            }
+            toDel.forEach((k) => localStorage.removeItem(k));
+        } catch (_) {}
+
+        // 2. IndexedDB (app_store + sync_queue) se is user ka SAARA data delete karein
+        try {
+            const dbase = await getIndexedDBPromise();
+            if (!dbase) return;
+
+            await new Promise((resolve) => {
+                try {
+                    const tx = dbase.transaction([DB_CONFIG.STORE_APP, DB_CONFIG.STORE_QUEUE], 'readwrite');
+                    const appStore = tx.objectStore(DB_CONFIG.STORE_APP);
+                    const queueStore = tx.objectStore(DB_CONFIG.STORE_QUEUE);
+
+                    const appReq = appStore.openCursor();
+                    appReq.onsuccess = (e) => {
+                        const cursor = e.target.result;
+                        if (cursor) {
+                            const kl = String(cursor.key || '').toLowerCase();
+                            if (kl.startsWith(`${uid}_`)) {
+                                cursor.delete();
+                            }
+                            cursor.continue();
+                        }
+                    };
+
+                    const qReq = queueStore.openCursor();
+                    qReq.onsuccess = (e) => {
+                        const cursor = e.target.result;
+                        if (cursor) {
+                            const val = cursor.value || {};
+                            const idStr = String(cursor.key || '').toLowerCase();
+                            const tkStr = String(val.targetKey || '').toLowerCase();
+                            if (
+                                idStr.startsWith(`${uid}_`) ||
+                                idStr.includes(`_${uid}_`) ||
+                                tkStr.startsWith(`${uid}_`)
+                            ) {
+                                cursor.delete();
+                            }
+                            cursor.continue();
+                        }
+                    };
+
+                    tx.oncomplete = () => resolve(true);
+                    tx.onerror = () => resolve(false);
+                } catch (_) {
+                    resolve(false);
+                }
+            });
+        } catch (_) {}
+    };
+
     const openEnterpriseIndexedDB = (callback) => {
         getIndexedDBPromise().then((dbase) => {
             if (typeof callback === 'function') callback(dbase);
@@ -575,9 +669,12 @@
     };
 
     const flushSyncQueue = async () => {
-        if (isSyncQueueFlushing || !navigator.onLine) return;
+        if (isSyncQueueFlushing || !navigator.onLine || !isUserLoggedIn()) return;
         const sb = getSupabase();
         if (!sb || !window.CloudEngine) return;
+
+        const currentUid = getEffectiveUserId();
+        if (!currentUid) return;
 
         isSyncQueueFlushing = true;
         try {
@@ -588,7 +685,11 @@
             const req = tx.objectStore(DB_CONFIG.STORE_QUEUE).getAll();
 
             req.onsuccess = async () => {
-                const queue = req.result || [];
+                const queue = (req.result || []).filter((item) => {
+                    const tk = String(item?.targetKey || '').toLowerCase();
+                    return tk.startsWith(`${currentUid}_`);
+                });
+
                 if (queue.length === 0) { isSyncQueueFlushing = false; return; }
 
                 if (typeof window.showSyncStatus === 'function') window.showSyncStatus('syncing');
@@ -1048,6 +1149,7 @@
         deleteStoreKey,
         updateRowSnapshot,
         clearMemoryCache,
+        wipeUserLocalCache,
         getStorageKey,
         getEffectiveUserId,
         openEnterpriseIndexedDB,
@@ -1072,6 +1174,7 @@
     window.GLOBAL_APP_KEYS = GLOBAL_APP_KEYS;
     window.StoragePreloadPromise = StoragePreloadPromise;
     window.clearMemoryCache = clearMemoryCache;
+    window.wipeUserLocalCache = wipeUserLocalCache;
     window.openEnterpriseIndexedDB = openEnterpriseIndexedDB;
     window.idbGet = idbGet;
     window.idbPut = idbPut;
