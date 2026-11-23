@@ -2,6 +2,7 @@
    SIMPLICITY ERP (THE TALLY BRIDGE) - DUKAN CORE ENGINE
    File: dukan-erp/dukan-core.js
    Fixed: restoreFinishedStockByRef & recalcOrderStatus crash aliases added
+   Updated: Dukan Day-Book (GW Item + Live Today Count)
 ============================================================================ */
 (() => {
     'use strict';
@@ -386,7 +387,7 @@
             .dk-ord-grid { display:grid; grid-template-columns:1fr 245px; }
             .dk-ord-main { border-right:1.5px solid #991b1b; display:flex; flex-direction:column; }
             .dk-ord-ms { padding:7px 10px; border-bottom:1.5px solid #991b1b; display:flex; align-items:center; gap:8px; background:#fffafa; }
-            .dk-ord-ms input { flex:1; border:none; border-bottom:1px dashed #991b1b; font-size:13.5px; font-weight:800; outline:none; background:transparent; padding:3px 4px; }
+            .dk-ord-ms input { flex:1; border:none; border-bottom:1.5px dashed #991b1b; font-size:13.5px; font-weight:800; outline:none; background:transparent; padding:3px 4px; }
             .dk-ord-tbl { width:100%; border-collapse:collapse; font-size:12px; }
             .dk-ord-tbl th { background:#fef2f2; color:#991b1b; border-bottom:1.5px solid #991b1b; border-right:1px solid #fca5a5; padding:6px; font-weight:800; }
             .dk-ord-tbl td { border-bottom:1px solid #fecaca; border-right:1px solid #fecaca; padding:4px; }
@@ -547,6 +548,13 @@
         console.warn('[DukanERP]', msg);
     };
 
+    const toIsoSafe = (val) => {
+        const s = String(val || '').trim();
+        if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+        const m = s.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
+        return m ? `${m[3]}-${m[2]}-${m[1]}` : s;
+    };
+
     const GW_ITEMS = [
         { k: 'c', label: '<span class="dk-gw-key">C</span>reate (Firm / Party / Alter)', meta: 'Master Setup', fn: () => safeCall('openCreate', 'Create') },
         { k: 'p', label: '<span class="dk-gw-key">P</span>arty Register', meta: 'Party → Pending / Complete', fn: () => safeCall('openPartyRegister', 'Party Register') },
@@ -554,7 +562,8 @@
         { k: 'o', label: '<span class="dk-gw-key">O</span>rder Form', meta: 'Create / Edit / Print', fn: () => safeCall('openOrderForm', 'Order Form') },
         { k: 'h', label: 'C<span class="dk-gw-key">h</span>allan &amp; Packing Slip', meta: 'Manual + A5 Print', fn: () => safeCall('openChallan', 'Challan') },
         { k: 'd', label: 'Pen<span class="dk-gw-key">d</span>ing Order (All)', meta: 'Party Wise', fn: () => safeCall('openAllOrders', 'Pending Orders', 'Pending') },
-        { k: 'l', label: 'Comp<span class="dk-gw-key">l</span>ete Order (All)', meta: 'Party Wise', fn: () => safeCall('openAllOrders', 'Complete Orders', 'Complete') }
+        { k: 'l', label: 'Comp<span class="dk-gw-key">l</span>ete Order (All)', meta: 'Party Wise', fn: () => safeCall('openAllOrders', 'Complete Orders', 'Complete') },
+        { k: 'y', label: 'Da<span class="dk-gw-key">y</span> Book (Rozana)', meta: 'Orders + Challans', fn: () => safeCall('openDayBook', 'Day Book') }
     ];
 
     window.openDukanGateway = function () {
@@ -572,8 +581,14 @@
         D.onEsc = null;
 
         const ords = D.get('dukan_orders');
+        const chs = D.get('dukan_challans');
+        const todayIso = D.today();
+        const todayOrd = ords.filter((o) => toIsoSafe(o?.date) === todayIso).length;
+        const todayCh = chs.filter((c) => toIsoSafe(c?.date) === todayIso).length;
+
         GW_ITEMS[5].meta = `${ords.filter((o) => o.status !== 'Complete').length} Pending`;
         GW_ITEMS[6].meta = `${ords.filter((o) => o.status === 'Complete').length} Complete`;
+        GW_ITEMS[7].meta = `Today: ${todayOrd} Ord · ${todayCh} Ch`;
 
         sec.innerHTML = `
             <div class="dk-gw-card">
@@ -588,7 +603,7 @@
                 <div class="dk-gw-sec">Orders &amp; Dispatch</div>
                 ${renderGwRow(3)}${renderGwRow(4)}
                 <div class="dk-gw-sec">Reports (All Parties)</div>
-                ${renderGwRow(5)}${renderGwRow(6)}
+                ${renderGwRow(5)}${renderGwRow(6)}${renderGwRow(7)}
                 <div class="dk-gw-head" style="border-top:1px solid #e5d5a7; border-bottom:none; font-size:11px; color:#92400e; font-weight:700;">
                     <span id="dk-gw-status">↑ ↓ Arrow · [Enter] Kholein · [Esc] Back</span>
                     <span>The Tally Bridge</span>
