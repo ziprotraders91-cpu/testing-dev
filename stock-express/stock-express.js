@@ -5,10 +5,10 @@
    Features:
    - TallyPrime White & Gold 2-Column Guided Drill-Down Voucher
    - Step-by-Step Right-Pane Pickers:
-     Category (Bana/Zari/Sancha) -> [Tani/Chukka] -> Mode (Purana/Naya) -> Stock List
+     Category (Bana/Zari/Sancha) -> [Tani/Chukka] -> Mode -> Stock -> Maker
+   - Maker-Wise Sancha Stock Isolation & Live Balance Preview
    - Tally-Style "Accept? (Yes / No)" Confirmation Bar at End
    - Zero-Mouse Enter Chaining, Shift+Enter Back & Instant A6 Print
-   - [YYYY-MM-DD Date Format Safe for <input type="date">]
 ============================================================================ */
 
 (() => {
@@ -20,9 +20,10 @@
     let lastSavedStockEntry = null;
 
     // Right-Pane Tally Picker State
-    let stkPickerMode = 'category'; // 'category' | 'sancha_type' | 'mode' | 'item_purana' | 'item_naya' | 'preview'
+    let stkPickerMode = 'category'; // 'category' | 'sancha_type' | 'mode' | 'item_purana' | 'item_naya' | 'sancha_person' | 'preview'
     let stkPickerItems = [];
     let stkPickerActiveIdx = 0;
+    let stkPersonArrowUsed = false;
 
     const toArray = (v) => {
         if (Array.isArray(v)) return v;
@@ -40,6 +41,13 @@
     const safeNum = (val, fallback = 0) => {
         const n = parseFloat(val);
         return isNaN(n) || !isFinite(n) ? fallback : n;
+    };
+
+    const normPerson = (p) => {
+        if (typeof window.normalizePerson === 'function') return window.normalizePerson(p);
+        const s = String(p ?? '').trim();
+        if (!s || s === '-' || s.toLowerCase() === 'undefined' || s.toLowerCase() === 'null') return '';
+        return s;
     };
 
     const getToday = () => {
@@ -139,27 +147,108 @@
                 items.push({ name: nm, bacha });
             });
         } else if (cat === 'sancha') {
-            const raw = toArray(window.getStore ? window.getStore('sancha_items') : []);
-            raw.forEach((x) => {
-                const nm = x?.name ? x.name.trim() : '';
-                if (!nm) return;
-                const itemCat = String(x.category || 'tani').toLowerCase();
-                if (itemCat !== String(subSanchaCat || 'tani').toLowerCase()) return;
-                const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-                if (!matchKid) return;
-                const key = nm.toLowerCase();
-                if (seen.has(key)) return;
-                seen.add(key);
-                if (q && !key.includes(q)) return;
+            const subCatLower = String(subSanchaCat || 'tani').toLowerCase();
+            if (typeof window.getSanchaUniqueStockRows === 'function') {
+                const rows = window.getSanchaUniqueStockRows(subCatLower, targetKid);
+                rows.forEach((r) => {
+                    const nm = String(r.name || '').trim();
+                    const per = normPerson(r.person);
+                    if (!nm) return;
+                    const hay = `${nm} ${per}`.toLowerCase();
+                    if (q && !hay.includes(q)) return;
+                    items.push({ name: nm, person: per, bacha: safeNum(r.bacha) });
+                });
+            } else {
+                const raw = toArray(window.getStore ? window.getStore('sancha_items') : []);
+                raw.forEach((x) => {
+                    const nm = x?.name ? x.name.trim() : '';
+                    if (!nm) return;
+                    const itemCat = String(x.category || 'tani').toLowerCase();
+                    if (itemCat !== subCatLower) return;
+                    const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
+                    if (!matchKid) return;
+                    const per = normPerson(x.person);
+                    const key = `${nm.toLowerCase()}___${per.toLowerCase()}`;
+                    if (seen.has(key)) return;
+                    seen.add(key);
+                    if (q && !`${nm} ${per}`.toLowerCase().includes(q)) return;
 
-                const bacha = (typeof window.getSanchaItemStats === 'function')
-                    ? safeNum(window.getSanchaItemStats(null, nm, subSanchaCat, targetKid).bacha)
-                    : safeNum(x.bacha);
-                items.push({ name: nm, bacha });
-            });
+                    const bacha = (typeof window.getSanchaItemStats === 'function')
+                        ? safeNum(window.getSanchaItemStats(null, nm, subCatLower, targetKid, per).bacha)
+                        : safeNum(x.bacha);
+                    items.push({ name: nm, person: per, bacha });
+                });
+            }
         }
 
         return items;
+    };
+
+    const getSanchaMakerPickerItems = (subSanchaCat, targetKid, itemNameFilter = '', queryText = '') => {
+        const subCatLower = String(subSanchaCat || 'tani').toLowerCase();
+        const q = String(queryText || '').trim().toLowerCase();
+        const itemLower = String(itemNameFilter || '').trim().toLowerCase();
+
+        const makerMap = new Map();
+        const addMaker = (rawName, bachaAdd = 0, hasSelectedItem = false) => {
+            const per = normPerson(rawName);
+            if (!per) return;
+            const key = per.toLowerCase();
+            if (!makerMap.has(key)) {
+                makerMap.set(key, { name: per, bacha: 0, matchesItem: false });
+            }
+            const m = makerMap.get(key);
+            m.bacha = safeNum((m.bacha + bachaAdd).toFixed(2));
+            if (hasSelectedItem) m.matchesItem = true;
+        };
+
+        if (typeof window.getSanchaUniqueStockRows === 'function') {
+            const rows = window.getSanchaUniqueStockRows(subCatLower, targetKid);
+            rows.forEach((r) => {
+                const per = normPerson(r.person);
+                if (!per) return;
+                const matchIt = itemLower && String(r.name || '').trim().toLowerCase() === itemLower;
+                if (!itemLower || matchIt) {
+                    addMaker(per, safeNum(r.bacha), matchIt);
+                } else {
+                    addMaker(per, 0, false);
+                }
+            });
+        } else {
+            const raw = toArray(window.getStore ? window.getStore('sancha_items') : []);
+            raw.forEach((x) => {
+                if (!x) return;
+                const per = normPerson(x.person);
+                if (!per) return;
+                const matchIt = itemLower && String(x.name || '').trim().toLowerCase() === itemLower;
+                addMaker(per, matchIt ? safeNum(x.bacha) : 0, matchIt);
+            });
+        }
+
+        // Also include known Sancha names from Tani Orders
+        if (subCatLower === 'tani') {
+            const orders = toArray(window.getStore ? window.getStore('tani_orders_list') : []);
+            orders.forEach((o) => {
+                if (o && o.sancha) addMaker(o.sancha, 0, false);
+            });
+        }
+
+        let list = Array.from(makerMap.values());
+        if (q) {
+            list = list.filter((m) => m.name.toLowerCase().includes(q));
+        }
+
+        list.sort((a, b) => {
+            if (a.matchesItem !== b.matchesItem) return a.matchesItem ? -1 : 1;
+            if (b.bacha !== a.bacha) return b.bacha - a.bacha;
+            return a.name.localeCompare(b.name);
+        });
+
+        return list.map((m) => ({
+            label: m.name,
+            sub: m.bacha > 0 ? `${m.bacha.toFixed(2)} Kg` : 'Maker',
+            data: m.name
+        }));
     };
 
     /* ========================================================================
@@ -317,6 +406,7 @@
         stkPickerMode = 'category';
         stkPickerItems = [];
         stkPickerActiveIdx = 0;
+        stkPersonArrowUsed = false;
 
         const today = getToday();
         const { banaOpts } = getStockExpressDatalists();
@@ -375,8 +465,8 @@
                                 </div>
                             </div>
                             <div class="stk-row">
-                                <label class="stk-lbl">From / Rangrej :</label>
-                                <input type="text" id="stk-sancha-person" placeholder="Jaise: Guddu Rangrej / Store" class="stk-inp">
+                                <label class="stk-lbl">Sancha Maker / From :</label>
+                                <input type="text" id="stk-sancha-person" placeholder="Type or ↑↓ Select Maker..." autocomplete="off" class="stk-inp">
                             </div>
                         </div>
 
@@ -558,8 +648,9 @@
             const list = getCategoryStockItems(activeCategory, sanchaCat, targetKid, queryText);
             stkPickerItems = list.map(it => ({
                 label: it.name,
-                sub: `${it.bacha.toFixed(2)} Kg`,
-                data: it.name
+                sub: it.person ? `${it.person} · ${it.bacha.toFixed(2)} Kg` : `${it.bacha.toFixed(2)} Kg`,
+                data: it.name,
+                person: it.person || ''
             }));
             if (stkPickerActiveIdx >= stkPickerItems.length) stkPickerActiveIdx = 0;
             if (stkPickerActiveIdx < 0) stkPickerActiveIdx = 0;
@@ -571,10 +662,20 @@
             const list = getCategoryStockItems(activeCategory, sanchaCat, targetKid, queryText);
             stkPickerItems = list.map(it => ({
                 label: it.name,
-                sub: `${it.bacha.toFixed(2)} Kg`,
+                sub: it.person ? `${it.person} · ${it.bacha.toFixed(2)} Kg` : `${it.bacha.toFixed(2)} Kg`,
                 data: it.name,
                 readOnly: true
             }));
+        } else if (mode === 'sancha_person') {
+            if (titleEl) titleEl.textContent = `List of Sancha Makers (${sanchaCat === 'chukka' ? 'Chukka' : 'Tani'})`;
+            if (hintEl) hintEl.textContent = '↑↓ + Enter or Type New';
+
+            const targetKid = getActiveTargetGodown();
+            const itemInp = stockMode === 'naya' ? document.getElementById('stk-new-name') : document.getElementById('stk-item-name');
+            const curItemName = String(itemInp?.value || '').trim();
+            stkPickerItems = getSanchaMakerPickerItems(sanchaCat, targetKid, curItemName, queryText);
+            if (stkPickerActiveIdx >= stkPickerItems.length) stkPickerActiveIdx = 0;
+            if (stkPickerActiveIdx < 0) stkPickerActiveIdx = 0;
         }
 
         renderStkRightPickerList();
@@ -587,7 +688,9 @@
         if (!stkPickerItems.length) {
             const msg = stkPickerMode === 'item_naya'
                 ? 'Koi matching purana item nahi mila (Naya naam safe hai).'
-                : 'Is Godown me koi stock item nahi mila. [F4] se Naya Item banayein.';
+                : (stkPickerMode === 'sancha_person'
+                    ? 'Naya Sancha Maker naam seedha type karke [Enter] dabayein.'
+                    : 'Is Godown me koi stock item nahi mila. [F4] se Naya Item banayein.');
             pickerEl.innerHTML = `<div style="padding:18px 12px; text-align:center; color:#6b7280; font-size:12px;">${msg}</div>`;
             return;
         }
@@ -623,8 +726,17 @@
         } else if (stkPickerMode === 'item_purana') {
             const inp = document.getElementById('stk-item-name');
             if (inp) inp.value = item.data;
+            if (activeCategory === 'sancha' && item.person) {
+                const pInp = document.getElementById('stk-sancha-person');
+                if (pInp) pInp.value = item.person;
+            }
             updateStockExpressLiveStats();
             moveStkField('stk-item-name', 1);
+        } else if (stkPickerMode === 'sancha_person') {
+            const pInp = document.getElementById('stk-sancha-person');
+            if (pInp) pInp.value = item.data;
+            updateStockExpressLiveStats();
+            moveStkField('stk-sancha-person', 1);
         }
     };
 
@@ -641,17 +753,19 @@
         const nameVal = String((isNew ? document.getElementById('stk-new-name') : document.getElementById('stk-item-name'))?.value || '').trim() || '-';
         const qtyVal = safeNum(document.getElementById('stk-qty')?.value, 0);
         const noteVal = String(document.getElementById('stk-note')?.value || '').trim() || '-';
-        const personVal = String(document.getElementById('stk-sancha-person')?.value || '').trim() || '-';
+        const personRaw = String(document.getElementById('stk-sancha-person')?.value || '').trim();
+        const personVal = personRaw || '-';
         const dateVal = document.getElementById('stk-date')?.value || getToday();
 
         let curBacha = 0;
-        if (!isNew && nameVal !== '-') {
-            if (activeCategory === 'bana' && typeof window.getBanaItemStats === 'function') {
+        if (nameVal !== '-') {
+            if (activeCategory === 'bana' && !isNew && typeof window.getBanaItemStats === 'function') {
                 curBacha = safeNum(window.getBanaItemStats(nameVal, targetKid).bacha);
-            } else if (activeCategory === 'zari' && typeof window.getZariItemStats === 'function') {
+            } else if (activeCategory === 'zari' && !isNew && typeof window.getZariItemStats === 'function') {
                 curBacha = safeNum(window.getZariItemStats(nameVal, targetKid).bacha);
             } else if (activeCategory === 'sancha' && typeof window.getSanchaItemStats === 'function') {
-                curBacha = safeNum(window.getSanchaItemStats(null, nameVal, sanchaCat, targetKid).bacha);
+                const pNorm = normPerson(personRaw);
+                curBacha = safeNum(window.getSanchaItemStats(null, nameVal, sanchaCat, targetKid, pNorm || null).bacha);
             }
         }
         const afterTotal = curBacha + qtyVal;
@@ -675,7 +789,7 @@
             </div>
             ${activeCategory === 'sancha' ? `
             <div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #f3f4f6;">
-                <span style="color:#6b7280;">From / Rangrej:</span><strong>${esc(personVal)}</strong>
+                <span style="color:#6b7280;">Sancha Maker:</span><strong>${esc(personVal)}</strong>
             </div>` : ''}
             <div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #f3f4f6;">
                 <span style="color:#6b7280;">Note / Supplier:</span><strong>${esc(noteVal)}</strong>
@@ -794,7 +908,50 @@
         attachPickerInput(itemInp, 'item_purana', true);
         attachPickerInput(newNameInp, 'item_naya', true);
 
-        [dateInp, personInp, qtyInp, noteInp].forEach((el) => {
+        // Sancha Maker Picker (Arrow navigation picks from list; typing new name keeps typed text)
+        if (personInp) {
+            personInp.addEventListener('focus', () => {
+                stkPersonArrowUsed = false;
+                stkPickerActiveIdx = 0;
+                showStkRightPicker('sancha_person', personInp.value);
+            });
+            personInp.addEventListener('input', () => {
+                stkPersonArrowUsed = false;
+                stkPickerActiveIdx = 0;
+                showStkRightPicker('sancha_person', personInp.value);
+                updateStockExpressLiveStats();
+            });
+            personInp.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    if (stkPickerItems.length) {
+                        e.preventDefault();
+                        stkPersonArrowUsed = true;
+                        if (e.key === 'ArrowDown') {
+                            stkPickerActiveIdx = (stkPickerActiveIdx + 1) % stkPickerItems.length;
+                        } else {
+                            stkPickerActiveIdx = (stkPickerActiveIdx - 1 + stkPickerItems.length) % stkPickerItems.length;
+                        }
+                        renderStkRightPickerList();
+                    }
+                    return;
+                }
+                if (e.key === 'Enter' && !e.ctrlKey) {
+                    e.preventDefault();
+                    if (e.shiftKey) {
+                        moveStkField('stk-sancha-person', -1);
+                        return;
+                    }
+                    if (stkPersonArrowUsed && stkPickerItems.length && stkPickerItems[stkPickerActiveIdx]) {
+                        window.__stkPickItem(stkPickerActiveIdx);
+                        return;
+                    }
+                    updateStockExpressLiveStats();
+                    moveStkField('stk-sancha-person', 1);
+                }
+            });
+        }
+
+        [dateInp, qtyInp, noteInp].forEach((el) => {
             if (!el) return;
             el.addEventListener('focus', () => {
                 if (el.id !== 'stk-date') {
@@ -1010,42 +1167,45 @@
     };
 
     /* ========================================================================
-       6. LIVE STOCK CHECKER
+       6. LIVE STOCK CHECKER (MAKER-AWARE FOR SANCHA)
        ------------------------------------------------------------------------
     ======================================================================== */
     const updateStockExpressLiveStats = () => {
-        const val = document.getElementById('stk-item-name')?.value.trim();
+        const isNew = (stockMode === 'naya');
+        const val = (isNew ? document.getElementById('stk-new-name') : document.getElementById('stk-item-name'))?.value.trim();
         const disp = document.getElementById('stk-live-bacha-display');
         const hint = document.getElementById('stk-live-hint');
         const targetKid = getActiveTargetGodown();
 
-        if (stockMode === 'naya') {
-            if (disp) disp.textContent = '0.00 Kg';
-            if (hint) hint.textContent = 'Naya stock item banega';
-            return;
-        }
-
         if (!val) {
             if (disp) disp.textContent = '0.00 Kg';
-            if (hint) hint.textContent = 'Item chunte hi live stock dikhega';
+            if (hint) hint.textContent = isNew ? 'Naya stock item banega' : 'Item chunte hi live stock dikhega';
             return;
         }
 
         let bacha = 0;
-        if (activeCategory === 'bana' && typeof window.getBanaItemStats === 'function') {
+        if (activeCategory === 'bana' && !isNew && typeof window.getBanaItemStats === 'function') {
             bacha = safeNum(window.getBanaItemStats(val, targetKid).bacha);
-        } else if (activeCategory === 'zari' && typeof window.getZariItemStats === 'function') {
+        } else if (activeCategory === 'zari' && !isNew && typeof window.getZariItemStats === 'function') {
             bacha = safeNum(window.getZariItemStats(val, targetKid).bacha);
         } else if (activeCategory === 'sancha' && typeof window.getSanchaItemStats === 'function') {
-            bacha = safeNum(window.getSanchaItemStats(null, val, sanchaCat, targetKid).bacha);
+            const pNorm = normPerson(document.getElementById('stk-sancha-person')?.value);
+            bacha = safeNum(window.getSanchaItemStats(null, val, sanchaCat, targetKid, pNorm || null).bacha);
         }
 
         if (disp) disp.textContent = `${bacha.toFixed(2)} Kg`;
-        if (hint) hint.textContent = 'Godown me maujooda stock';
+        if (hint) {
+            if (activeCategory === 'sancha') {
+                const pNorm = normPerson(document.getElementById('stk-sancha-person')?.value);
+                hint.textContent = pNorm ? `Maker (${pNorm}) ke paas stock` : 'Godown me total stock';
+            } else {
+                hint.textContent = isNew ? 'Naya stock item banega' : 'Godown me maujooda stock';
+            }
+        }
     };
 
     /* ========================================================================
-       7. ATOMIC SUBMIT (SAVES TO BANA / ZARI / SANCHA REGISTERS - UNCHANGED)
+       7. ATOMIC SUBMIT (MAKER-WISE SANCHA ISOLATION)
        ------------------------------------------------------------------------
     ======================================================================== */
     window.submitMasterStockExpress = () => {
@@ -1073,6 +1233,7 @@
         }
 
         const now = Date.now();
+        let savedPerson = '';
 
         if (activeCategory === 'bana') {
             const list = toArray(window.getStore ? window.getStore('bana_stock') : []);
@@ -1143,20 +1304,27 @@
             if (typeof window.renderZariTable === 'function') window.renderZariTable();
 
         } else if (activeCategory === 'sancha') {
-            const person = String(document.getElementById('stk-sancha-person')?.value || '').trim();
+            const person = normPerson(document.getElementById('stk-sancha-person')?.value);
+            savedPerson = person;
             const category = sanchaCat;
             const list = toArray(window.getStore ? window.getStore('sancha_items') : []);
 
+            // Match by Item Name + Maker (person) + Category + Godown
             const item = list.find((x) => {
+                if (!x || !x.name) return false;
                 const cat = x.category || 'tani';
                 const matchK = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-                return x?.name && x.name.toLowerCase() === name.toLowerCase() && cat.toLowerCase() === category.toLowerCase() && matchK;
+                const xPer = normPerson(x.person).toLowerCase();
+                return x.name.toLowerCase() === name.toLowerCase() &&
+                       cat.toLowerCase() === category.toLowerCase() &&
+                       matchK &&
+                       xPer === person.toLowerCase();
             });
 
             if (item) {
                 item.aaya = safeNum((safeNum(item.aaya) + qty).toFixed(2));
                 item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
-                if (person) item.person = person;
+                item.person = person || '-';
                 item.date = date;
             } else {
                 list.push({
@@ -1174,6 +1342,7 @@
             hist.push({
                 id: `shist_${now}`,
                 date, name, category,
+                person: person || '-',
                 kariger: person || note || 'Factory Inward',
                 type: `Khareed / Inward (${category === 'tani' ? 'Tani' : 'Chukka'})`,
                 aaya: qty, gaya: 0,
@@ -1183,12 +1352,14 @@
             });
             if (typeof window.setStore === 'function') window.setStore('sancha_history', hist);
 
+            if (typeof window.invalidateSanchaCalcCache === 'function') window.invalidateSanchaCalcCache();
             if (typeof window.renderSanchaTable === 'function') window.renderSanchaTable();
         }
 
         lastSavedStockEntry = {
             category: activeCategory.toUpperCase(),
             name: name,
+            person: savedPerson,
             qty: qty,
             date: date,
             kGodown: targetKid,
@@ -1202,6 +1373,7 @@
         const pInp = document.getElementById('stk-sancha-person');
         if (pInp) pInp.value = '';
         if (nameInp) nameInp.value = '';
+        stkPersonArrowUsed = false;
 
         const dl = document.getElementById('stk-items-dl');
         if (dl) {
@@ -1214,7 +1386,7 @@
             : (activeCategory === 'zari' ? 'Zari' : (sanchaCat === 'chukka' ? 'Sancha (Chukka)' : 'Sancha (Tani)'));
         const statusMsg = document.getElementById('stk-status-msg');
         if (statusMsg) {
-            statusMsg.innerHTML = `✅ <strong>${esc(name)}</strong> (+${qty.toFixed(2)} Kg ${catTitle}) stock me jama ho gaya!`;
+            statusMsg.innerHTML = `✅ <strong>${esc(name)}</strong>${savedPerson ? ` (${esc(savedPerson)})` : ''} (+${qty.toFixed(2)} Kg ${catTitle}) stock me jama ho gaya!`;
         }
 
         updateStockExpressLiveStats();
@@ -1225,7 +1397,7 @@
     };
 
     /* ========================================================================
-       8. A6 THERMAL PRINT SLIP (UNCHANGED)
+       8. A6 THERMAL PRINT SLIP
        ------------------------------------------------------------------------
     ======================================================================== */
     window.printLastSavedStockSlip = () => {
@@ -1263,6 +1435,7 @@
                     <div class="row"><span><strong>गोदाम:</strong></span><span>${esc(kName)}</span></div>
                     <div class="row"><span><strong>कैटेगरी:</strong></span><span>${esc(t.category)}</span></div>
                     <div class="row"><span><strong>आइटम का नाम:</strong></span><span><strong>${esc(t.name)}</strong></span></div>
+                    ${t.person ? `<div class="row"><span><strong>सांचा मेकर:</strong></span><span>${esc(t.person)}</span></div>` : ''}
                     <div class="row"><span><strong>नोट / सप्लायर:</strong></span><span>${esc(t.note)}</span></div>
                     <div class="highlight">
                         जमा वज़न: +${t.qty.toFixed(2)} Kg
