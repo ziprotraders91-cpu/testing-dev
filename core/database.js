@@ -1,7 +1,8 @@
 /* ============================================================================
    SIMPLICITY ERP - ENTERPRISE AUTO-POLLING, DELTA SYNC & LIVE REALTIME ENGINE
    File: core/database.js • Developed by Farhan Jawed
-   Modules: Multi-Godam + Jobwork + Tani Orders & Rangai + 19 Row-by-Row Tables
+   Modules: Multi-Godam + Unified JobWork Trail + Dukan Management + 23 Row-by-Row Tables
+   Upgraded: Safe Prefix Routing + 7 New Tables + Stable Karkhana Upsert + 2s Delta Overlap
 ============================================================================ */
 
 (() => {
@@ -34,12 +35,16 @@
         'tani_orders',
         'dukan_challans',
         'jobwork_workers',
-        'cutting_history',
-        'embroidery_history',
-        'calender_history',
+        'jobwork_groups',
+        'jobwork_sheets',
         'job_work_bills',
         'material_transfers',
         'info_ledger',
+        'dukan_firms',
+        'dukan_parties',
+        'dukan_designs',
+        'dukan_orders',
+        'dukan_party_challans',
         'tani_learned',
         'saree_stock',
         'billing_config'
@@ -64,6 +69,17 @@
                 await window.StoragePreloadPromise;
             }
         } catch (_) {}
+    };
+
+    const getLocalItemId = (item) => {
+        if (!item || typeof item !== 'object') return null;
+        if (item.id !== undefined && item.id !== null && String(item.id).trim() !== '') {
+            return String(item.id).trim();
+        }
+        if (item.key !== undefined && item.key !== null && String(item.key).trim() !== '') {
+            return String(item.key).trim();
+        }
+        return null;
     };
 
     const readIdbArraySafe = async (fullStorageKey) => {
@@ -100,77 +116,14 @@
         if (typeof window.supabase !== 'undefined' && typeof window.supabase.createClient === 'function') {
             supabaseClient = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
             window.supabaseClient = supabaseClient;
-            console.log('✅ [CloudEngine] Supabase Realtime Engine Initialized (test-dav).');
+            console.log('✅ [CloudEngine] Supabase Realtime Engine Initialized (v4 Unified).');
         }
     } catch (initErr) {
         console.error('❌ [CloudEngine] Supabase Init failure:', initErr);
     }
 
-    const createJobWorkHistorySchema = (defaultSourceKey) => ({
-        defaultSourceKey,
-        resolveSourceKey: (shortKey) => String(shortKey || '').trim() || defaultSourceKey,
-        toSqlRow: (item, ctx) => {
-            const known = new Set([
-                'id', 'title', 'monthKey', 'closingPendingSaree', 'closingBakiAmt', 'rows'
-            ]);
-            const extra = {};
-            if (item && typeof item === 'object') {
-                Object.keys(item).forEach((k) => {
-                    if (!known.has(k) && item[k] !== undefined) {
-                        extra[k] = item[k];
-                    }
-                });
-            }
-            const rid = String(item.id).trim();
-            const matchW = String(ctx.sourceKey || '').match(/(?:jobwork_sheets_|jw_sheet_)(.+)$/i);
-            const workerId = matchW ? matchW[1].trim() : '';
-
-            let sheetOrder = 0;
-            try {
-                const cachedList = ctx.fullKey && window.APP_MEMORY_CACHE ? window.APP_MEMORY_CACHE[ctx.fullKey] : null;
-                if (Array.isArray(cachedList)) {
-                    const foundIdx = cachedList.findIndex((s) => s && String(s.id) === rid);
-                    if (foundIdx >= 0) sheetOrder = foundIdx;
-                }
-            } catch (_) {}
-
-            return {
-                id: `${ctx.uid}_${ctx.sess}_${ctx.sourceKey}_${rid}`,
-                record_id: rid,
-                worker_id: workerId,
-                user_id: ctx.uid,
-                tenant_id: ctx.tid,
-                session: ctx.sess,
-                source_key: ctx.sourceKey,
-                sheet_order: sheetOrder,
-                title: item.title || rid,
-                month_key: item.monthKey || null,
-                closing_pending_saree: Number(item.closingPendingSaree) || 0,
-                closing_baki_amt: Number(item.closingBakiAmt) || 0,
-                rows: Array.isArray(item.rows) ? item.rows : [],
-                extra,
-                is_deleted: false
-            };
-        },
-        fromSqlRow: (row) => {
-            const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                ? row.extra
-                : {};
-            const obj = {
-                ...extraObj,
-                id: row.record_id || row.id,
-                title: row.title || row.record_id || 'Month 1',
-                closingPendingSaree: Number(row.closing_pending_saree) || 0,
-                closingBakiAmt: Number(row.closing_baki_amt) || 0,
-                rows: Array.isArray(row.rows) ? row.rows : []
-            };
-            if (row.month_key) obj.monthKey = row.month_key;
-            return obj;
-        }
-    });
-
     /* ========================================================================
-       GENERIC ROW-BY-ROW & DELTA SYNC SCHEMA REGISTRY (19 TABLES)
+       GENERIC ROW-BY-ROW & DELTA SYNC SCHEMA REGISTRY (23 TABLES)
     ======================================================================== */
     const ROW_SYNC_SCHEMAS = {
         payments: {
@@ -189,9 +142,7 @@
                 const extra = {};
                 if (item && typeof item === 'object') {
                     Object.keys(item).forEach((k) => {
-                        if (!known.has(k) && item[k] !== undefined) {
-                            extra[k] = item[k];
-                        }
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
                     });
                 }
                 const rid = String(item.id).trim();
@@ -218,9 +169,7 @@
                 };
             },
             fromSqlRow: (row) => {
-                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                    ? row.extra
-                    : {};
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
                 return {
                     ...extraObj,
                     id: row.record_id || row.id,
@@ -250,9 +199,7 @@
                 const extra = {};
                 if (item && typeof item === 'object') {
                     Object.keys(item).forEach((k) => {
-                        if (!known.has(k) && item[k] !== undefined) {
-                            extra[k] = item[k];
-                        }
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
                     });
                 }
                 const rid = String(item.id).trim();
@@ -275,9 +222,7 @@
                 };
             },
             fromSqlRow: (row) => {
-                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                    ? row.extra
-                    : {};
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
                 return {
                     ...extraObj,
                     id: row.record_id || row.id,
@@ -307,9 +252,7 @@
                 const extra = {};
                 if (item && typeof item === 'object') {
                     Object.keys(item).forEach((k) => {
-                        if (!known.has(k) && item[k] !== undefined) {
-                            extra[k] = item[k];
-                        }
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
                     });
                 }
                 const rid = String(item.id).trim();
@@ -366,9 +309,7 @@
                 };
             },
             fromSqlRow: (row) => {
-                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                    ? row.extra
-                    : {};
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
                 const obj = {
                     ...extraObj,
                     id: row.record_id || row.id,
@@ -405,15 +346,11 @@
             defaultSourceKey: 'bana_stock',
             resolveSourceKey: () => 'bana_stock',
             toSqlRow: (item, ctx) => {
-                const known = new Set([
-                    'id', 'date', 'name', 'aaya', 'gaya', 'bacha', 'karkhanaId', 'timestamp'
-                ]);
+                const known = new Set(['id', 'date', 'name', 'aaya', 'gaya', 'bacha', 'karkhanaId', 'timestamp']);
                 const extra = {};
                 if (item && typeof item === 'object') {
                     Object.keys(item).forEach((k) => {
-                        if (!known.has(k) && item[k] !== undefined) {
-                            extra[k] = item[k];
-                        }
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
                     });
                 }
                 const rid = String(item.id).trim();
@@ -436,9 +373,7 @@
                 };
             },
             fromSqlRow: (row) => {
-                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                    ? row.extra
-                    : {};
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
                 return {
                     ...extraObj,
                     id: row.record_id || row.id,
@@ -457,16 +392,11 @@
             defaultSourceKey: 'bana_history',
             resolveSourceKey: () => 'bana_history',
             toSqlRow: (item, ctx) => {
-                const known = new Set([
-                    'id', 'refId', 'date', 'name', 'kariger', 'type',
-                    'aaya', 'gaya', 'karkhanaId', 'timestamp'
-                ]);
+                const known = new Set(['id', 'refId', 'date', 'name', 'kariger', 'type', 'aaya', 'gaya', 'karkhanaId', 'timestamp']);
                 const extra = {};
                 if (item && typeof item === 'object') {
                     Object.keys(item).forEach((k) => {
-                        if (!known.has(k) && item[k] !== undefined) {
-                            extra[k] = item[k];
-                        }
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
                     });
                 }
                 const rid = String(item.id).trim();
@@ -491,9 +421,7 @@
                 };
             },
             fromSqlRow: (row) => {
-                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                    ? row.extra
-                    : {};
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
                 return {
                     ...extraObj,
                     id: row.record_id || row.id,
@@ -514,15 +442,11 @@
             defaultSourceKey: 'zari_stock',
             resolveSourceKey: () => 'zari_stock',
             toSqlRow: (item, ctx) => {
-                const known = new Set([
-                    'id', 'date', 'name', 'aaya', 'gaya', 'bacha', 'karkhanaId', 'timestamp'
-                ]);
+                const known = new Set(['id', 'date', 'name', 'aaya', 'gaya', 'bacha', 'karkhanaId', 'timestamp']);
                 const extra = {};
                 if (item && typeof item === 'object') {
                     Object.keys(item).forEach((k) => {
-                        if (!known.has(k) && item[k] !== undefined) {
-                            extra[k] = item[k];
-                        }
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
                     });
                 }
                 const rid = String(item.id).trim();
@@ -545,9 +469,7 @@
                 };
             },
             fromSqlRow: (row) => {
-                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                    ? row.extra
-                    : {};
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
                 return {
                     ...extraObj,
                     id: row.record_id || row.id,
@@ -566,16 +488,11 @@
             defaultSourceKey: 'zari_history',
             resolveSourceKey: () => 'zari_history',
             toSqlRow: (item, ctx) => {
-                const known = new Set([
-                    'id', 'refId', 'date', 'name', 'kariger', 'type',
-                    'aaya', 'gaya', 'karkhanaId', 'timestamp'
-                ]);
+                const known = new Set(['id', 'refId', 'date', 'name', 'kariger', 'type', 'aaya', 'gaya', 'karkhanaId', 'timestamp']);
                 const extra = {};
                 if (item && typeof item === 'object') {
                     Object.keys(item).forEach((k) => {
-                        if (!known.has(k) && item[k] !== undefined) {
-                            extra[k] = item[k];
-                        }
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
                     });
                 }
                 const rid = String(item.id).trim();
@@ -600,9 +517,7 @@
                 };
             },
             fromSqlRow: (row) => {
-                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                    ? row.extra
-                    : {};
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
                 return {
                     ...extraObj,
                     id: row.record_id || row.id,
@@ -632,9 +547,7 @@
                 const extra = {};
                 if (item && typeof item === 'object') {
                     Object.keys(item).forEach((k) => {
-                        if (!known.has(k) && item[k] !== undefined) {
-                            extra[k] = item[k];
-                        }
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
                     });
                 }
                 const rid = String(item.id).trim();
@@ -666,9 +579,7 @@
                 };
             },
             fromSqlRow: (row) => {
-                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                    ? row.extra
-                    : {};
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
                 const kName = row.kariger_name || '';
                 return {
                     ...extraObj,
@@ -698,16 +609,11 @@
             defaultSourceKey: 'sancha_items',
             resolveSourceKey: () => 'sancha_items',
             toSqlRow: (item, ctx) => {
-                const known = new Set([
-                    'id', 'date', 'name', 'category', 'aaya', 'gaya', 'bacha',
-                    'person', 'karkhanaId', 'timestamp'
-                ]);
+                const known = new Set(['id', 'date', 'name', 'category', 'aaya', 'gaya', 'bacha', 'person', 'karkhanaId', 'timestamp']);
                 const extra = {};
                 if (item && typeof item === 'object') {
                     Object.keys(item).forEach((k) => {
-                        if (!known.has(k) && item[k] !== undefined) {
-                            extra[k] = item[k];
-                        }
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
                     });
                 }
                 const rid = String(item.id).trim();
@@ -732,9 +638,7 @@
                 };
             },
             fromSqlRow: (row) => {
-                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                    ? row.extra
-                    : {};
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
                 return {
                     ...extraObj,
                     id: row.record_id || row.id,
@@ -755,16 +659,11 @@
             defaultSourceKey: 'sancha_history',
             resolveSourceKey: () => 'sancha_history',
             toSqlRow: (item, ctx) => {
-                const known = new Set([
-                    'id', 'refId', 'date', 'name', 'category', 'kariger', 'type',
-                    'aaya', 'gaya', 'karkhanaId', 'isOpening', 'timestamp'
-                ]);
+                const known = new Set(['id', 'refId', 'date', 'name', 'category', 'kariger', 'type', 'aaya', 'gaya', 'karkhanaId', 'isOpening', 'timestamp']);
                 const extra = {};
                 if (item && typeof item === 'object') {
                     Object.keys(item).forEach((k) => {
-                        if (!known.has(k) && item[k] !== undefined) {
-                            extra[k] = item[k];
-                        }
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
                     });
                 }
                 const rid = String(item.id).trim();
@@ -791,9 +690,7 @@
                 };
             },
             fromSqlRow: (row) => {
-                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                    ? row.extra
-                    : {};
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
                 return {
                     ...extraObj,
                     id: row.record_id || row.id,
@@ -830,9 +727,7 @@
                 const extra = {};
                 if (item && typeof item === 'object') {
                     Object.keys(item).forEach((k) => {
-                        if (!known.has(k) && item[k] !== undefined) {
-                            extra[k] = item[k];
-                        }
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
                     });
                 }
                 const rid = String(item.id).trim();
@@ -870,9 +765,7 @@
                 };
             },
             fromSqlRow: (row) => {
-                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                    ? row.extra
-                    : {};
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
                 const obj = {
                     ...extraObj,
                     id: row.record_id || row.id,
@@ -903,20 +796,17 @@
             }
         },
 
+        // Factory Final Out (Local Key: dukan_transfer_history -> Table: dukan_challans)
         dukan_challans: {
             defaultSourceKey: 'dukan_transfer_history',
             resolveSourceKey: () => 'dukan_transfer_history',
             sortList: (arr) => arr.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)),
             toSqlRow: (item, ctx) => {
-                const known = new Set([
-                    'id', 'date', 'sareeName', 'karigerName', 'pcs', 'note', 'timestamp'
-                ]);
+                const known = new Set(['id', 'date', 'sareeName', 'karigerName', 'pcs', 'note', 'timestamp']);
                 const extra = {};
                 if (item && typeof item === 'object') {
                     Object.keys(item).forEach((k) => {
-                        if (!known.has(k) && item[k] !== undefined) {
-                            extra[k] = item[k];
-                        }
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
                     });
                 }
                 const rid = String(item.id).trim();
@@ -938,9 +828,7 @@
                 };
             },
             fromSqlRow: (row) => {
-                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                    ? row.extra
-                    : {};
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
                 return {
                     ...extraObj,
                     id: row.record_id || row.id,
@@ -958,15 +846,11 @@
             defaultSourceKey: 'jobwork_workers',
             resolveSourceKey: () => 'jobwork_workers',
             toSqlRow: (item, ctx) => {
-                const known = new Set([
-                    'id', 'type', 'date', 'name', 'address', 'mobile'
-                ]);
+                const known = new Set(['id', 'type', 'date', 'name', 'address', 'mobile']);
                 const extra = {};
                 if (item && typeof item === 'object') {
                     Object.keys(item).forEach((k) => {
-                        if (!known.has(k) && item[k] !== undefined) {
-                            extra[k] = item[k];
-                        }
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
                     });
                 }
                 const rid = String(item.id).trim();
@@ -987,9 +871,7 @@
                 };
             },
             fromSqlRow: (row) => {
-                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                    ? row.extra
-                    : {};
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
                 return {
                     ...extraObj,
                     id: row.record_id || row.id,
@@ -1002,9 +884,109 @@
             }
         },
 
-        cutting_history: createJobWorkHistorySchema('jobwork_sheets_cutting'),
-        embroidery_history: createJobWorkHistorySchema('jobwork_sheets_embroidery'),
-        calender_history: createJobWorkHistorySchema('jobwork_sheets_calender'),
+        // ⭐ NEW: JOBWORK GROUPS (Global - Dynamic Groups + Outstation Flag)
+        jobwork_groups: {
+            isGlobal: true,
+            defaultSourceKey: 'jobwork_groups',
+            resolveSourceKey: () => 'jobwork_groups',
+            toSqlRow: (item, ctx) => {
+                const known = new Set(['id', 'key', 'label', 'outstation']);
+                const extra = {};
+                if (item && typeof item === 'object') {
+                    Object.keys(item).forEach((k) => {
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
+                    });
+                }
+                const rid = String(item.key || item.id || '').trim().toLowerCase();
+                return {
+                    id: `${ctx.uid}_global_${ctx.sourceKey}_${rid}`,
+                    record_id: rid,
+                    user_id: ctx.uid,
+                    tenant_id: ctx.tid,
+                    session: 'global',
+                    source_key: ctx.sourceKey,
+                    group_key: rid,
+                    label: String(item.label || rid).trim(),
+                    outstation: Boolean(item.outstation),
+                    extra,
+                    is_deleted: false
+                };
+            },
+            fromSqlRow: (row) => {
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
+                return {
+                    ...extraObj,
+                    key: row.group_key || row.record_id,
+                    label: row.label || row.group_key || row.record_id,
+                    outstation: Boolean(row.outstation)
+                };
+            }
+        },
+
+        // ⭐ NEW: UNIFIED JOBWORK SHEETS (Sabhi Groups: Cutting, Embroidery, Calender, Swarovski, Stone...)
+        jobwork_sheets: {
+            defaultSourceKey: 'jobwork_sheets',
+            resolveSourceKey: (shortKey) => String(shortKey || '').trim() || 'jobwork_sheets',
+            toSqlRow: (item, ctx) => {
+                const known = new Set(['id', 'title', 'monthKey', 'closingPendingSaree', 'closingBakiAmt', 'rows']);
+                const extra = {};
+                if (item && typeof item === 'object') {
+                    Object.keys(item).forEach((k) => {
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
+                    });
+                }
+                const rid = String(item.id).trim();
+                const matchW = String(ctx.sourceKey || '').match(/(?:jobwork_sheets_|jw_sheet_)(.+)$/i);
+                const workerId = matchW ? matchW[1].trim() : '';
+
+                let workerGroup = 'cutting';
+                let sheetOrder = 0;
+                try {
+                    const workers = typeof window.getStore === 'function' ? (window.getStore('jobwork_workers') || []) : [];
+                    if (Array.isArray(workers)) {
+                        const found = workers.find((w) => w && String(w.id).toLowerCase() === workerId.toLowerCase());
+                        if (found && found.type) workerGroup = String(found.type).trim().toLowerCase();
+                    }
+                    const cachedList = ctx.fullKey && window.APP_MEMORY_CACHE ? window.APP_MEMORY_CACHE[ctx.fullKey] : null;
+                    if (Array.isArray(cachedList)) {
+                        const foundIdx = cachedList.findIndex((s) => s && String(s.id) === rid);
+                        if (foundIdx >= 0) sheetOrder = foundIdx;
+                    }
+                } catch (_) {}
+
+                return {
+                    id: `${ctx.uid}_${ctx.sess}_${ctx.sourceKey}_${rid}`,
+                    record_id: rid,
+                    worker_id: workerId,
+                    worker_group: workerGroup,
+                    user_id: ctx.uid,
+                    tenant_id: ctx.tid,
+                    session: ctx.sess,
+                    source_key: ctx.sourceKey,
+                    sheet_order: sheetOrder,
+                    title: item.title || rid,
+                    month_key: item.monthKey || null,
+                    closing_pending_saree: Number(item.closingPendingSaree) || 0,
+                    closing_baki_amt: Number(item.closingBakiAmt) || 0,
+                    rows: Array.isArray(item.rows) ? item.rows : [],
+                    extra,
+                    is_deleted: false
+                };
+            },
+            fromSqlRow: (row) => {
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
+                const obj = {
+                    ...extraObj,
+                    id: row.record_id || row.id,
+                    title: row.title || row.record_id || 'Month 1',
+                    closingPendingSaree: Number(row.closing_pending_saree) || 0,
+                    closingBakiAmt: Number(row.closing_baki_amt) || 0,
+                    rows: Array.isArray(row.rows) ? row.rows : []
+                };
+                if (row.month_key) obj.monthKey = row.month_key;
+                return obj;
+            }
+        },
 
         job_work_bills: {
             defaultSourceKey: 'jw_bills_list',
@@ -1021,9 +1003,7 @@
                 const extra = {};
                 if (item && typeof item === 'object') {
                     Object.keys(item).forEach((k) => {
-                        if (!known.has(k) && item[k] !== undefined) {
-                            extra[k] = item[k];
-                        }
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
                     });
                 }
                 const rid = String(item.id).trim();
@@ -1051,9 +1031,7 @@
                 };
             },
             fromSqlRow: (row) => {
-                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                    ? row.extra
-                    : {};
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
                 if (row.source_key === 'jw_payments_list') {
                     return {
                         ...extraObj,
@@ -1088,17 +1066,11 @@
             resolveSourceKey: () => 'material_transfers',
             sortList: (arr) => arr.sort((a, b) => (Number(a.timestamp) || 0) - (Number(b.timestamp) || 0)),
             toSqlRow: (item, ctx) => {
-                const known = new Set([
-                    'id', 'date', 'type', 'itemName',
-                    'fromKarkhanaId', 'toKarkhanaId',
-                    'qty', 'quantity', 'note', 'timestamp'
-                ]);
+                const known = new Set(['id', 'date', 'type', 'itemName', 'fromKarkhanaId', 'toKarkhanaId', 'qty', 'quantity', 'note', 'timestamp']);
                 const extra = {};
                 if (item && typeof item === 'object') {
                     Object.keys(item).forEach((k) => {
-                        if (!known.has(k) && item[k] !== undefined) {
-                            extra[k] = item[k];
-                        }
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
                     });
                 }
                 const rid = String(item.id).trim();
@@ -1123,9 +1095,7 @@
                 };
             },
             fromSqlRow: (row) => {
-                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                    ? row.extra
-                    : {};
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
                 const q = Number(row.qty) || 0;
                 return {
                     ...extraObj,
@@ -1143,7 +1113,6 @@
             }
         },
 
-        // 19. INFO LEDGER (Global across sessions, Row-by-Row per Kariger + __columns__ meta)
         info_ledger: {
             isGlobal: true,
             defaultSourceKey: 'info_ledger',
@@ -1157,9 +1126,7 @@
                 const extra = {};
                 if (item && typeof item === 'object') {
                     Object.keys(item).forEach((k) => {
-                        if (!known.has(k) && item[k] !== undefined) {
-                            extra[k] = item[k];
-                        }
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
                     });
                 }
                 const rid = String(item.id).trim();
@@ -1191,9 +1158,7 @@
                 };
             },
             fromSqlRow: (row) => {
-                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra))
-                    ? row.extra
-                    : {};
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
                 const rid = String(row.record_id || row.id || '').trim();
                 const isMeta = (rid === '__columns__' || row.row_type === 'columns_meta');
                 if (isMeta) {
@@ -1223,8 +1188,286 @@
                     custom: (row.custom && typeof row.custom === 'object' && !Array.isArray(row.custom)) ? row.custom : {}
                 };
             }
+        },
+
+        // ⭐ NEW: DUKAN FIRMS (Global Multi-Firm Profiles)
+        dukan_firms: {
+            isGlobal: true,
+            defaultSourceKey: 'dukan_firms',
+            resolveSourceKey: () => 'dukan_firms',
+            toSqlRow: (item, ctx) => {
+                const known = new Set(['id', 'name', 'address', 'city', 'mob', 'mobile', 'gst', 'agent', 'email', 'isDefault']);
+                const extra = {};
+                if (item && typeof item === 'object') {
+                    Object.keys(item).forEach((k) => {
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
+                    });
+                }
+                const rid = String(item.id).trim();
+                return {
+                    id: `${ctx.uid}_global_${ctx.sourceKey}_${rid}`,
+                    record_id: rid,
+                    user_id: ctx.uid,
+                    tenant_id: ctx.tid,
+                    session: 'global',
+                    source_key: ctx.sourceKey,
+                    name: item.name || '',
+                    address: item.address || '',
+                    city: item.city || '',
+                    mob: item.mob || item.mobile || '',
+                    gst: item.gst || '',
+                    agent: item.agent || '',
+                    email: item.email || '',
+                    is_default: Boolean(item.isDefault),
+                    extra,
+                    is_deleted: false
+                };
+            },
+            fromSqlRow: (row) => {
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
+                return {
+                    ...extraObj,
+                    id: row.record_id || row.id,
+                    name: row.name || '',
+                    address: row.address || '',
+                    city: row.city || '',
+                    mob: row.mob || '',
+                    gst: row.gst || '',
+                    agent: row.agent || '',
+                    email: row.email || '',
+                    isDefault: Boolean(row.is_default)
+                };
+            }
+        },
+
+        // ⭐ NEW: DUKAN PARTIES (Global Party Master Directory)
+        dukan_parties: {
+            isGlobal: true,
+            defaultSourceKey: 'dukan_parties',
+            resolveSourceKey: () => 'dukan_parties',
+            toSqlRow: (item, ctx) => {
+                const known = new Set(['id', 'name', 'address', 'city', 'mob', 'gst', 'marka', 'transport', 'agent']);
+                const extra = {};
+                if (item && typeof item === 'object') {
+                    Object.keys(item).forEach((k) => {
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
+                    });
+                }
+                const rid = String(item.id).trim();
+                return {
+                    id: `${ctx.uid}_global_${ctx.sourceKey}_${rid}`,
+                    record_id: rid,
+                    user_id: ctx.uid,
+                    tenant_id: ctx.tid,
+                    session: 'global',
+                    source_key: ctx.sourceKey,
+                    name: item.name || '',
+                    address: item.address || '',
+                    city: item.city || '',
+                    mob: item.mob || '',
+                    gst: item.gst || '',
+                    marka: item.marka || '',
+                    transport: item.transport || '',
+                    agent: item.agent || '',
+                    extra,
+                    is_deleted: false
+                };
+            },
+            fromSqlRow: (row) => {
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
+                return {
+                    ...extraObj,
+                    id: row.record_id || row.id,
+                    name: row.name || '',
+                    address: row.address || '',
+                    city: row.city || '',
+                    mob: row.mob || '',
+                    gst: row.gst || '',
+                    marka: row.marka || '',
+                    transport: row.transport || '',
+                    agent: row.agent || ''
+                };
+            }
+        },
+
+        // ⭐ NEW: DUKAN DESIGNS & BARCODES (Global Catalog)
+        dukan_designs: {
+            isGlobal: true,
+            defaultSourceKey: 'dukan_designs',
+            resolveSourceKey: () => 'dukan_designs',
+            toSqlRow: (item, ctx) => {
+                const known = new Set(['id', 'kariger', 'sareeName', 'karkhanaId', 'design', 'specs', 'code']);
+                const extra = {};
+                if (item && typeof item === 'object') {
+                    Object.keys(item).forEach((k) => {
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
+                    });
+                }
+                const rid = String(item.id).trim();
+                return {
+                    id: `${ctx.uid}_global_${ctx.sourceKey}_${rid}`,
+                    record_id: rid,
+                    user_id: ctx.uid,
+                    tenant_id: ctx.tid,
+                    session: 'global',
+                    source_key: ctx.sourceKey,
+                    kariger: item.kariger || '',
+                    saree_name: item.sareeName || '',
+                    karkhana_id: item.karkhanaId || 'k_main',
+                    design: item.design || '',
+                    specs: item.specs || '',
+                    code: item.code || '',
+                    extra,
+                    is_deleted: false
+                };
+            },
+            fromSqlRow: (row) => {
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
+                return {
+                    ...extraObj,
+                    id: row.record_id || row.id,
+                    kariger: row.kariger || '',
+                    sareeName: row.saree_name || '',
+                    karkhanaId: row.karkhana_id || 'k_main',
+                    design: row.design || '',
+                    specs: row.specs || '',
+                    code: row.code || ''
+                };
+            }
+        },
+
+        // ⭐ NEW: DUKAN ORDERS (Session-wise)
+        dukan_orders: {
+            defaultSourceKey: 'dukan_orders',
+            resolveSourceKey: () => 'dukan_orders',
+            toSqlRow: (item, ctx) => {
+                const known = new Set([
+                    'id', 'no', 'date', 'firmId', 'firmName', 'partyId', 'partyName',
+                    'partyAddress', 'partyMob', 'gst', 'marka', 'transport', 'agent',
+                    'pack', 'fold', 'remarks', 'status', 'items'
+                ]);
+                const extra = {};
+                if (item && typeof item === 'object') {
+                    Object.keys(item).forEach((k) => {
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
+                    });
+                }
+                const rid = String(item.id).trim();
+                return {
+                    id: `${ctx.uid}_${ctx.sess}_${ctx.sourceKey}_${rid}`,
+                    record_id: rid,
+                    user_id: ctx.uid,
+                    tenant_id: ctx.tid,
+                    session: ctx.sess,
+                    source_key: ctx.sourceKey,
+                    order_no: String(item.no || ''),
+                    date: item.date || null,
+                    firm_id: item.firmId || '',
+                    firm_name: item.firmName || '',
+                    party_id: item.partyId || '',
+                    party_name: item.partyName || '',
+                    party_address: item.partyAddress || '',
+                    party_mob: item.partyMob || '',
+                    gst: item.gst || '',
+                    marka: item.marka || '',
+                    transport: item.transport || '',
+                    agent: item.agent || '',
+                    pack: item.pack || 'Box',
+                    fold: item.fold || 'Box Fold',
+                    remarks: item.remarks || '',
+                    status: item.status || 'Pending',
+                    items: Array.isArray(item.items) ? item.items : [],
+                    extra,
+                    is_deleted: false
+                };
+            },
+            fromSqlRow: (row) => {
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
+                return {
+                    ...extraObj,
+                    id: row.record_id || row.id,
+                    no: row.order_no || '',
+                    date: row.date || '',
+                    firmId: row.firm_id || '',
+                    firmName: row.firm_name || '',
+                    partyId: row.party_id || '',
+                    partyName: row.party_name || '',
+                    partyAddress: row.party_address || '',
+                    partyMob: row.party_mob || '',
+                    gst: row.gst || '',
+                    marka: row.marka || '',
+                    transport: row.transport || '',
+                    agent: row.agent || '',
+                    pack: row.pack || 'Box',
+                    fold: row.fold || 'Box Fold',
+                    remarks: row.remarks || '',
+                    status: row.status || 'Pending',
+                    items: Array.isArray(row.items) ? row.items : []
+                };
+            }
+        },
+
+        // ⭐ NEW: DUKAN PARTY CHALLANS (Local Key: dukan_challans -> Table: dukan_party_challans)
+        dukan_party_challans: {
+            defaultSourceKey: 'dukan_challans',
+            resolveSourceKey: () => 'dukan_challans',
+            toSqlRow: (item, ctx) => {
+                const known = new Set([
+                    'id', 'no', 'date', 'firmId', 'firmName', 'partyId', 'partyName',
+                    'city', 'address', 'mob', 'gst', 'marka', 'orderId', 'items'
+                ]);
+                const extra = {};
+                if (item && typeof item === 'object') {
+                    Object.keys(item).forEach((k) => {
+                        if (!known.has(k) && item[k] !== undefined) extra[k] = item[k];
+                    });
+                }
+                const rid = String(item.id).trim();
+                return {
+                    id: `${ctx.uid}_${ctx.sess}_${ctx.sourceKey}_${rid}`,
+                    record_id: rid,
+                    user_id: ctx.uid,
+                    tenant_id: ctx.tid,
+                    session: ctx.sess,
+                    source_key: ctx.sourceKey,
+                    challan_no: String(item.no || ''),
+                    date: item.date || null,
+                    firm_id: item.firmId || '',
+                    firm_name: item.firmName || '',
+                    party_id: item.partyId || '',
+                    party_name: item.partyName || '',
+                    city: item.city || '',
+                    address: item.address || '',
+                    mob: item.mob || '',
+                    gst: item.gst || '',
+                    marka: item.marka || '',
+                    order_id: item.orderId || '',
+                    items: Array.isArray(item.items) ? item.items : [],
+                    extra,
+                    is_deleted: false
+                };
+            },
+            fromSqlRow: (row) => {
+                const extraObj = (row.extra && typeof row.extra === 'object' && !Array.isArray(row.extra)) ? row.extra : {};
+                return {
+                    ...extraObj,
+                    id: row.record_id || row.id,
+                    no: row.challan_no || '',
+                    date: row.date || '',
+                    firmId: row.firm_id || '',
+                    firmName: row.firm_name || '',
+                    partyId: row.party_id || '',
+                    partyName: row.party_name || '',
+                    city: row.city || '',
+                    address: row.address || '',
+                    mob: row.mob || '',
+                    gst: row.gst || '',
+                    marka: row.marka || '',
+                    orderId: row.order_id || '',
+                    items: Array.isArray(row.items) ? row.items : []
+                };
+            }
         }
-        // === ADD NEW ROW-BY-ROW MODULES HERE IN FUTURE ===
     };
 
     const isLightweightLocalKey = (key) => {
@@ -1240,7 +1483,8 @@
             k.includes('karkhana_list') ||
             k.includes('active_karkhana') ||
             k.includes('billing_config') ||
-            k.includes('portal_token')
+            k.includes('portal_token') ||
+            k.includes('account_uid')
         );
     };
 
@@ -1301,7 +1545,7 @@
     };
 
     /**
-     * ⭐ AUTO PUSH KARKHANAS (Main Godown + Bahadurganj)
+     * ⭐ SAFE KARKHANAS UPSERT (Stable karkhana_key — No ID changing, No PK Collision!)
      */
     const autoPushKarkhanasToSupabase = async () => {
         if (!supabaseClient || !navigator.onLine) return;
@@ -1316,8 +1560,8 @@
             }
             if (!Array.isArray(list) || list.length === 0) {
                 const rawPrefixed =
-                    localStorage.getItem(`${uid}_${sess}_karkhana_list`) ||
-                    localStorage.getItem(`${uid}_karkhana_list`);
+                    localStorage.getItem(`${uid}_karkhana_list`) ||
+                    localStorage.getItem(`${uid}_${sess}_karkhana_list`);
                 if (rawPrefixed) list = JSON.parse(rawPrefixed);
             }
             if (!Array.isArray(list) || list.length === 0) {
@@ -1329,103 +1573,117 @@
         } catch (_) {}
 
         if (!Array.isArray(list) || list.length === 0) {
-            list = [
-                { id: 'k_main', name: 'Main Godown', isDefault: true },
-                { id: 'k_bahadurganj', name: 'Bahadurganj', isDefault: false }
-            ];
+            list = [{ id: 'k_main', name: 'Main Godown', isDefault: true }];
         }
 
         try {
             recentSelfWrites['karkhanas'] = Date.now();
-            await supabaseClient.from('karkhanas').delete().eq('user_id', uid);
+            const seenKeys = new Set();
+            const rows = [];
 
-            const rows = list.map((k) => ({
-                user_id: uid,
-                karkhana_name: String(k.name || 'Karkhana').trim(),
-                is_default: Boolean(k.isDefault || k.id === 'k_main'),
-                created_at: new Date().toISOString()
-            }));
+            list.forEach((k, idx) => {
+                if (!k) return;
+                const isDef = Boolean(k.isDefault || k.id === 'k_main');
+                const kKey = isDef ? 'k_main' : String(k.id || `k_unit_${idx + 1}`).trim();
+                if (!kKey || seenKeys.has(kKey)) return;
+                seenKeys.add(kKey);
+                rows.push({
+                    user_id: uid,
+                    karkhana_key: kKey,
+                    karkhana_name: String(k.name || 'Karkhana').trim(),
+                    is_default: isDef
+                });
+            });
 
-            let { error } = await supabaseClient.from('karkhanas').insert(rows);
+            if (rows.length > 0) {
+                const { error } = await supabaseClient
+                    .from('karkhanas')
+                    .upsert(rows, { onConflict: 'user_id,karkhana_key' });
+                if (error) {
+                    console.warn('[autoPushKarkhanasToSupabase] Upsert error:', error.message);
+                    return;
+                }
 
-            if (error) {
-                const rowsWithId = rows.map((r, i) => ({ ...r, id: i + 1 }));
-                await supabaseClient.from('karkhanas').insert(rowsWithId);
+                // Sirf hataye gaye godam delete karein (existing IDs intact rahengi)
+                const { data: existing } = await supabaseClient
+                    .from('karkhanas')
+                    .select('id, karkhana_key')
+                    .eq('user_id', uid);
+                if (Array.isArray(existing)) {
+                    const staleIds = existing
+                        .filter((r) => r.karkhana_key && !seenKeys.has(r.karkhana_key))
+                        .map((r) => r.id);
+                    if (staleIds.length > 0) {
+                        await supabaseClient.from('karkhanas').delete().eq('user_id', uid).in('id', staleIds);
+                    }
+                }
             }
-            console.log('🟢 [Auto-Sync] karkhanas cloud table updated!');
+            console.log('🟢 [Auto-Sync] karkhanas safely upserted!');
         } catch (err) {
             console.warn('[autoPushKarkhanasToSupabase]:', err);
         }
     };
 
+    /**
+     * ⭐ CLEAN PREFIX-STRIPPED TABLE ROUTING (Username collision impossible!)
+     */
     const resolveTargetTable = (fullKey) => {
-        const k = String(fullKey).toLowerCase();
+        const uid = getSafeUserId();
+        let k = String(fullKey || '').trim().toLowerCase();
 
-        if (k.includes('karkhana_list')) return 'KARKHANA_ACTION';
-        if (k.includes('session') || k.includes('app_store')) return 'app_store';
+        // Pehle user_id + session prefix strip karein taaki username (e.g. 'saree_hub', 'banarasi') kabhi match na kare
+        if (uid) {
+            const escUid = uid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const sessMatch = k.match(new RegExp(`^${escUid}_\\d{4}-\\d{4}_(.+)$`));
+            if (sessMatch) k = sessMatch[1];
+            else if (k.startsWith(`${uid}_global_`)) k = k.slice(`${uid}_global_`.length);
+            else if (k.startsWith(`${uid}_`)) k = k.slice(`${uid}_`.length);
+        }
 
-        // ⭐ Nayi dedicated tables
-        if (k.includes('info_ledger')) return 'info_ledger';
+        if (k === 'karkhana_list') return 'KARKHANA_ACTION';
+        if (k.includes('session') || k === 'app_store' || k === 'jw_challan_seq' || k === 'jobwork_firm_profile') {
+            return 'app_store';
+        }
+
+        // ⭐ Dukan Management (5 Alag Tables — Factory Final Out 'dukan_transfer_history' se bilkul alag!)
+        if (k === 'dukan_firms') return 'dukan_firms';
+        if (k === 'dukan_parties') return 'dukan_parties';
+        if (k === 'dukan_designs') return 'dukan_designs';
+        if (k === 'dukan_orders') return 'dukan_orders';
+        if (k === 'dukan_challans') return 'dukan_party_challans';
+        if (k === 'dukan_transfer_history') return 'dukan_challans';
+
+        // ⭐ Unified JobWork Trail (Sabhi Groups + Unlimited Custom Groups)
+        if (k === 'jobwork_groups') return 'jobwork_groups';
+        if (k.startsWith('jobwork_sheets_') || k.startsWith('jw_sheet_')) return 'jobwork_sheets';
+        if (k === 'jobwork_workers' || k.includes('cutting_workers') || k.includes('calender_workers') || k.includes('embroidery_workers')) {
+            return 'jobwork_workers';
+        }
+        if (k === 'jw_bills_list' || k === 'jw_payments_list' || k.includes('jw_bill') || k.includes('jw_payment')) {
+            return 'job_work_bills';
+        }
+
+        // ⭐ Core ERP Tables
+        if (k === 'info_ledger') return 'info_ledger';
         if (k.includes('billing_config')) return 'billing_config';
         if (k.includes('tani_learned')) return 'tani_learned';
 
-        if (k.includes('saree_history')) return 'saree_history';
-        if (k.includes('saree_stock') || k.includes('saree_items') || k.includes('saree')) return 'saree_stock';
-        if (k.includes('zari_history')) return 'zari_history';
-        if (k.includes('zari_stock') || k.includes('zari')) return 'zari_stock';
-        if (k.includes('bana_history')) return 'bana_history';
-        if (k.includes('bana_stock') || k.includes('bana')) return 'bana_stock';
-        if (k.includes('sancha_history')) return 'sancha_history';
-        if (k.includes('sancha_items') || k.includes('sancha_list') || k.includes('sancha')) return 'sancha_list';
-        if (k.includes('kariger_sheet') || k.includes('tani_sheet')) return 'tani_sheets';
-        if (k.includes('kariger_list') || k.includes('karigers') || k.includes('kariger')) return 'karigers';
-        if (
-            k.includes('payment_records') ||
-            k.includes('payment_history') ||
-            k.includes('payment_list') ||
-            k.includes('payments')
-        ) {
-            if (!k.includes('jw_payment')) {
-                return 'payments';
-            }
+        if (k === 'saree_history') return 'saree_history';
+        if (k === 'saree_stock' || k === 'saree_items') return 'saree_stock';
+        if (k === 'zari_history') return 'zari_history';
+        if (k === 'zari_stock') return 'zari_stock';
+        if (k === 'bana_history') return 'bana_history';
+        if (k === 'bana_stock') return 'bana_stock';
+        if (k === 'sancha_history') return 'sancha_history';
+        if (k === 'sancha_items' || k === 'sancha_list') return 'sancha_list';
+        if (k.startsWith('kariger_sheets_') || k.startsWith('tani_sheet')) return 'tani_sheets';
+        if (k === 'kariger_list' || k === 'karigers') return 'karigers';
+        if (k === 'payment_records' || k === 'payment_history' || k === 'payment_list' || k === 'payments') {
+            return 'payments';
         }
-        // Dukan check ko transfer se pehle rakhein (taaki dukan_transfer_history sahi table me jaye)
-        if (k.includes('dukan')) return 'dukan_challans';
-        if (k.includes('material_transfer') || k.includes('transfer')) return 'material_transfers';
-
-        // ⭐ TANI ORDERS & RANGAI TABLE ROUTING
-        if (k.includes('tani_order') || k.includes('tani_parchi') || k.includes('tani_rangai')) return 'tani_orders';
-
-        if (k.includes('embroidery_history')) return 'embroidery_history';
-        if (k.includes('cutting_history')) return 'cutting_history';
-        if (k.includes('calender_history')) return 'calender_history';
-
-        // KHATA SHEETS ➔ HISTORY TABLES
-        if (k.includes('jobwork_sheets_') || k.includes('jw_sheet_')) {
-            const workerId = k.replace(/.*jobwork_sheets_/, '').replace(/.*jw_sheet_/, '');
-            let workers = [];
-            try {
-                if (typeof window.getStore === 'function') workers = window.getStore('jobwork_workers') || [];
-                if (!workers.length && window.APP_MEMORY_CACHE?.jobwork_workers) {
-                    workers = window.APP_MEMORY_CACHE.jobwork_workers;
-                }
-                if (!workers.length) workers = JSON.parse(localStorage.getItem('jobwork_workers') || '[]');
-            } catch (_) {}
-            const found = workers.find(w => w && String(w.id).toLowerCase() === workerId.toLowerCase());
-            const wType = String(found?.type || '').toLowerCase();
-
-            if (wType === 'embroidery') return 'embroidery_history';
-            if (wType === 'calender') return 'calender_history';
-            return 'cutting_history';
-        }
-
-        // WORKERS LIST ➔ ROW-BY-ROW MASTER TABLE
-        if (k.includes('jobwork_workers') || k.includes('cutting_workers') || k.includes('calender_workers') || k.includes('embroidery_workers')) {
-            return 'jobwork_workers';
-        }
-
-        if (k.includes('jw_bill') || k.includes('jobwork_bill') || k.includes('jw_payment')) {
-            return 'job_work_bills';
+        if (k === 'material_transfers' || k === 'karkhana_transfers') return 'material_transfers';
+        if (k === 'tani_orders_list' || k.startsWith('tani_order') || k.startsWith('tani_parchi') || k.startsWith('tani_rangai')) {
+            return 'tani_orders';
         }
 
         console.warn('[CloudEngine] Unmapped key synced to app_store fallback:', fullKey);
@@ -1439,13 +1697,19 @@
 
     const mapCloudKeyToLocalKey = (cloudKey, tableName) => {
         const k = String(cloudKey).toLowerCase();
-        if (k.includes('sancha_list') || tableName === 'sancha_list') return 'sancha_items';
-        if (k.includes('karigers') || tableName === 'karigers') return 'kariger_list';
+        if (tableName === 'sancha_list' || k.includes('sancha_list')) return 'sancha_items';
+        if (tableName === 'karigers' || k.includes('karigers')) return 'kariger_list';
         if (tableName === 'jobwork_workers' || k.includes('jobwork_workers')) return 'jobwork_workers';
+        if (tableName === 'jobwork_groups') return 'jobwork_groups';
         if (tableName === 'job_work_bills' && k.includes('jw_bills_list')) return 'jw_bills_list';
         if (tableName === 'job_work_bills' && k.includes('jw_payments_list')) return 'jw_payments_list';
         if (tableName === 'tani_orders' || k.includes('tani_orders')) return 'tani_orders_list';
         if (tableName === 'dukan_challans' || k.includes('dukan_transfer')) return 'dukan_transfer_history';
+        if (tableName === 'dukan_party_challans') return 'dukan_challans';
+        if (tableName === 'dukan_firms') return 'dukan_firms';
+        if (tableName === 'dukan_parties') return 'dukan_parties';
+        if (tableName === 'dukan_designs') return 'dukan_designs';
+        if (tableName === 'dukan_orders') return 'dukan_orders';
         if (tableName === 'material_transfers' || k.includes('material_transfer')) return 'material_transfers';
         if (tableName === 'info_ledger' || k.includes('info_ledger')) return 'info_ledger';
         return cloudKey;
@@ -1456,26 +1720,30 @@
             case 'karkhanas': return 'Godam aur Karkhane load ho rahe hain...';
             case 'app_store': return 'Session & Settings load ho rahi hain...';
             case 'saree_stock':
-            case 'saree_history': return 'Saree Stock & Passbook (Delta Sync) load ho raha hai...';
+            case 'saree_history': return 'Saree Stock & Passbook load ho raha hai...';
             case 'zari_stock':
-            case 'zari_history': return 'Zari Stock & Hisab (Delta Sync) load ho raha hai...';
+            case 'zari_history': return 'Zari Stock & Hisab load ho raha hai...';
             case 'bana_stock':
-            case 'bana_history': return 'Bana Stock & Hisab (Delta Sync) load ho raha hai...';
+            case 'bana_history': return 'Bana Stock & Hisab load ho raha hai...';
             case 'sancha_list':
-            case 'sancha_history': return 'Sancha (Tani & Chukka • Delta Sync) load ho raha hai...';
+            case 'sancha_history': return 'Sancha (Tani & Chukka) load ho raha hai...';
             case 'karigers':
-            case 'tani_sheets': return 'Sabhi Karigers & Tani Sheets (Delta Sync) load rahi hain...';
-            case 'material_transfers': return 'Material Transfers (Delta Sync) load ho rahe hain...';
-            case 'dukan_challans': return 'Dukan Challans (Delta Sync) load ho rahe hain...';
-            case 'payments': return 'Payments & Bakaya Hisab (Delta Sync) load ho raha hai...';
-            case 'cutting_history':
-            case 'embroidery_history':
-            case 'calender_history':
-            case 'job_work_bills':
-            case 'jobwork_workers': return 'Jobwork Workers, Sheets & Bills (Delta Sync) load ho rahe hain...';
-            case 'tani_orders': return 'Tani Orders & Rangai Chart (Delta Sync) load ho raha hai...';
+            case 'tani_sheets': return 'Sabhi Karigers & Tani Sheets load ho rahi hain...';
+            case 'material_transfers': return 'Material Transfers load ho rahe hain...';
+            case 'dukan_challans': return 'Final Out Challans load ho rahe hain...';
+            case 'payments': return 'Payments & Bakaya Hisab load ho raha hai...';
+            case 'jobwork_groups':
+            case 'jobwork_workers':
+            case 'jobwork_sheets':
+            case 'job_work_bills': return 'Unified JobWork Trail, Workers & Bills load ho rahe hain...';
+            case 'dukan_firms':
+            case 'dukan_parties':
+            case 'dukan_designs':
+            case 'dukan_orders':
+            case 'dukan_party_challans': return 'Dukan Management (Firms, Parties, Orders, Challans) load ho raha hai...';
+            case 'tani_orders': return 'Tani Orders & Rangai Chart load ho raha hai...';
             case 'tani_learned': return 'Tani Learned Colors & Rangi load ho raha hai...';
-            case 'info_ledger': return 'Info Ledger (Kariger Directory • Delta Sync) load ho raha hai...';
+            case 'info_ledger': return 'Info Ledger Directory load ho raha hai...';
             case 'billing_config': return 'Billing Config load ho rahi hai...';
             default: return 'Company Data load ho raha hai...';
         }
@@ -1582,7 +1850,11 @@
         const globalPrefix = `${uid}_`;
         if (shortKey.startsWith(prefix)) {
             shortKey = shortKey.replace(prefix, '');
-        } else if (shortKey.startsWith(globalPrefix) && Array.isArray(window.GLOBAL_APP_KEYS) && window.GLOBAL_APP_KEYS.includes(shortKey.slice(globalPrefix.length))) {
+        } else if (
+            shortKey.startsWith(globalPrefix) &&
+            Array.isArray(window.GLOBAL_APP_KEYS) &&
+            window.GLOBAL_APP_KEYS.includes(shortKey.slice(globalPrefix.length))
+        ) {
             shortKey = shortKey.slice(globalPrefix.length);
         }
 
@@ -1663,8 +1935,8 @@
         try {
             const ctx = { uid, tid, sess, sourceKey, shortKey, fullKey };
 
-            // 1. Upsert sirf badli / nayi rows (chunked)
-            const validUpserts = (upserts || []).filter((it) => it && it.id !== undefined && it.id !== null);
+            // 1. Upsert sirf badli / nayi rows (supports both item.id and item.key)
+            const validUpserts = (upserts || []).filter((it) => getLocalItemId(it) !== null);
             for (let i = 0; i < validUpserts.length; i += ROW_WRITE_CHUNK) {
                 const chunk = validUpserts.slice(i, i + ROW_WRITE_CHUNK).map((it) => schema.toSqlRow(it, ctx));
                 const { error } = await supabaseClient
@@ -1712,7 +1984,7 @@
     };
 
     /* ========================================================================
-       GENERIC ROW-BY-ROW DELTA PULL ENGINE (updated_at > last_sync)
+       GENERIC ROW-BY-ROW DELTA PULL ENGINE (2s Safety Overlap + Clean Empty Sync)
     ======================================================================== */
     const getDeltaSyncCursorKey = (tbl, uid, sess) => `erp_delta_sync_${tbl}_${uid}_${sess}`;
 
@@ -1766,7 +2038,12 @@
                 if (isInitialPull) {
                     query = query.eq('is_deleted', false);
                 } else {
-                    query = query.gt('updated_at', lastSyncIso);
+                    // 2-second safety overlap taaki same-millisecond chunk rows kabhi skip na hon
+                    const tsMs = Date.parse(lastSyncIso);
+                    const overlapIso = Number.isFinite(tsMs)
+                        ? new Date(Math.max(0, tsMs - 2000)).toISOString()
+                        : lastSyncIso;
+                    query = query.gte('updated_at', overlapIso);
                 }
 
                 const { data, error } = await query
@@ -1787,6 +2064,10 @@
             }
 
             if (fetchedRows.length === 0) {
+                // Initial pull par agar cloud khali hai toh single-key stale local data clear karein
+                if (isInitialPull && !['tani_sheets', 'jobwork_sheets', 'payments', 'job_work_bills'].includes(tbl)) {
+                    smartApplyRemoteData(schema.defaultSourceKey, []);
+                }
                 return false;
             }
 
@@ -1840,9 +2121,8 @@
                 const mergedMap = new Map();
                 for (let i = 0; i < currentArr.length; i++) {
                     const item = currentArr[i];
-                    if (item && item.id !== undefined && item.id !== null) {
-                        mergedMap.set(String(item.id).trim(), item);
-                    }
+                    const itemId = getLocalItemId(item);
+                    if (itemId) mergedMap.set(itemId, item);
                 }
 
                 for (let i = 0; i < effectiveRows.length; i++) {
@@ -2016,7 +2296,6 @@
             }
         });
 
-        // Agar cloud me active session badal gaya hai, toh device ko turant naye session me reload karein
         const activeRow = data.find((r) => String(r.id || r.key || '') === `${uid}_app_active_session`);
         if (activeRow) {
             const rawActive = activeRow.data !== undefined ? activeRow.data : activeRow.value;
@@ -2034,6 +2313,12 @@
         return hasNewData;
     };
 
+    const mapKarkhanaRows = (kData) => kData.map((row) => ({
+        id: row.karkhana_key || (row.is_default ? 'k_main' : `k_${row.id}`),
+        name: row.karkhana_name,
+        isDefault: Boolean(row.is_default)
+    }));
+
     const pullSingleTable = async (tbl) => {
         if (!supabaseClient || !navigator.onLine || !tbl) return;
         const uid = getSafeUserId();
@@ -2044,21 +2329,14 @@
         try {
             if (Object.prototype.hasOwnProperty.call(ROW_SYNC_SCHEMAS, tbl)) {
                 const updated = await pullRowSyncTable(tbl, uid);
-                if (updated) {
-                    triggerSmartUIRepaint();
-                }
+                if (updated) triggerSmartUIRepaint();
                 return;
             }
 
             if (tbl === 'karkhanas') {
                 const { data: kData, error: kErr } = await supabaseClient.from('karkhanas').select('*').eq('user_id', uid);
                 if (!kErr && Array.isArray(kData) && kData.length > 0) {
-                    const kList = kData.map(row => ({
-                        id: row.is_default ? 'k_main' : `k_${row.id}`,
-                        name: row.karkhana_name,
-                        isDefault: Boolean(row.is_default)
-                    }));
-                    if (smartApplyRemoteData('karkhana_list', kList)) {
+                    if (smartApplyRemoteData('karkhana_list', mapKarkhanaRows(kData))) {
                         triggerSmartUIRepaint();
                     }
                 }
@@ -2111,7 +2389,6 @@
             }
         }
 
-        // IndexedDB preload poora hone ka wait karein taaki delta sync purane data ko overwrite na kare
         await waitForStoragePreload();
 
         let hasNewData = false;
@@ -2121,22 +2398,17 @@
                 if (tbl === 'karkhanas') {
                     const { data: kData, error: kErr } = await supabaseClient.from('karkhanas').select('*').eq('user_id', uid);
                     if (!kErr && Array.isArray(kData) && kData.length > 0) {
-                        const kList = kData.map(row => ({
-                            id: row.is_default ? 'k_main' : `k_${row.id}`,
-                            name: row.karkhana_name,
-                            isDefault: Boolean(row.is_default)
-                        }));
-                        if (smartApplyRemoteData('karkhana_list', kList)) hasNewData = true;
+                        if (smartApplyRemoteData('karkhana_list', mapKarkhanaRows(kData))) hasNewData = true;
                     } else if (!kErr && Array.isArray(kData) && kData.length === 0) {
+                        const defList = [{ id: 'k_main', name: 'Main Godown', isDefault: true }];
+                        smartApplyRemoteData('karkhana_list', defList);
                         await autoPushKarkhanasToSupabase();
                     }
                     return;
                 }
 
                 if (Object.prototype.hasOwnProperty.call(ROW_SYNC_SCHEMAS, tbl)) {
-                    if (await pullRowSyncTable(tbl, uid)) {
-                        hasNewData = true;
-                    }
+                    if (await pullRowSyncTable(tbl, uid)) hasNewData = true;
                     return;
                 }
 
@@ -2146,15 +2418,12 @@
                     .eq('user_id', uid);
 
                 if (!error && data && data.length > 0) {
-                    if (applyRowsFromTable(tbl, data, uid)) {
-                        hasNewData = true;
-                    }
+                    if (applyRowsFromTable(tbl, data, uid)) hasNewData = true;
                 }
             } catch (_) {}
         };
 
         try {
-            // Sabse pehle app_store pull karein taaki session mismatch hone par turant reload ho sake
             const sessBeforeAppStore = getActiveSessionVal();
             await pullOneTableInPool('app_store');
             if (getActiveSessionVal() !== sessBeforeAppStore) {
@@ -2163,7 +2432,9 @@
 
             const tables = [
                 'karkhanas',
+                'jobwork_groups',
                 'jobwork_workers',
+                'jobwork_sheets',
                 'karigers',
                 'tani_sheets',
                 'saree_stock', 'saree_history',
@@ -2172,10 +2443,11 @@
                 'sancha_list', 'sancha_history',
                 'material_transfers', 'dukan_challans',
                 'payments',
-                'cutting_history', 'embroidery_history', 'calender_history',
                 'job_work_bills',
                 'tani_orders',
                 'info_ledger',
+                'dukan_firms', 'dukan_parties', 'dukan_designs',
+                'dukan_orders', 'dukan_party_challans',
                 'billing_config',
                 'tani_learned'
             ];
@@ -2294,6 +2566,8 @@
                 clearTimeout(tablePullTimers[t]);
                 delete tablePullTimers[t];
             });
+            lastFullPullAt = 0;
+            lastFullPullUid = null;
             if (realtimeChannel && supabaseClient) {
                 supabaseClient.removeChannel(realtimeChannel);
                 realtimeChannel = null;
