@@ -1,6 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP (THE TALLY BRIDGE) - DUKAN CORE ENGINE
    File: dukan-erp/dukan-core.js
+   Fixed: restoreFinishedStockByRef & recalcOrderStatus crash aliases added
 ============================================================================ */
 (() => {
     'use strict';
@@ -162,6 +163,8 @@
         if (typeof window.invalidateSareeCalcCache === 'function') window.invalidateSareeCalcCache();
         if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
     };
+    // ⭐ Alias fix for dukan-challan.js
+    D.restoreFinishedStockByRef = D.restoreFinishedByRef;
 
     D.deductFinishedStock = (designName, qty, meta = {}) => {
         let rem = Math.round(D.num(qty));
@@ -271,6 +274,8 @@
         ord.status = prog.allDone ? 'Complete' : 'Pending';
         D.set('dukan_orders', ords);
     };
+    // ⭐ Alias fix for dukan-challan.js & dukan-order.js
+    D.recalcOrderStatus = D.syncOrderStatus;
 
     D.paginate = (arr, page = 1, size = D.pageSize) => {
         const total = arr.length;
@@ -598,6 +603,16 @@
     }
 
     D.runGw = (i) => { D.gwIdx = i; if (GW_ITEMS[i]) GW_ITEMS[i].fn(); };
+
+    // Live cloud sync ke baad agar Dukan Gateway khula hai toh counts auto-refresh honge
+    const origDukanRefresh = window.triggerActiveSectionRefresh;
+    window.triggerActiveSectionRefresh = () => {
+        if (typeof origDukanRefresh === 'function') origDukanRefresh();
+        const sec = document.getElementById('dukan-section');
+        if (sec && sec.style.display !== 'none' && D.screen === 'gateway') {
+            window.openDukanGateway();
+        }
+    };
 
     document.addEventListener('keydown', (e) => {
         if (!e || !e.key) return;
