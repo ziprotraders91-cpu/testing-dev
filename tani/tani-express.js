@@ -2,7 +2,7 @@
    SIMPLICITY ERP - TANI ORDER EXPRESS ENGINE (2-STEP TALLYPRIME WHITE & GOLD)
    Folder: tani / File: tani-express.js • Developed for: Farhan Jawed
    Features:
-   - Step 1: Order Details (Left) + Kariger/Sancha/Rangi/Bana Picker (Right)
+   - Step 1: Order Details (Left) + Kariger/Sancha Maker/Rangi/Bana Picker (Right)
    - Step 2: 8-Colors Table + Matching Style (Left) + Learned Colors Picker (Right)
    - Light-Yellow Ghost Auto-Fill from Kariger's Previous Tani (Enter = Accept, Type/↓ = Change)
    - [F4] Copy All Same from Previous Tani
@@ -67,6 +67,13 @@
         return isNaN(n) || !isFinite(n) ? fallback : n;
     };
 
+    const normPerson = (p) => {
+        if (typeof window.normalizePerson === 'function') return window.normalizePerson(p);
+        const s = String(p ?? '').trim();
+        if (!s || s === '-' || s.toLowerCase() === 'undefined' || s.toLowerCase() === 'null') return '';
+        return s;
+    };
+
     const getToday = () => {
         let rawDate = (typeof window.getTodayDate === 'function')
             ? window.getTodayDate()
@@ -108,7 +115,6 @@
         if (!kName) return null;
         const orders = getTaniOrders().filter(o => o && String(o.kariger || '').trim().toUpperCase() === kName);
         if (!orders.length) return null;
-        // Sort by createdAt / orderNo descending so we always get the latest Tani
         orders.sort((a, b) => {
             const ta = safeNum(a.createdAt, 0);
             const tb = safeNum(b.createdAt, 0);
@@ -251,21 +257,30 @@
         }
 
         if (kind === 'sancha') {
-            const sanchaItems = toArray(getFromStore('sancha_items'))
-                .filter(s => (s?.category || 'tani').toLowerCase() === 'tani');
+            // Pull Sancha Makers (person) from Sancha Stock + Past Tani Orders (NOT Tani Item names!)
             const map = new Map();
-            sanchaItems.forEach(s => {
-                const nm = String(s?.name || '').trim();
-                if (!nm) return;
-                const bacha = safeNum(s.bacha !== undefined ? s.bacha : s.aaya);
-                map.set(nm.toLowerCase(), {
-                    value: nm,
-                    label: nm,
-                    sub: `${bacha.toFixed(1)} Kg`
+            if (typeof window.getSanchaMakersSummary === 'function') {
+                window.getSanchaMakersSummary('tani', '', 'all').forEach((m) => {
+                    const nm = normPerson(m.name);
+                    if (!nm) return;
+                    map.set(nm.toLowerCase(), {
+                        value: nm,
+                        label: nm,
+                        sub: `${safeNum(m.bacha).toFixed(1)} Kg`
+                    });
                 });
-            });
-            getTaniOrders().forEach(o => {
-                const nm = String(o?.sancha || '').trim();
+            } else {
+                const sanchaItems = toArray(getFromStore('sancha_items'))
+                    .filter(s => s && (s.category || 'tani').toLowerCase() === 'tani');
+                sanchaItems.forEach((s) => {
+                    const nm = normPerson(s.person);
+                    if (!nm || map.has(nm.toLowerCase())) return;
+                    map.set(nm.toLowerCase(), { value: nm, label: nm, sub: 'Sancha Maker' });
+                });
+            }
+
+            getTaniOrders().forEach((o) => {
+                const nm = normPerson(o?.sancha);
                 if (nm && !map.has(nm.toLowerCase())) {
                     map.set(nm.toLowerCase(), { value: nm, label: nm, sub: 'Past Order' });
                 }
@@ -344,7 +359,7 @@
 
         const titleMap = {
             kariger: 'List of Karigers',
-            sancha: 'List of Sanchas',
+            sancha: 'List of Sanchas (Makers)',
             rangi: 'List of Rangi / Dyers',
             bana: 'List of Bana Stock',
             color: 'Learned Colors',
@@ -1058,7 +1073,6 @@
 
         document.body.insertAdjacentHTML('beforeend', modalHtml);
 
-        // Save original placeholders so clearFieldGhost can restore them cleanly
         document.querySelectorAll('#master-tani-express-modal input[placeholder]').forEach((el) => {
             el.dataset.origPlaceholder = el.getAttribute('placeholder') || '';
         });
@@ -1095,7 +1109,6 @@
             });
 
             inp.addEventListener('input', () => {
-                // Typing overrides ghost automatically (no Backspace needed!)
                 if (inp.value !== '') {
                     clearFieldGhost(inp, false);
                 } else if (inp.dataset.ghost) {
@@ -1129,7 +1142,6 @@
                 const kind = inp.getAttribute('data-picker') || 'summary';
                 const isPickerActive = (kind !== 'summary' && pickerFilteredItems.length > 0);
 
-                // F4 anywhere copies all remaining ghost suggestions from previous Tani
                 if (e.key === 'F4') {
                     e.preventDefault();
                     e.stopPropagation();
@@ -1137,7 +1149,6 @@
                     return;
                 }
 
-                // Delete on an empty box clears that box's ghost suggestion
                 if (e.key === 'Delete' && inp.value.trim() === '' && inp.dataset.ghost) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -1198,13 +1209,11 @@
 
                     const typedNonEmpty = inp.value.trim() !== '';
 
-                    // Priority 1: If user navigated Picker (↓/↑) OR typed matching text -> Pick from Right Picker!
                     if (isPickerActive && (pickerNavigated || typedNonEmpty)) {
                         applyPickerSelection(pickerSelectedIdx, true);
                         return;
                     }
 
-                    // Priority 2: If input is empty AND has light-yellow Ghost from previous Tani -> Accept Ghost on Enter!
                     if (!typedNonEmpty && inp.dataset.ghost) {
                         inp.value = inp.dataset.ghost;
                         clearFieldGhost(inp, true);
@@ -1212,7 +1221,6 @@
                         return;
                     }
 
-                    // Priority 3: For Step 1 list pickers without ghost, Enter picks Gold-highlighted item
                     const isListPicker = (kind === 'kariger' || kind === 'sancha' || kind === 'rangi' || kind === 'bana');
                     if (isPickerActive && isListPicker) {
                         applyPickerSelection(pickerSelectedIdx, true);
@@ -1224,7 +1232,6 @@
             });
         });
 
-        // Accept Bar Keyboard Flow
         const acceptBar = document.getElementById('texp-accept-bar');
         if (acceptBar) {
             acceptBar.addEventListener('keydown', (e) => {
@@ -1421,7 +1428,6 @@
 
         lastSavedTaniExpressOrder = newOrderObj;
 
-        // Sancha Mobile Portal Auto-Push (100% Preserved)
         if (sancha && window.SanchaPortalSync && typeof window.SanchaPortalSync.pushTaniOrderToSanchaPortal === 'function') {
             window.SanchaPortalSync.pushTaniOrderToSanchaPortal(newOrderObj).then((ok) => {
                 if (ok) {
