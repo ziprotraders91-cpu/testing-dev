@@ -5,7 +5,7 @@
    Features:
    - TallyPrime White & Gold 2-Column Guided Drill-Down Voucher
    - Step-by-Step Right-Pane Pickers:
-     Category (Bana/Zari/Sancha) -> [Tani/Chukka] -> Mode -> Stock -> Maker
+     Category -> [Sancha Type] -> Mode -> Item Name -> [Sancha Maker] -> Qty
    - Maker-Wise Sancha Stock Isolation & Live Balance Preview
    - Tally-Style "Accept? (Yes / No)" Confirmation Bar at End
    - Zero-Mouse Enter Chaining, Shift+Enter Back & Instant A6 Print
@@ -440,7 +440,7 @@
                 <!-- 2-Column Split Body -->
                 <div class="stk-body">
 
-                    <!-- LEFT PANE: CLEAN TALLY VOUCHER ROWS -->
+                    <!-- LEFT PANE: CLEAN TALLY VOUCHER ROWS (VISUAL ORDER === ENTER ORDER) -->
                     <div>
                         <div class="stk-sec-title" id="stk-col1-title" style="margin-top:0;">1. Stock Selection &amp; Mode</div>
 
@@ -454,19 +454,13 @@
                             <input type="text" id="stk-cat-input" value="Bana" readonly class="stk-inp" style="border-color:#d9a425; cursor:pointer;">
                         </div>
 
-                        <!-- Sancha Specific Fields (Shown only when Sancha selected) -->
-                        <div id="stk-box-sancha" style="display:none;">
-                            <div class="stk-row">
-                                <label class="stk-lbl">Sancha Type :</label>
-                                <input type="text" id="stk-sancha-type-input" value="Tani (Taana)" readonly class="stk-inp" style="cursor:pointer;">
-                                <div style="display:none;">
-                                    <input type="radio" name="stk_sancha_type" value="tani" checked onchange="setSanchaCategory('tani')">
-                                    <input type="radio" name="stk_sancha_type" value="chukka" onchange="setSanchaCategory('chukka')">
-                                </div>
-                            </div>
-                            <div class="stk-row">
-                                <label class="stk-lbl">Sancha Maker / From :</label>
-                                <input type="text" id="stk-sancha-person" placeholder="Type or ↑↓ Select Maker..." autocomplete="off" class="stk-inp">
+                        <!-- Sancha Type (Shown only when Sancha selected) -->
+                        <div id="stk-box-sancha-type" class="stk-row" style="display:none;">
+                            <label class="stk-lbl">Sancha Type :</label>
+                            <input type="text" id="stk-sancha-type-input" value="Tani (Taana)" readonly class="stk-inp" style="cursor:pointer;">
+                            <div style="display:none;">
+                                <input type="radio" name="stk_sancha_type" value="tani" checked onchange="setSanchaCategory('tani')">
+                                <input type="radio" name="stk_sancha_type" value="chukka" onchange="setSanchaCategory('chukka')">
                             </div>
                         </div>
 
@@ -475,7 +469,7 @@
                             <input type="text" id="stk-mode-input" value="Purana Item" readonly class="stk-inp" style="cursor:pointer;">
                         </div>
 
-                        <div class="stk-sec-title">2. Item &amp; Inward Weight</div>
+                        <div class="stk-sec-title">2. Item, Maker &amp; Inward Weight</div>
 
                         <!-- Purana Item Input -->
                         <div id="stk-box-purana" class="stk-row">
@@ -490,6 +484,12 @@
                         <div id="stk-box-naya" class="stk-row" style="display:none;">
                             <label id="stk-lbl-naya" class="stk-lbl">New Bana Name :</label>
                             <input type="text" id="stk-new-name" placeholder="Naye item ka poora naam likhein..." autocomplete="off" class="stk-inp" style="border-color:#d9a425;">
+                        </div>
+
+                        <!-- Sancha Maker Input (Right below Item Name!) -->
+                        <div id="stk-box-sancha-maker" class="stk-row" style="display:none;">
+                            <label class="stk-lbl">Sancha Maker :</label>
+                            <input type="text" id="stk-sancha-person" placeholder="Type Maker or &uarr;&darr; Select..." autocomplete="off" class="stk-inp">
                         </div>
 
                         <div class="stk-row">
@@ -656,7 +656,7 @@
             if (stkPickerActiveIdx < 0) stkPickerActiveIdx = 0;
         } else if (mode === 'item_naya') {
             if (titleEl) titleEl.textContent = 'Existing Items (Duplicate Check)';
-            if (hintEl) hintEl.textContent = 'Reference Only';
+            if (hintEl) hintEl.textContent = 'Type New Item + Enter';
 
             const targetKid = getActiveTargetGodown();
             const list = getCategoryStockItems(activeCategory, sanchaCat, targetKid, queryText);
@@ -687,7 +687,7 @@
 
         if (!stkPickerItems.length) {
             const msg = stkPickerMode === 'item_naya'
-                ? 'Koi matching purana item nahi mila (Naya naam safe hai).'
+                ? 'Koi matching purana item nahi mila (Naya naam safe hai). Type karke [Enter] dabayein.'
                 : (stkPickerMode === 'sancha_person'
                     ? 'Naya Sancha Maker naam seedha type karke [Enter] dabayein.'
                     : 'Is Godown me koi stock item nahi mila. [F4] se Naya Item banayein.');
@@ -1070,7 +1070,8 @@
         const btnZ = document.getElementById('stk-cat-zari');
         const btnS = document.getElementById('stk-cat-sancha');
         const catInp = document.getElementById('stk-cat-input');
-        const boxSancha = document.getElementById('stk-box-sancha');
+        const boxSanchaType = document.getElementById('stk-box-sancha-type');
+        const boxSanchaMaker = document.getElementById('stk-box-sancha-maker');
         const col1Title = document.getElementById('stk-col1-title');
         const dl = document.getElementById('stk-items-dl');
         const nameInp = document.getElementById('stk-item-name');
@@ -1083,7 +1084,8 @@
         if (cat === 'bana') {
             if (btnB) btnB.classList.add('active');
             if (catInp) catInp.value = 'Bana';
-            if (boxSancha) boxSancha.style.display = 'none';
+            if (boxSanchaType) boxSanchaType.style.display = 'none';
+            if (boxSanchaMaker) boxSanchaMaker.style.display = 'none';
             if (col1Title) col1Title.textContent = '1. Bana Stock Selection & Mode';
             if (dl) dl.innerHTML = banaOpts;
             const lblP = document.getElementById('stk-lbl-purana');
@@ -1093,7 +1095,8 @@
         } else if (cat === 'zari') {
             if (btnZ) btnZ.classList.add('active');
             if (catInp) catInp.value = 'Zari';
-            if (boxSancha) boxSancha.style.display = 'none';
+            if (boxSanchaType) boxSanchaType.style.display = 'none';
+            if (boxSanchaMaker) boxSanchaMaker.style.display = 'none';
             if (col1Title) col1Title.textContent = '1. Zari Stock Selection & Mode';
             if (dl) dl.innerHTML = zariOpts;
             const lblP = document.getElementById('stk-lbl-purana');
@@ -1103,13 +1106,14 @@
         } else if (cat === 'sancha') {
             if (btnS) btnS.classList.add('active');
             if (catInp) catInp.value = 'Sancha';
-            if (boxSancha) boxSancha.style.display = 'block';
+            if (boxSanchaType) boxSanchaType.style.display = 'grid';
+            if (boxSanchaMaker) boxSanchaMaker.style.display = 'grid';
             if (col1Title) col1Title.textContent = '1. Sancha Stock Selection & Mode';
             if (dl) dl.innerHTML = sanchaOpts;
             const lblP = document.getElementById('stk-lbl-purana');
             const lblN = document.getElementById('stk-lbl-naya');
             if (lblP) lblP.textContent = 'Sancha Item Name :';
-            if (lblN) lblN.textContent = 'New Sancha Name :';
+            if (lblN) lblN.textContent = 'New Sancha Item :';
         }
 
         if (nameInp) nameInp.value = '';
@@ -1118,9 +1122,9 @@
 
         if (advanceFocus) {
             if (cat === 'sancha') {
-                document.getElementById('stk-sancha-type-input')?.focus();
+                setTimeout(() => document.getElementById('stk-sancha-type-input')?.focus(), 15);
             } else {
-                document.getElementById('stk-mode-input')?.focus();
+                setTimeout(() => document.getElementById('stk-mode-input')?.focus(), 15);
             }
         }
     };
@@ -1136,7 +1140,7 @@
         updateStockExpressLiveStats();
 
         if (advanceFocus) {
-            document.getElementById('stk-mode-input')?.focus();
+            setTimeout(() => document.getElementById('stk-mode-input')?.focus(), 15);
         }
     };
 
@@ -1154,14 +1158,24 @@
             if (modeInp) modeInp.value = 'Purana Item';
             if (boxP) boxP.style.display = 'grid';
             if (boxN) boxN.style.display = 'none';
-            if (advanceFocus) document.getElementById('stk-item-name')?.focus();
+            if (advanceFocus) {
+                setTimeout(() => {
+                    const el = document.getElementById('stk-item-name');
+                    if (el) { el.focus(); el.select?.(); }
+                }, 15);
+            }
         } else {
             if (btnP) btnP.classList.remove('active');
             if (btnN) btnN.classList.add('active');
             if (modeInp) modeInp.value = '+ Naya Item';
             if (boxP) boxP.style.display = 'none';
             if (boxN) boxN.style.display = 'grid';
-            if (advanceFocus) document.getElementById('stk-new-name')?.focus();
+            if (advanceFocus) {
+                setTimeout(() => {
+                    const el = document.getElementById('stk-new-name');
+                    if (el) { el.focus(); el.select?.(); }
+                }, 15);
+            }
         }
         updateStockExpressLiveStats();
     };
@@ -1309,7 +1323,6 @@
             const category = sanchaCat;
             const list = toArray(window.getStore ? window.getStore('sancha_items') : []);
 
-            // Match by Item Name + Maker (person) + Category + Godown
             const item = list.find((x) => {
                 if (!x || !x.name) return false;
                 const cat = x.category || 'tani';
