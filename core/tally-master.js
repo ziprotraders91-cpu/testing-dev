@@ -476,6 +476,8 @@
        4. DASHBOARD & STOCK SUMMARY KEYBOARD SHORTCUTS
     ======================================================================== */
     document.addEventListener('keydown', (e) => {
+        if (!e || !e.key) return;
+
         const desk = document.getElementById('desktop-screen');
         if (!desk || desk.style.display === 'none') return;
 
@@ -494,7 +496,7 @@
             if (e.key === 'ArrowDown') { e.preventDefault(); ssHighlightRow(ssActiveIdx + 1); return; }
             if (e.key === 'ArrowUp') { e.preventDefault(); ssHighlightRow(ssActiveIdx - 1); return; }
             if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(ssActiveIdx); return; }
-            if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
+            if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key && e.key.length === 1) {
                 const k = e.key.toLowerCase();
                 if (k === 'b') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(0); return; }
                 if (k === 'z') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(1); return; }
@@ -524,12 +526,12 @@
             e.preventDefault();
             items[idx].classList.remove('active');
             items[(idx - 1 + items.length) % items.length].classList.add('active');
-        } else if (e.key === 'Enter' && (tag !== 'BUTTON' || document.activeElement.classList.contains('gw-item'))) {
+        } else if (e.key === 'Enter' && (tag !== 'BUTTON' || document.activeElement?.classList?.contains('gw-item'))) {
             e.preventDefault();
             e.stopImmediatePropagation();
-            const targetItem = document.activeElement?.classList.contains('gw-item') ? document.activeElement : items[idx];
+            const targetItem = document.activeElement?.classList?.contains('gw-item') ? document.activeElement : items[idx];
             setTimeout(() => targetItem?.click(), 0);
-        } else if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
+        } else if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key && e.key.length === 1) {
             const k = e.key.toLowerCase();
             const targetBtn = items.find((el) => el.dataset.gwKey === k);
             if (targetBtn) {
