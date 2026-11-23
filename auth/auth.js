@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - HIGH-SCALE ENTERPRISE AUTHENTICATION & SECURITY ENGINE
    File: auth/auth.js • Developed by Farhan Jawed
-   Architecture: Supabase PostgreSQL Auth + Gmail OTP & Alerts + Renew Flow
+   Architecture: Supabase PostgreSQL Auth + account_uid Reset Protection + Gmail OTP
 ============================================================================ */
 
 (() => {
@@ -12,7 +12,6 @@
 
     /* ========================================================================
        1. GLOBAL STATE & SESSION CONTEXT
-       ------------------------------------------------------------------------
     ======================================================================== */
     window.currentUserId = null;
     window.currentUserRole = null;
@@ -29,7 +28,6 @@
 
     /* ========================================================================
        2. DEFENSIVE UTILITY HELPERS
-       ------------------------------------------------------------------------
     ======================================================================== */
     const _setDisplay = (id, val) => {
         if (typeof window.setDisplay === 'function') {
@@ -97,7 +95,9 @@
                 'tani_learned_rangi', 'sancha_items', 'sancha_history', 'bana_stock',
                 'bana_history', 'zari_stock', 'zari_history', 'saree_stock', 'saree_history',
                 'payments', 'payment_list', 'material_transfers', 'dukan_challans',
-                'jobwork_workers', 'jw_bills_list', 'jw_payments_list',
+                'dukan_firms', 'dukan_parties', 'dukan_designs', 'dukan_orders',
+                'jobwork_workers', 'jobwork_groups', 'jobwork_firm_profile', 'jw_challan_seq',
+                'jw_bills_list', 'jw_payments_list',
                 'kariger_portal_tenant_id', 'kariger_portal_firm_name',
                 'app_active_session', 'app_current_tenant_id', 'tenantId',
                 'tenant_id', 'erp_tenant_id', 'current_tenant_id', 'user_id', 'currentUserId'
@@ -109,7 +109,16 @@
                 for (let i = 0; i < localStorage.length; i++) {
                     const k = localStorage.key(i);
                     if (!k) continue;
-                    if (k === 'app_current_user_id' || k === 'app_active_session_auth' || k === 'app_last_user_id') continue;
+                    if (
+                        k === 'app_current_user_id' ||
+                        k === 'app_active_session_auth' ||
+                        k === 'app_last_user_id' ||
+                        k === 'app_global_billing_config' ||
+                        k === `erp_account_uid_${keepUserId}` ||
+                        k.includes(`_${keepUserId}_`)
+                    ) {
+                        continue;
+                    }
                     if (!k.startsWith(`${keepUserId}_`)) {
                         toRemove.push(k);
                     }
@@ -129,7 +138,6 @@
 
     /* ========================================================================
        3. USER LOOKUP (SUPABASE: USER ID + MOBILE + GMAIL)
-       ------------------------------------------------------------------------
     ======================================================================== */
     const fetchUserByIdentifier = async (identifier) => {
         const cleanQuery = String(identifier || '').trim().toLowerCase();
@@ -139,53 +147,61 @@
         if (sb) {
             try {
                 // 1. Check by user_id
-                let { data } = await sb
+                let { data, error } = await sb
                     .from('karkhana_users')
                     .select('*')
                     .eq('user_id', cleanQuery)
                     .limit(1);
 
                 // 2. Check by mobile
-                if ((!data || data.length === 0) && /^\d+$/.test(cleanQuery)) {
+                if (!error && (!data || data.length === 0) && /^\d+$/.test(cleanQuery)) {
                     const mobRes = await sb
                         .from('karkhana_users')
                         .select('*')
                         .eq('mobile', cleanQuery)
                         .limit(1);
                     data = mobRes.data;
+                    error = mobRes.error;
                 }
 
                 // 3. Check by Gmail / Email
-                if ((!data || data.length === 0) && cleanQuery.includes('@')) {
+                if (!error && (!data || data.length === 0) && cleanQuery.includes('@')) {
                     const emailRes = await sb
                         .from('karkhana_users')
                         .select('*')
                         .ilike('email', cleanQuery)
                         .limit(1);
                     data = emailRes.data;
+                    error = emailRes.error;
                 }
 
-                if (data && data.length > 0) {
-                    const row = data[0];
-                    return {
-                        id: row.user_id,
-                        name: row.full_name,
-                        pass: row.password,
-                        mobile: row.mobile,
-                        email: row.email || '',
-                        pin: row.pin,
-                        role: row.role || 'owner',
-                        status: row.status || 'active',
-                        date: row.created_at ? row.created_at.split('T')[0] : _getTodayDate(),
-                        expiryDate: row.validity_date || ''
-                    };
+                if (!error) {
+                    if (data && data.length > 0) {
+                        const row = data[0];
+                        return {
+                            id: row.user_id,
+                            accountUid: row.account_uid || '',
+                            name: row.full_name,
+                            pass: row.password,
+                            mobile: row.mobile,
+                            email: row.email || '',
+                            pin: row.pin,
+                            role: row.role || 'owner',
+                            status: row.status || 'active',
+                            date: row.created_at ? row.created_at.split('T')[0] : _getTodayDate(),
+                            expiryDate: row.validity_date || ''
+                        };
+                    }
+                    // Server par check hua aur user nahi mila (deleted) — local cache fallback mat dein!
+                    return null;
                 }
             } catch (netErr) {
                 console.warn('[Auth:Supabase] Remote fetch error:', netErr);
             }
         }
 
-        return getCachedUserLocal(cleanQuery);
+        // Sirf offline / network failure par local cache use karein
+        return !navigator.onLine ? getCachedUserLocal(cleanQuery) : null;
     };
 
     const getCachedUserLocal = (identifier) => {
@@ -209,7 +225,6 @@
 
     /* ========================================================================
        4. BULLETPROOF REGISTRATION (5-POINT CHECK + ADMIN GMAIL ALERT)
-       ------------------------------------------------------------------------
     ======================================================================== */
     const handleRegister = async () => {
         const nameEl = document.getElementById('reg-name');
@@ -329,11 +344,17 @@
 
             if (insertErr) throw insertErr;
 
-            await sb.from('karkhanas').insert([{
+            await sb.from('karkhanas').upsert([{
                 user_id: id,
+                karkhana_key: 'k_main',
                 karkhana_name: 'Main Godown',
                 is_default: true
-            }]);
+            }], { onConflict: 'user_id,karkhana_key' });
+
+            // Agar isi phone par pehle is ID ka purana data tha toh use bhi turant saaf kar dein
+            if (typeof window.wipeUserLocalCache === 'function') {
+                await window.wipeUserLocalCache(id);
+            }
 
             callGmailEngine({
                 type: 'signup_alert',
@@ -368,7 +389,6 @@
 
     /* ========================================================================
        5. LOGIN WITH APPROVAL & EXPIRED RENEW GATEKEEPER
-       ------------------------------------------------------------------------
     ======================================================================== */
     const handleLogin = async () => {
         const idInput = document.getElementById('login-id');
@@ -441,6 +461,7 @@
 
             const authPayload = {
                 id: user.id,
+                accountUid: user.accountUid || '',
                 name: user.name,
                 mobile: user.mobile,
                 email: user.email || '',
@@ -457,7 +478,7 @@
 
             if (passInput) passInput.value = '';
 
-            executeSuccessfulLogin(user);
+            await executeSuccessfulLogin(user);
 
         } catch (authErr) {
             console.error('[Auth:Login] Exception:', authErr);
@@ -470,12 +491,23 @@
     };
 
     /* ========================================================================
-       6. SUCCESSFUL LOGIN DISPATCHER
-       ------------------------------------------------------------------------
+       6. SUCCESSFUL LOGIN DISPATCHER (WITH account_uid WIPE PROTECTION)
     ======================================================================== */
-    const executeSuccessfulLogin = (user) => {
+    const executeSuccessfulLogin = async (user) => {
         if (typeof window.clearMemoryCache === 'function') {
             window.clearMemoryCache();
+        }
+
+        // ⭐ DELETE + SAME USERNAME RECREATE PROTECTION:
+        // Agar cloud par is username ka account_uid badal gaya hai (naya account bana hai),
+        // toh IndexedDB, sync_queue aur delta cursors ko preload se PEHLE 100% wipe karein!
+        const uidKey = `erp_account_uid_${user.id}`;
+        const storedAccUid = localStorage.getItem(uidKey);
+        if (user.accountUid && storedAccUid !== user.accountUid) {
+            if (typeof window.wipeUserLocalCache === 'function') {
+                await window.wipeUserLocalCache(user.id);
+            }
+            try { localStorage.setItem(uidKey, user.accountUid); } catch (_) {}
         }
 
         const lastUid = localStorage.getItem('app_last_user_id');
@@ -552,8 +584,20 @@
                 executeSuccessfulLogin(savedSession);
 
                 if (navigator.onLine) {
-                    fetchUserByIdentifier(savedSession.id).then((freshUser) => {
-                        if (!freshUser) return;
+                    fetchUserByIdentifier(savedSession.id).then(async (freshUser) => {
+                        // ⭐ Agar Admin ne user DELETE kar diya ya same username se NAYA account ban gaya:
+                        if (
+                            !freshUser ||
+                            (freshUser.accountUid && savedSession.accountUid && freshUser.accountUid !== savedSession.accountUid)
+                        ) {
+                            if (typeof window.wipeUserLocalCache === 'function') {
+                                await window.wipeUserLocalCache(savedSession.id);
+                            }
+                            alert('⛔ Yeh account delete ya reset ho chuka hai! Kripya dobara login karein.');
+                            logout();
+                            return;
+                        }
+
                         const st = String(freshUser.status || '').toLowerCase().trim();
                         if (st === 'blocked' || st === 'pending' || isUserExpired(freshUser)) {
                             _expiredLoginUser = {
@@ -567,6 +611,7 @@
                             try {
                                 const updated = {
                                     ...savedSession,
+                                    accountUid: freshUser.accountUid || savedSession.accountUid || '',
                                     name: freshUser.name,
                                     email: freshUser.email || savedSession.email || '',
                                     role: freshUser.role || savedSession.role,
@@ -575,6 +620,9 @@
                                 };
                                 _activeSessionAuthCache = updated;
                                 localStorage.setItem('app_active_session_auth', JSON.stringify(updated));
+                                if (updated.accountUid) {
+                                    localStorage.setItem(`erp_account_uid_${updated.id}`, updated.accountUid);
+                                }
                             } catch (_) {}
                         }
                     }).catch(() => {});
@@ -623,7 +671,6 @@
 
     /* ========================================================================
        7. FORGOT PASSWORD (4-DIGIT PIN + GMAIL OTP SYSTEM)
-       ------------------------------------------------------------------------
     ======================================================================== */
     const ensureForgotGmailOtpUI = () => {
         const step1 = document.getElementById('forgot-step-1');
