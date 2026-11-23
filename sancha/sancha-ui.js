@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - SANCHA (TANI & CHUKKA) STOCK & PASSBOOK (TALLY WHITE & GOLD)
    File: sancha/sancha-ui.js • Developed by Farhan Jawed
-   (100% Supabase-Safe | 2-Option Hub (Tani/Chukka) -> Items List -> Inline Passbook)
+   (Maker-Wise Stock & Passbook | 2-Option Hub (Tani/Chukka) -> List -> Passbook)
 ============================================================================ */
 
 (() => {
@@ -10,6 +10,7 @@
     window.currentSanchaCategory = 'tani'; // 'tani' | 'chukka'
     window.currentSanchaKarkhanaFilter = 'all';
     window.currentPassbookSanchaItem = '';
+    window.currentPassbookSanchaPerson = null; // null = all makers, string = specific maker
 
     // View State: 'hub' (Tani vs Chukka) | 'list' (Items) | 'passbook' (Inline Ledger)
     let sanchaViewMode = 'hub';
@@ -38,6 +39,13 @@
     const safeNum = (val, fallback = 0) => {
         const n = parseFloat(val);
         return isNaN(n) || !isFinite(n) ? fallback : n;
+    };
+
+    const normPerson = (p) => {
+        if (typeof window.normalizePerson === 'function') return window.normalizePerson(p);
+        const s = String(p ?? '').trim();
+        if (!s || s === '-' || s.toLowerCase() === 'undefined' || s.toLowerCase() === 'null') return '';
+        return s;
     };
 
     const setDisplay = (id, val) => {
@@ -314,7 +322,7 @@
                 z-index: 999999;
                 display: flex; align-items: center; justify-content: center;
                 padding: 15px; box-sizing: border-box;
-                font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+                font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
             }
             .sancha-modal-card {
                 background: #ffffff;
@@ -354,28 +362,31 @@
        2. 3-LEVEL VIEW CONTROLLER: 'hub' (Tani/Chukka) -> 'list' -> 'passbook'
        ======================================================================== */
     const computeSanchaCategorySummary = (cat) => {
-        const rawStock = (window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [])
-            .filter((s) => String(s?.category || 'tani').toLowerCase() === cat);
-        const uniqueNames = [...new Set(rawStock.map((s) => (s?.name ? s.name.trim() : '')).filter(Boolean))];
+        let rows = [];
+        if (typeof window.getSanchaUniqueStockRows === 'function') {
+            rows = window.getSanchaUniqueStockRows(cat, window.currentSanchaKarkhanaFilter);
+        } else {
+            const rawStock = (window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [])
+                .filter((s) => String(s?.category || 'tani').toLowerCase() === cat);
+            const uniqueNames = [...new Set(rawStock.map((s) => (s?.name ? s.name.trim() : '')).filter(Boolean))];
+            uniqueNames.forEach((name) => {
+                if (typeof window.getSanchaItemStats === 'function') {
+                    const stats = window.getSanchaItemStats(null, name, cat, window.currentSanchaKarkhanaFilter);
+                    if (stats.aaya > 0 || stats.gaya > 0 || stats.bacha > 0) rows.push(stats);
+                }
+            });
+        }
 
         let totalAaya = 0;
         let totalGaya = 0;
         let totalBacha = 0;
-        let itemCount = 0;
-
-        uniqueNames.forEach((name) => {
-            if (typeof window.getSanchaItemStats === 'function') {
-                const stats = window.getSanchaItemStats(null, name, cat, window.currentSanchaKarkhanaFilter);
-                if (stats.aaya > 0 || stats.gaya > 0 || stats.bacha > 0) {
-                    totalAaya += safeNum(stats.aaya);
-                    totalGaya += safeNum(stats.gaya);
-                    totalBacha += safeNum(stats.bacha);
-                    itemCount++;
-                }
-            }
+        rows.forEach((r) => {
+            totalAaya += safeNum(r.aaya);
+            totalGaya += safeNum(r.gaya);
+            totalBacha += safeNum(r.bacha);
         });
 
-        return { totalAaya, totalGaya, totalBacha, itemCount };
+        return { totalAaya, totalGaya, totalBacha, itemCount: rows.length };
     };
 
     const ensureSanchaHubView = () => {
@@ -396,7 +407,7 @@
                             <th style="width:55px;">#</th>
                             <th>Sancha Category (Particulars)</th>
                             <th style="width:90px; text-align:center;">Key</th>
-                            <th style="text-align:right;">Items</th>
+                            <th style="text-align:right;">Items / Makers</th>
                             <th style="text-align:right;">Available Stock (Bacha)</th>
                             <th style="width:110px; text-align:right;">Action</th>
                         </tr>
@@ -406,7 +417,7 @@
                             <td>1</td>
                             <td>
                                 <strong>Tani Stock</strong>
-                                <small style="display:block; font-size:11.5px; color:#6b7280; margin-top:2px;">Taana Warp Stock &amp; Kariger Issue Register</small>
+                                <small style="display:block; font-size:11.5px; color:#6b7280; margin-top:2px;">Taana Warp Stock &amp; Maker-Wise Issue Register</small>
                             </td>
                             <td style="text-align:center;"><span class="sancha-key-badge">T</span></td>
                             <td style="text-align:right;" id="sancha-hub-tani-count">0 Items</td>
@@ -417,7 +428,7 @@
                             <td>2</td>
                             <td>
                                 <strong>Chukka Stock</strong>
-                                <small style="display:block; font-size:11.5px; color:#6b7280; margin-top:2px;">Chukka Warp Stock &amp; Kariger Issue Register</small>
+                                <small style="display:block; font-size:11.5px; color:#6b7280; margin-top:2px;">Chukka Warp Stock &amp; Maker-Wise Issue Register</small>
                             </td>
                             <td style="text-align:center;"><span class="sancha-key-badge">C</span></td>
                             <td style="text-align:right;" id="sancha-hub-chukka-count">0 Items</td>
@@ -452,9 +463,9 @@
         const cc = document.getElementById('sancha-hub-chukka-count');
         const cb = document.getElementById('sancha-hub-chukka-bacha');
 
-        if (tc) tc.textContent = `${tSum.itemCount} Items`;
+        if (tc) tc.textContent = `${tSum.itemCount} Entries`;
         if (tb) tb.textContent = `${tSum.totalBacha.toFixed(2)} Kg`;
-        if (cc) cc.textContent = `${cSum.itemCount} Items`;
+        if (cc) cc.textContent = `${cSum.itemCount} Entries`;
         if (cb) cb.textContent = `${cSum.totalBacha.toFixed(2)} Kg`;
 
         highlightSanchaHubRow(sanchaHubActiveIdx);
@@ -508,10 +519,11 @@
         if (passView) passView.style.display = isPass ? 'block' : 'none';
 
         const catTitle = (window.currentSanchaCategory === 'chukka') ? 'Chukka' : 'Tani';
+        const makerSuffix = window.currentPassbookSanchaPerson ? ` · ${window.currentPassbookSanchaPerson}` : '';
         if (headerTitle) {
             if (isHub) headerTitle.textContent = 'Sancha Stock (Tani & Chukka)';
             else if (isList) headerTitle.textContent = `Sancha Stock: ${catTitle}`;
-            else headerTitle.textContent = `Sancha Passbook: ${window.currentPassbookSanchaItem || ''} (${catTitle})`;
+            else headerTitle.textContent = `Sancha Passbook: ${window.currentPassbookSanchaItem || ''}${makerSuffix} (${catTitle})`;
         }
         if (headerBackBtn) {
             if (isHub) headerBackBtn.textContent = window.__slReturnToStockSummary ? '← [Esc] Stock Summary' : '← Dashboard';
@@ -646,7 +658,7 @@
                     if (e.key === 'Enter' && currentSanchaFilteredRowsCache.length > 0) {
                         const pageRows = getSanchaCurrentPageRows();
                         const chosen = pageRows[sanchaListActiveIdx] || pageRows[0];
-                        if (chosen) openSanchaPassbook(encodeURIComponent(chosen.name));
+                        if (chosen) openSanchaPassbook(encodeURIComponent(chosen.name), encodeURIComponent(normPerson(chosen.person)));
                     }
                 }
             });
@@ -673,7 +685,7 @@
     };
 
     /* ========================================================================
-       4. INWARD INVENTORY PURCHASE ENGINE (100% SUPABASE SAFE)
+       4. INWARD INVENTORY PURCHASE ENGINE (MAKER-WISE SEPARATE)
        ======================================================================== */
     const toggleAddSanchaForm = () => {
         if (sanchaViewMode !== 'list') {
@@ -755,7 +767,8 @@
         const date = document.getElementById('sancha-date')?.value || getToday();
         const qtyInp = document.getElementById('sancha-qty');
         const qty = safeNum(qtyInp?.value);
-        const person = String(document.getElementById('sancha-person')?.value || '').trim();
+        const personRaw = String(document.getElementById('sancha-person')?.value || '').trim();
+        const person = normPerson(personRaw);
 
         let category = window.currentSanchaCategory || 'tani';
         const checkedCatRadio = document.querySelector('input[name="sancha-cat"]:checked');
@@ -769,16 +782,22 @@
         const targetKid = (window.currentSanchaKarkhanaFilter !== 'all') ? window.currentSanchaKarkhanaFilter : 'k_main';
         const list = window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [];
 
+        // Match Item + Maker (Person) + Category + Godown so each Maker has separate stock
         const item = list.find((x) => {
+            if (!x || !x.name) return false;
             const cat = x.category || 'tani';
             const matchK = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-            return x?.name && x.name.toLowerCase() === name.toLowerCase() && cat.toLowerCase() === category.toLowerCase() && matchK;
+            const xPer = normPerson(x.person).toLowerCase();
+            return x.name.toLowerCase() === name.toLowerCase() &&
+                   cat.toLowerCase() === category.toLowerCase() &&
+                   matchK &&
+                   xPer === person.toLowerCase();
         });
 
         if (item) {
             item.aaya = safeNum((safeNum(item.aaya) + qty).toFixed(2));
             item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
-            if (person) item.person = person;
+            item.person = person || '-';
             item.date = date;
         } else {
             list.push({
@@ -805,6 +824,7 @@
             date,
             name,
             category,
+            person: person || '-',
             kariger: person || 'Factory Inward',
             type: `Khareed / Inward (${category === 'tani' ? 'Tani' : 'Chukka'})`,
             aaya: qty,
@@ -828,11 +848,11 @@
         toggleAddSanchaForm();
         switchSanchaCategory(category);
         if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-        alert(`✅ Sancha (${category === 'tani' ? 'Tani' : 'Chukka'}) Stock me jama ho gaya!`);
+        alert(`✅ Sancha (${category === 'tani' ? 'Tani' : 'Chukka'})${person ? ` · ${person}` : ''} Stock me jama ho gaya!`);
     };
 
     /* ========================================================================
-       5. MAIN SANCHA ITEMS TABLE RENDERER (CLEAN WHITE & GOLD + KEYBOARD)
+       5. MAIN SANCHA ITEMS TABLE RENDERER (MAKER-WISE ROWS)
        ======================================================================== */
     const renderSanchaTable = () => {
         ensureSanchaTallyStyles();
@@ -843,25 +863,20 @@
 
         const currentCat = window.currentSanchaCategory || 'tani';
 
-        const rawStock = (window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [])
-            .filter((s) => {
-                const cat = s.category || 'tani';
-                return cat.toLowerCase() === currentCat.toLowerCase();
-            });
-
-        const uniqueNames = [...new Set(rawStock.map((s) => (s?.name ? s.name.trim() : '')).filter(Boolean))];
-
-        const rows = [];
-        uniqueNames.forEach((name) => {
-            if (typeof window.getSanchaItemStats === 'function') {
-                const stats = window.getSanchaItemStats(null, name, currentCat, window.currentSanchaKarkhanaFilter);
-                if (stats.aaya > 0 || stats.gaya > 0 || stats.bacha > 0) {
-                    const foundOriginal = rawStock.find((x) => x?.name && x.name.toLowerCase() === name.toLowerCase());
-                    stats.person = foundOriginal ? (foundOriginal.person || '-') : '-';
-                    rows.push(stats);
+        let rows = [];
+        if (typeof window.getSanchaUniqueStockRows === 'function') {
+            rows = window.getSanchaUniqueStockRows(currentCat, window.currentSanchaKarkhanaFilter);
+        } else {
+            const rawStock = (window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [])
+                .filter((s) => (s.category || 'tani').toLowerCase() === currentCat.toLowerCase());
+            const uniqueNames = [...new Set(rawStock.map((s) => (s?.name ? s.name.trim() : '')).filter(Boolean))];
+            uniqueNames.forEach((name) => {
+                if (typeof window.getSanchaItemStats === 'function') {
+                    const stats = window.getSanchaItemStats(null, name, currentCat, window.currentSanchaKarkhanaFilter);
+                    if (stats.aaya > 0 || stats.gaya > 0 || stats.bacha > 0) rows.push(stats);
                 }
-            }
-        });
+            });
+        }
 
         const searchInp = document.getElementById('search-sancha-input');
         const txt = searchInp ? searchInp.value.toLowerCase().trim() : '';
@@ -943,16 +958,17 @@
             pageRows.forEach((s, idx) => {
                 const bacha = safeNum(s.bacha);
                 const safeName = encodeURIComponent(s.name);
+                const safePerson = encodeURIComponent(normPerson(s.person));
                 const activeCls = (idx === sanchaListActiveIdx) ? ' active' : '';
 
-                html += `<tr class="sancha-stock-row${activeCls}" data-sidx="${idx}" onclick="window.__sanchaSelectAndOpen(${idx}, '${safeName}')">
+                html += `<tr class="sancha-stock-row${activeCls}" data-sidx="${idx}" onclick="window.__sanchaSelectAndOpen(${idx}, '${safeName}', '${safePerson}')">
                     <td>${esc(s.date || '-')}</td>
                     <td><span style="font-size:11.5px; font-weight:700; color:#92400e;">${s.category === 'chukka' ? 'Chukka' : 'Tani'}</span></td>
                     <td><strong>${esc(s.name)}</strong></td>
                     <td style="font-weight:700;">+${safeNum(s.aaya).toFixed(2)} Kg</td>
                     <td style="font-weight:700; color:#6b7280;">-${safeNum(s.gaya).toFixed(2)} Kg</td>
                     <td style="font-weight:800; color:#b47d00;">${bacha.toFixed(2)} Kg</td>
-                    <td>${esc(s.person || '-')}</td>
+                    <td><strong>${esc(s.person || '-')}</strong></td>
                     <td style="text-align:right; font-weight:700; font-size:12px;">Passbook →</td>
                 </tr>`;
             });
@@ -989,22 +1005,27 @@
         }
 
         const cntLbl = document.getElementById('sancha-main-count-lbl');
-        if (cntLbl) cntLbl.textContent = `${totalEntries} Items`;
+        if (cntLbl) cntLbl.textContent = `${totalEntries} Entries`;
     };
 
-    window.__sanchaSelectAndOpen = (idx, safeName) => {
+    window.__sanchaSelectAndOpen = (idx, safeName, safePerson = '') => {
         highlightSanchaListRow(idx);
-        openSanchaPassbook(safeName);
+        openSanchaPassbook(safeName, safePerson);
     };
 
     const triggerSelectedSanchaTransfer = () => {
         const cat = window.currentSanchaCategory || 'tani';
         if (sanchaViewMode === 'passbook' && window.currentPassbookSanchaItem) {
             const stats = (typeof window.getSanchaItemStats === 'function')
-                ? window.getSanchaItemStats(null, window.currentPassbookSanchaItem, cat, window.currentSanchaKarkhanaFilter)
+                ? window.getSanchaItemStats(null, window.currentPassbookSanchaItem, cat, window.currentSanchaKarkhanaFilter, window.currentPassbookSanchaPerson)
                 : { bacha: 0 };
             if (safeNum(stats.bacha) <= 0) return alert('Is item me transfer ke liye koi stock nahi bacha hai.');
-            openSanchaTransferModal(encodeURIComponent(window.currentPassbookSanchaItem), encodeURIComponent(cat), safeNum(stats.bacha));
+            openSanchaTransferModal(
+                encodeURIComponent(window.currentPassbookSanchaItem),
+                encodeURIComponent(cat),
+                safeNum(stats.bacha),
+                encodeURIComponent(window.currentPassbookSanchaPerson || '')
+            );
             return;
         }
 
@@ -1012,7 +1033,12 @@
         const chosen = pageRows[sanchaListActiveIdx];
         if (!chosen) return alert('Pehle koi Sancha item chunein!');
         if (safeNum(chosen.bacha) <= 0) return alert(`[${chosen.name}] me transfer ke liye koi stock nahi bacha hai.`);
-        openSanchaTransferModal(encodeURIComponent(chosen.name), encodeURIComponent(chosen.category || cat), safeNum(chosen.bacha));
+        openSanchaTransferModal(
+            encodeURIComponent(chosen.name),
+            encodeURIComponent(chosen.category || cat),
+            safeNum(chosen.bacha),
+            encodeURIComponent(normPerson(chosen.person))
+        );
     };
 
     const changeSanchaStockPage = (delta) => {
@@ -1022,11 +1048,12 @@
     };
 
     /* ========================================================================
-       6. INTER-GODOWN TRANSFER MODAL (TALLY WHITE & GOLD + ENTER CHAINING)
+       6. INTER-GODOWN TRANSFER MODAL (MAKER-AWARE + ENTER CHAINING)
        ======================================================================== */
-    const openSanchaTransferModal = (safeName, safeCat, availableBacha) => {
+    const openSanchaTransferModal = (safeName, safeCat, availableBacha, safePerson = '') => {
         const itemName = decodeURIComponent(safeName);
         const category = decodeURIComponent(safeCat);
+        const personName = decodeURIComponent(safePerson || '');
 
         const existingModal = document.getElementById('sancha-transfer-popup-modal');
         if (existingModal) existingModal.remove();
@@ -1063,6 +1090,7 @@
                     <div style="padding:16px;">
                         <div style="background:#fdf6e2; border:1px solid #e5d5a7; border-radius:6px; padding:10px 12px; margin-bottom:12px; font-size:12.5px;">
                             <div><strong>Item:</strong> ${esc(itemName)} (${catLabel})</div>
+                            <div><strong>Maker / Kiske Paas:</strong> ${esc(personName || '-')}</div>
                             <div><strong>Bhejne Wala Godam:</strong> ${esc(currentGodamName)}</div>
                             <div style="color:#b47d00; font-weight:800; font-size:13.5px; margin-top:4px;">Available Stock: ${availableBacha.toFixed(2)} Kg</div>
                         </div>
@@ -1086,7 +1114,7 @@
                         </div>
                         <div style="display:flex; justify-content:flex-end; gap:8px;">
                             <button type="button" class="sancha-tally-btn" onclick="closeSanchaTransferModal()">Cancel [Esc]</button>
-                            <button type="button" class="sancha-tally-btn-gold" onclick="submitSanchaTransferForm('${safeName}', '${safeCat}', '${currentKid}', ${availableBacha})">Transfer Confirm [Enter]</button>
+                            <button type="button" class="sancha-tally-btn-gold" onclick="submitSanchaTransferForm('${safeName}', '${safeCat}', '${currentKid}', ${availableBacha}, '${safePerson}')">Transfer Confirm [Enter]</button>
                         </div>
                     </div>
                 </div>
@@ -1105,7 +1133,7 @@
                         const nxt = document.getElementById(order[i + 1]);
                         if (nxt) { nxt.focus(); if (nxt.select) nxt.select(); }
                     } else {
-                        submitSanchaTransferForm(safeName, safeCat, currentKid, availableBacha);
+                        submitSanchaTransferForm(safeName, safeCat, currentKid, availableBacha, safePerson);
                     }
                 }
             });
@@ -1122,9 +1150,10 @@
         if (modal) modal.remove();
     };
 
-    const submitSanchaTransferForm = (safeName, safeCat, fromKid, maxAvailable) => {
+    const submitSanchaTransferForm = (safeName, safeCat, fromKid, maxAvailable, safePerson = '') => {
         const itemName = decodeURIComponent(safeName);
         const category = decodeURIComponent(safeCat);
+        const personName = decodeURIComponent(safePerson || '');
         const toKid = document.getElementById('sancha-dest-godam')?.value;
         const qty = safeNum(document.getElementById('sancha-transfer-qty')?.value);
         const d = document.getElementById('sancha-transfer-date')?.value || getToday();
@@ -1136,7 +1165,7 @@
 
         let success = false;
         if (typeof window.transferSanchaStock === 'function') {
-            success = window.transferSanchaStock(d, itemName, category, fromKid, toKid, qty, note);
+            success = window.transferSanchaStock(d, itemName, category, fromKid, toKid, qty, note, personName);
         }
 
         if (success) {
@@ -1153,7 +1182,7 @@
     };
 
     /* ========================================================================
-       7. INLINE TALLY SANCHA PASSBOOK ENGINE (WITH RUNNING CLOSING BALANCE)
+       7. INLINE TALLY SANCHA PASSBOOK ENGINE (MAKER-WISE + CLOSING BALANCE)
        ======================================================================== */
     const ensureInlineSanchaPassbookContainer = () => {
         const sec = document.getElementById('sancha-section');
@@ -1192,7 +1221,7 @@
                 </div>
                 <div style="flex:1; min-width:180px;">
                     <label style="font-size:11px; font-weight:700; color:#6b7280; display:block; margin-bottom:2px;">Search [/]:</label>
-                    <input type="text" id="sancha-pass-search-input" class="search-box" placeholder="Search Date, Kariger, Qty..." oninput="applySanchaPassbookFilters()">
+                    <input type="text" id="sancha-pass-search-input" class="search-box" placeholder="Search Date, Kariger, Maker, Qty..." oninput="applySanchaPassbookFilters()">
                 </div>
                 <button type="button" class="sancha-tally-btn" onclick="resetSanchaPassbookFilters()">Reset [R]</button>
             </div>
@@ -1202,7 +1231,7 @@
                     <thead>
                         <tr>
                             <th>Tarikh</th>
-                            <th>Particulars (Kariger / Person)</th>
+                            <th>Particulars (Kariger / Maker)</th>
                             <th>Detail (Vch Type)</th>
                             <th style="text-align:right;">Aaya (In)</th>
                             <th style="text-align:right;">Gaya (Out)</th>
@@ -1283,12 +1312,15 @@
         else if (action === 'delete') deleteSanchaHistoryEntry(entry.id);
     };
 
-    const openSanchaPassbook = (itemName) => {
+    const openSanchaPassbook = (itemName, personName = null) => {
         ensureSanchaTallyStyles();
         setDisplay('dashboard-view', 'none');
         setDisplay('sancha-section', 'block');
 
         window.currentPassbookSanchaItem = decodeURIComponent(itemName);
+        window.currentPassbookSanchaPerson = (personName !== null && personName !== undefined)
+            ? normPerson(decodeURIComponent(personName))
+            : null;
         sanchaPassbookCurrentPage = 1;
         sanchaPassbookActiveIdx = 0;
 
@@ -1313,7 +1345,23 @@
     const applySanchaPassbookFilters = () => {
         const targetItemLower = window.currentPassbookSanchaItem.toLowerCase();
         const targetCatLower = (window.currentSanchaCategory || 'tani').toLowerCase();
+        const filterByPerson = (window.currentPassbookSanchaPerson !== null && window.currentPassbookSanchaPerson !== undefined);
+        const targetPersonLower = filterByPerson ? normPerson(window.currentPassbookSanchaPerson).toLowerCase() : '';
+
         const allHist = window.safeArray ? window.safeArray(window.getStore('sancha_history')) : [];
+        const sItems = window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [];
+
+        const makersForItem = new Set();
+        sItems.forEach((s) => {
+            if (!s || !s.name) return;
+            if ((s.category || 'tani').toLowerCase() !== targetCatLower) return;
+            if (s.name.trim().toLowerCase() !== targetItemLower) return;
+            if (window.currentSanchaKarkhanaFilter !== 'all') {
+                const rowKid = s.karkhanaId || 'k_main';
+                if (String(rowKid) !== String(window.currentSanchaKarkhanaFilter)) return;
+            }
+            makersForItem.add(normPerson(s.person).toLowerCase());
+        });
 
         let itemHist = allHist.filter((x) => {
             if (!x?.name) return false;
@@ -1323,7 +1371,24 @@
 
             if (window.currentSanchaKarkhanaFilter !== 'all') {
                 const rowKid = x.karkhanaId || 'k_main';
-                return String(rowKid) === String(window.currentSanchaKarkhanaFilter);
+                if (String(rowKid) !== String(window.currentSanchaKarkhanaFilter)) return false;
+            }
+
+            if (filterByPerson) {
+                const t = String(x.type || '');
+                const isPurchase = (t.includes('Khareed') || t.includes('Inward') || t.includes('Opening'));
+                const hasExplicitPerson = (x.person !== undefined || x.sanchaMaker !== undefined);
+                if (hasExplicitPerson) {
+                    const xPer = normPerson(x.person !== undefined ? x.person : x.sanchaMaker).toLowerCase();
+                    if (xPer !== targetPersonLower) return false;
+                } else if (isPurchase) {
+                    const hKarPer = normPerson(x.kariger);
+                    const mappedPer = (hKarPer.toLowerCase() === 'factory inward') ? '' : hKarPer.toLowerCase();
+                    if (mappedPer !== targetPersonLower) return false;
+                } else {
+                    if (makersForItem.size > 1 && targetPersonLower !== '') return false;
+                    if (makersForItem.size === 1 && !makersForItem.has(targetPersonLower)) return false;
+                }
             }
             return true;
         });
@@ -1354,7 +1419,7 @@
 
         if (sTxt) {
             filtered = filtered.filter((x) => {
-                const rowString = `${x.date || ''} ${x.type || ''} ${x.kariger || ''} ${x.aaya || x.qty || ''} ${x.gaya || ''}`.toLowerCase();
+                const rowString = `${x.date || ''} ${x.type || ''} ${x.kariger || ''} ${x.person || ''} ${x.aaya || x.qty || ''} ${x.gaya || ''}`.toLowerCase();
                 return rowString.includes(sTxt);
             });
         }
@@ -1364,16 +1429,17 @@
         filteredSanchaPassbookCache = filtered;
 
         const stats = (typeof window.getSanchaItemStats === 'function')
-            ? window.getSanchaItemStats(null, window.currentPassbookSanchaItem, targetCatLower, window.currentSanchaKarkhanaFilter)
+            ? window.getSanchaItemStats(null, window.currentPassbookSanchaItem, targetCatLower, window.currentSanchaKarkhanaFilter, window.currentPassbookSanchaPerson)
             : { aaya: 0, gaya: 0, bacha: runningBal };
         const godamName = (typeof window.getKarkhanaNameById === 'function')
             ? window.getKarkhanaNameById(window.currentSanchaKarkhanaFilter)
             : 'Sabhi Karkhane';
         const catLabel = targetCatLower === 'chukka' ? 'Chukka' : 'Tani';
+        const makerLbl = window.currentPassbookSanchaPerson ? ` · Maker: ${window.currentPassbookSanchaPerson}` : '';
 
         const titleEl = document.getElementById('sancha-pass-summary-title');
         const totEl = document.getElementById('sancha-pass-summary-totals');
-        if (titleEl) titleEl.textContent = `${window.currentPassbookSanchaItem} [${catLabel}] (${godamName})`;
+        if (titleEl) titleEl.textContent = `${window.currentPassbookSanchaItem} [${catLabel}]${makerLbl} (${godamName})`;
         if (totEl) {
             totEl.textContent = `Aaya: +${safeNum(stats.aaya).toFixed(2)} Kg · Gaya: -${safeNum(stats.gaya).toFixed(2)} Kg · Closing: ${safeNum(stats.bacha).toFixed(2)} Kg`;
         }
@@ -1436,6 +1502,9 @@
                 ? 'Pichla Bacha Stock (Opening)'
                 : ((r.kariger && r.kariger !== '-' && r.kariger !== 'undefined') ? esc(r.kariger) : 'Factory Inward');
 
+            const makerSub = normPerson(r.person || r.sanchaMaker);
+            const makerBadge = makerSub ? `<small style="display:block; font-size:10.5px; color:#6b7280;">Maker: ${esc(makerSub)}</small>` : '';
+
             const typeDisplay = isOpening
                 ? 'Opening Stock'
                 : esc(r.type || 'Inward / Issue');
@@ -1450,7 +1519,7 @@
 
             html += `<tr class="sancha-pass-row${activeCls}" data-spidx="${idx}" onclick="window.__sanchaSelectPassRow(${idx})">
                 <td>${esc(r.date || '-')}</td>
-                <td><strong>${karigerDisplay}</strong></td>
+                <td><strong>${karigerDisplay}</strong>${makerBadge}</td>
                 <td>${typeDisplay}</td>
                 <td style="text-align:right; font-weight:700;">${aayaQty ? `+${aayaQty.toFixed(2)} Kg` : '-'}</td>
                 <td style="text-align:right; font-weight:700; color:#6b7280;">${gayaQty ? `-${gayaQty.toFixed(2)} Kg` : '-'}</td>
@@ -1683,7 +1752,7 @@
             e.preventDefault();
             const pageRows = getSanchaCurrentPageRows();
             const chosen = pageRows[sanchaListActiveIdx];
-            if (chosen) openSanchaPassbook(encodeURIComponent(chosen.name));
+            if (chosen) openSanchaPassbook(encodeURIComponent(chosen.name), encodeURIComponent(normPerson(chosen.person)));
         } else if (e.key === 't' || e.key === 'T') {
             e.preventDefault();
             triggerSelectedSanchaTransfer();
@@ -1704,7 +1773,7 @@
     };
 
     /* ========================================================================
-       9. A6 PRINT ENGINES (UNCHANGED)
+       9. A6 PRINT ENGINES
        ======================================================================== */
     const getSanchaKarkhanaPrintName = (kId) => {
         if (!kId || kId === 'all') return 'Sabhi Karkhane (All Units)';
@@ -1784,7 +1853,7 @@
                     <table>
                         <thead>
                             <tr>
-                                <th>#</th><th>ITEM</th><th>PERSON</th><th style="text-align:right;">AAYA</th><th style="text-align:right;">GAYA</th><th style="text-align:right;">BACHA</th>
+                                <th>#</th><th>ITEM</th><th>MAKER</th><th style="text-align:right;">AAYA</th><th style="text-align:right;">GAYA</th><th style="text-align:right;">BACHA</th>
                             </tr>
                         </thead>
                         <tbody>${rowsHtml}</tbody>
@@ -1883,6 +1952,7 @@
                     </div>
                     <div class="meta">
                         <div><strong>Item Naam:</strong> ${esc(itemName)}</div>
+                        ${window.currentPassbookSanchaPerson ? `<div><strong>Maker:</strong> ${esc(window.currentPassbookSanchaPerson)}</div>` : ''}
                         <div><strong>Karkhana:</strong> ${esc(kName)}</div>
                         <div><strong>Filter Avadhi:</strong> ${esc(dateRangeTxt)}</div>
                         <div><strong>Kul Entries:</strong> ${rows.length}</div>
@@ -1965,6 +2035,7 @@
                     <div class="row"><span><strong>Tarikh:</strong></span><span>${esc(entry.date || '-')}</span></div>
                     <div class="row"><span><strong>Godam:</strong></span><span>${esc(kName)}</span></div>
                     <div class="row"><span><strong>Item:</strong></span><span>${esc(itemName)}</span></div>
+                    ${normPerson(entry.person || entry.sanchaMaker) ? `<div class="row"><span><strong>Maker:</strong></span><span>${esc(normPerson(entry.person || entry.sanchaMaker))}</span></div>` : ''}
                     <div class="row"><span><strong>Type:</strong></span><span>${esc(entry.type || 'Movement')}</span></div>
                     <div class="row"><span><strong>Kariger / Person:</strong></span><span>${esc(entry.kariger || '-')}</span></div>
                     <div class="total-highlight">
@@ -1989,8 +2060,32 @@
     };
 
     /* ========================================================================
-       10. DELETE & EDIT ENGINES (100% SUPABASE-SAFE & TALLY WHITE & GOLD)
+       10. DELETE & EDIT ENGINES (MAKER-AWARE & SUPABASE-SAFE)
        ======================================================================== */
+    const findMatchingSanchaItemForEntry = (list, entry) => {
+        const targetKid = entry.karkhanaId || 'k_main';
+        const cat = (entry.category || window.currentSanchaCategory || 'tani').toLowerCase();
+        const entryPer = normPerson(entry.person !== undefined ? entry.person : (entry.kariger === 'Factory Inward' ? '' : entry.kariger)).toLowerCase();
+
+        let item = list.find((x) => {
+            if (!x || !x.name) return false;
+            const matchK = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
+            const xPer = normPerson(x.person).toLowerCase();
+            return x.name.toLowerCase() === entry.name.toLowerCase() &&
+                   (x.category || 'tani').toLowerCase() === cat &&
+                   matchK &&
+                   xPer === entryPer;
+        });
+
+        if (!item) {
+            item = list.find((x) => {
+                const matchK = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
+                return x?.name && x.name.toLowerCase() === entry.name.toLowerCase() && (x.category || 'tani').toLowerCase() === cat && matchK;
+            });
+        }
+        return item;
+    };
+
     const deleteSanchaHistoryEntry = (id) => {
         if (!confirm('Kya aap sach me ye Passbook entry DELETE karna chahte hain?\nIsse stock balance wapas sahi settle ho jayega.')) return;
 
@@ -2014,13 +2109,7 @@
         if (isPurchase) {
             const qtyToDeduct = safeNum(entry.aaya);
             const list = window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [];
-            const targetKid = entry.karkhanaId || 'k_main';
-            const cat = (entry.category || window.currentSanchaCategory || 'tani').toLowerCase();
-
-            const item = list.find((x) => {
-                const matchK = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-                return x?.name && x.name.toLowerCase() === entry.name.toLowerCase() && (x.category || 'tani').toLowerCase() === cat && matchK;
-            });
+            const item = findMatchingSanchaItemForEntry(list, entry);
 
             if (item) {
                 item.aaya = Math.max(0, safeNum((safeNum(item.aaya) - qtyToDeduct).toFixed(2)));
@@ -2047,6 +2136,7 @@
         const currentQty = safeNum(entry.aaya || entry.gaya || entry.qty);
         const isAaya = safeNum(entry.aaya) > 0;
         const typeLabel = isAaya ? 'Aaya (Inward)' : 'Gaya (Outward)';
+        const displayMaker = normPerson(entry.person) || (entry.kariger && entry.kariger !== 'Factory Inward' ? entry.kariger : '');
 
         const modalHtml = `
             <div id="sancha-edit-popup-modal" class="sancha-modal-overlay">
@@ -2065,8 +2155,8 @@
                             <input type="date" id="sancha-edit-date" value="${entry.date || ''}" class="sancha-modal-inp">
                         </div>
                         <div style="margin-bottom:10px;">
-                            <label style="font-size:12px; font-weight:700; color:#374151; display:block; margin-bottom:4px;">Kariger / Person Name :</label>
-                            <input type="text" id="sancha-edit-person" value="${esc(entry.kariger || '')}" class="sancha-modal-inp">
+                            <label style="font-size:12px; font-weight:700; color:#374151; display:block; margin-bottom:4px;">Maker / Person Name :</label>
+                            <input type="text" id="sancha-edit-person" value="${esc(displayMaker)}" class="sancha-modal-inp">
                         </div>
                         <div style="margin-bottom:14px;">
                             <label style="font-size:12px; font-weight:700; color:#374151; display:block; margin-bottom:4px;">Wazan (${typeLabel} Kg) :</label>
@@ -2116,7 +2206,8 @@
         if (!entry) return alert('Entry nahi mili!');
 
         const newDate = document.getElementById('sancha-edit-date')?.value;
-        const newPerson = String(document.getElementById('sancha-edit-person')?.value || '').trim();
+        const newPersonRaw = String(document.getElementById('sancha-edit-person')?.value || '').trim();
+        const newPerson = normPerson(newPersonRaw);
         const newQty = safeNum(document.getElementById('sancha-edit-qty')?.value);
 
         if (newQty <= 0) return alert('Kripya sahi wazan (Kg) darj karein!');
@@ -2125,28 +2216,24 @@
         const isPurchase = (String(entry.type || '').includes('Khareed') || String(entry.type || '').includes('Inward'));
         const isTransfer = (entry.refId || String(entry.type || '').includes('Transfer'));
 
+        const list = window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [];
+        const item = isPurchase ? findMatchingSanchaItemForEntry(list, entry) : null;
+
         entry.date = newDate;
-        entry.kariger = newPerson || '-';
+        entry.kariger = newPerson || (isPurchase ? 'Factory Inward' : '-');
+        if (isPurchase || entry.person !== undefined) {
+            entry.person = newPerson || '-';
+        }
 
         if (oldAaya > 0) {
             const aayaDiff = newQty - oldAaya;
             entry.aaya = newQty;
 
-            if (isPurchase) {
-                const list = window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [];
-                const targetKid = entry.karkhanaId || 'k_main';
-                const cat = (entry.category || window.currentSanchaCategory || 'tani').toLowerCase();
-
-                const item = list.find((x) => {
-                    const matchK = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-                    return x?.name && x.name.toLowerCase() === entry.name.toLowerCase() && (x.category || 'tani').toLowerCase() === cat && matchK;
-                });
-
-                if (item) {
-                    item.aaya = safeNum((safeNum(item.aaya) + aayaDiff).toFixed(2));
-                    item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
-                    if (typeof window.setStore === 'function') window.setStore('sancha_items', list);
-                }
+            if (isPurchase && item) {
+                item.aaya = safeNum((safeNum(item.aaya) + aayaDiff).toFixed(2));
+                item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
+                if (newPerson) item.person = newPerson;
+                if (typeof window.setStore === 'function') window.setStore('sancha_items', list);
             }
         } else {
             entry.gaya = newQty;
@@ -2166,6 +2253,10 @@
             window.setStore('sancha_history', hist);
         }
 
+        if (newPerson && window.currentPassbookSanchaPerson !== null) {
+            window.currentPassbookSanchaPerson = newPerson;
+        }
+
         triggerSanchaCacheInvalidation();
         closeSanchaEditModal();
         applySanchaPassbookFilters();
@@ -2176,7 +2267,7 @@
     };
 
     /* ========================================================================
-       10. GLOBAL EXPORT
+       11. GLOBAL EXPORT
        ======================================================================== */
     const sanchaUIAPI = {
         openSanchaModule,
