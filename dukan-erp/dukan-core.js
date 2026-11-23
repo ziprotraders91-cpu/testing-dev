@@ -5,7 +5,7 @@
 (() => {
     'use strict';
 
-    const D = window.DukanERP = {
+    const D = window.DukanERP = Object.assign(window.DukanERP || {}, {
         screen: 'gateway',
         gwIdx: 0,
         pageSize: 25,
@@ -19,7 +19,7 @@
         onFinishForm: null,
         onEsc: null,
         lastToast: ''
-    };
+    });
 
     D.esc = (s) => String(s ?? '').replace(/[&<>"']/g, (m) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -72,7 +72,7 @@
 
     D.toast = (msg) => {
         D.lastToast = msg;
-        const el = document.getElementById('dk-toast-msg');
+        const el = document.getElementById('dk-toast-msg') || document.getElementById('dk-gw-status');
         if (el) el.textContent = msg;
     };
 
@@ -535,14 +535,21 @@
         else window.openDukanGateway();
     };
 
+    const safeCall = (fnName, label, ...args) => {
+        if (typeof D[fnName] === 'function') return D[fnName](...args);
+        const msg = `⚠️ ${label} load nahi hua (Script/Cache check karein: ${fnName})`;
+        D.toast(msg);
+        console.warn('[DukanERP]', msg);
+    };
+
     const GW_ITEMS = [
-        { k: 'c', label: '<span class="dk-gw-key">C</span>reate (Firm / Party / Alter)', meta: 'Master Setup', fn: () => D.openCreate() },
-        { k: 'p', label: '<span class="dk-gw-key">P</span>arty Register', meta: 'Party → Pending / Complete', fn: () => D.openPartyRegister() },
-        { k: 'n', label: '<span class="dk-gw-key">N</span>aming &amp; Barcoding', meta: 'TSC 2-Up Sticker', fn: () => D.openBarcode() },
-        { k: 'o', label: '<span class="dk-gw-key">O</span>rder Form', meta: 'Create / Edit / Print', fn: () => D.openOrderForm() },
-        { k: 'h', label: 'C<span class="dk-gw-key">h</span>allan &amp; Packing Slip', meta: 'Manual + A5 Print', fn: () => D.openChallan() },
-        { k: 'd', label: 'Pen<span class="dk-gw-key">d</span>ing Order (All)', meta: 'Party Wise', fn: () => D.openAllOrders('Pending') },
-        { k: 'l', label: 'Comp<span class="dk-gw-key">l</span>ete Order (All)', meta: 'Party Wise', fn: () => D.openAllOrders('Complete') }
+        { k: 'c', label: '<span class="dk-gw-key">C</span>reate (Firm / Party / Alter)', meta: 'Master Setup', fn: () => safeCall('openCreate', 'Create') },
+        { k: 'p', label: '<span class="dk-gw-key">P</span>arty Register', meta: 'Party → Pending / Complete', fn: () => safeCall('openPartyRegister', 'Party Register') },
+        { k: 'n', label: '<span class="dk-gw-key">N</span>aming &amp; Barcoding', meta: 'TSC 2-Up Sticker', fn: () => safeCall('openBarcode', 'Naming & Barcoding') },
+        { k: 'o', label: '<span class="dk-gw-key">O</span>rder Form', meta: 'Create / Edit / Print', fn: () => safeCall('openOrderForm', 'Order Form') },
+        { k: 'h', label: 'C<span class="dk-gw-key">h</span>allan &amp; Packing Slip', meta: 'Manual + A5 Print', fn: () => safeCall('openChallan', 'Challan') },
+        { k: 'd', label: 'Pen<span class="dk-gw-key">d</span>ing Order (All)', meta: 'Party Wise', fn: () => safeCall('openAllOrders', 'Pending Orders', 'Pending') },
+        { k: 'l', label: 'Comp<span class="dk-gw-key">l</span>ete Order (All)', meta: 'Party Wise', fn: () => safeCall('openAllOrders', 'Complete Orders', 'Complete') }
     ];
 
     window.openDukanGateway = function () {
@@ -578,7 +585,7 @@
                 <div class="dk-gw-sec">Reports (All Parties)</div>
                 ${renderGwRow(5)}${renderGwRow(6)}
                 <div class="dk-gw-head" style="border-top:1px solid #e5d5a7; border-bottom:none; font-size:11px; color:#92400e; font-weight:700;">
-                    <span>↑ ↓ Arrow · [Enter] Kholein · [Esc] Back</span>
+                    <span id="dk-gw-status">↑ ↓ Arrow · [Enter] Kholein · [Esc] Back</span>
                     <span>The Tally Bridge</span>
                 </div>
             </div>
@@ -593,6 +600,8 @@
     D.runGw = (i) => { D.gwIdx = i; if (GW_ITEMS[i]) GW_ITEMS[i].fn(); };
 
     document.addEventListener('keydown', (e) => {
+        if (!e || !e.key) return;
+
         const sec = document.getElementById('dukan-section');
         if (!sec || sec.style.display === 'none') return;
 
@@ -601,7 +610,7 @@
             if (e.key === 'ArrowDown') { e.preventDefault(); e.stopImmediatePropagation(); D.gwIdx = (D.gwIdx + 1) % GW_ITEMS.length; window.openDukanGateway(); return; }
             if (e.key === 'ArrowUp') { e.preventDefault(); e.stopImmediatePropagation(); D.gwIdx = (D.gwIdx - 1 + GW_ITEMS.length) % GW_ITEMS.length; window.openDukanGateway(); return; }
             if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); D.runGw(D.gwIdx); return; }
-            if (!e.ctrlKey && !e.altKey && e.key.length === 1) {
+            if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key && e.key.length === 1) {
                 const idx = GW_ITEMS.findIndex((x) => x.k === e.key.toLowerCase());
                 if (idx >= 0) { e.preventDefault(); e.stopImmediatePropagation(); D.runGw(idx); }
             }
