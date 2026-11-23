@@ -1,7 +1,7 @@
 /* ============================================================================
    SIMPLICITY ERP - LIVE ADMIN CONTROL, STORAGE MONITOR & PER-KARIGER BILLING
    File: admin/admin.js • Developed by Farhan Jawed
-   Architecture: Supabase Realtime + Accurate Storage RPC + Full User Purge
+   Architecture: Supabase Realtime + Accurate Storage RPC + Secured Full User Purge
 ============================================================================ */
 
 (() => {
@@ -174,7 +174,7 @@
                         <button type="button" onclick="backToDashboard()" style="background:#1e293b; color:#ffffff; border:1px solid #334155; padding:7px 12px; border-radius:8px; font-size:12.5px; font-weight:700; cursor:pointer;">← Dashboard</button>
                         <div>
                             <h2 style="margin:0; font-size:17px; font-weight:800; color:#ffffff;">👑 Master Admin Control</h2>
-                            <div style="font-size:11.5px; color:#94a3b8;">Users Approval, Storage Monitor & Kariger Billing</div>
+                            <div style="font-size:11.5px; color:#94a3b8;">Users Approval, Storage Monitor &amp; Kariger Billing</div>
                         </div>
                     </div>
                     <div class="adm-top-actions">
@@ -229,11 +229,11 @@
                                 <tr>
                                     <th style="width:36px; text-align:center;">#</th>
                                     <th>Karkhana / Naam</th>
-                                    <th>Mobile & ID</th>
-                                    <th>Karigers & Bill</th>
+                                    <th>Mobile &amp; ID</th>
+                                    <th>Karigers &amp; Bill</th>
                                     <th>Storage</th>
                                     <th>Password</th>
-                                    <th>Join & Validity</th>
+                                    <th>Join &amp; Validity</th>
                                     <th>Status</th>
                                     <th style="text-align:center;">Action</th>
                                 </tr>
@@ -805,7 +805,7 @@
         const st = String(targetUser?.status || '').toLowerCase().trim();
         const isPending = (st === 'pending' || st === 'pending_approval' || st === 'waiting');
 
-        if (!confirm(`⚠️ KYA AAP USER '${cleanUid}' KO PERMANENTLY ${isPending ? 'REJECT' : 'DELETE'} KARNA CHAHTE HAIN?\n\nIsse is user ka login aur Supabase par maujood SAARA data (Karigers, Sheets, Stock, Payments, Portals) hamesha ke liye delete ho jayega!`)) {
+        if (!confirm(`⚠️ KYA AAP USER '${cleanUid}' KO PERMANENTLY ${isPending ? 'REJECT' : 'DELETE'} KARNA CHAHTE HAIN?\n\nIsse is user ka login aur Supabase par maujood SAARA data (Karigers, Sheets, Stock, Payments, Dukan, JobWork, Portals) hamesha ke liye delete ho jayega!`)) {
             return;
         }
 
@@ -820,16 +820,26 @@
         if (!sb) return alert('Supabase connect nahi hai!');
 
         try {
+            let adminAuth = {};
+            try { adminAuth = JSON.parse(localStorage.getItem('app_active_session_auth') || '{}'); } catch (_) {}
+
             const { data: deletedRows, error } = await sb.rpc('delete_user_completely', {
-                p_user_id: cleanUid
+                p_user_id: cleanUid,
+                p_admin_id: adminAuth.id || window.currentUserId || 'farhan',
+                p_admin_pass: adminAuth.pass || ''
             });
 
             if (error) throw error;
 
+            // ⭐ Agar isi browser/device par us user ka purana IndexedDB / localStorage cache tha toh turant wipe karein
+            if (typeof window.wipeUserLocalCache === 'function') {
+                await window.wipeUserLocalCache(cleanUid);
+            }
+
             if (window.adminStorageMap) delete window.adminStorageMap[uidLower];
             if (window.adminKarigerCountMap) delete window.adminKarigerCountMap[uidLower];
 
-            alert(`🗑️ User '${cleanUid}' aur uska poora Supabase data (${Number(deletedRows) || 0} records) permanently delete ho gaya!\n\nAb agar '${cleanUid}' naam se naya account banega toh 100% fresh khulega.`);
+            alert(`🗑️ User '${cleanUid}' aur uska poora Supabase + Local data (${Number(deletedRows) || 0} records) permanently delete ho gaya!\n\nAb agar '${cleanUid}' naam se naya account banega toh 100% fresh khulega.`);
             refreshAdminUsersList();
         } catch (err) {
             alert('Delete error: ' + (err.message || err));
@@ -864,7 +874,7 @@
             <div style="background:#ffffff; width:100%; max-width:480px; border-radius:14px; overflow:hidden; box-shadow:0 20px 40px rgba(0,0,0,0.4); font-family:sans-serif; max-height:94vh; display:flex; flex-direction:column;">
                 <div style="background:#0f172a; color:#ffffff; padding:14px 18px; display:flex; justify-content:space-between; align-items:center;">
                     <div>
-                        <h3 style="margin:0; font-size:16px; font-weight:800;">💳 Per-Kariger Billing & QR Settings</h3>
+                        <h3 style="margin:0; font-size:16px; font-weight:800;">💳 Per-Kariger Billing &amp; QR Settings</h3>
                         <div style="font-size:11px; color:#94a3b8;">Client ke Master Sheet Karigers × Rate ke hisab se payment banega</div>
                     </div>
                     <button type="button" onclick="closeAdminBillingModal()" style="background:transparent; border:none; color:#fff; font-size:24px; cursor:pointer; line-height:1;">&times;</button>
