@@ -4,7 +4,14 @@
    File: dukan-erp/dukan-party-reg.js
 ============================================================================ */
 (() => {
+    'use strict';
+
     const D = window.DukanERP;
+    if (!D) {
+        console.error('[dukan-party-reg] DukanERP core load nahi hua!');
+        return;
+    }
+
     let step = 'parties'; // 'parties' | 'choice' | 'orders'
     let selPartyId = '';
     let orderStatusView = 'Pending';
@@ -31,7 +38,7 @@
         const tb = document.getElementById('pr-tbody');
         if (!tb) return;
         tb.innerHTML = pg.rows.length ? pg.rows.map((p, i) => `
-            <tr class="dk-nav-row ${i === navIdx ? 'active' : ''}" onclick="DukanERP.prOpenParty('${p.id}')">
+            <tr class="dk-nav-row ${i === navIdx ? 'active' : ''}" onclick="DukanERP.prOpenParty('${D.esc(String(p.id || ''))}')">
                 <td><strong>${D.esc(p.name)}</strong></td>
                 <td>${D.esc(p.city || '-')}</td>
                 <td>${D.esc(p.agent || '-')}</td>
@@ -46,7 +53,7 @@
 
     function showPartySide(p) {
         if (!p) return D.renderSide('Party Info', '0', [], false);
-        const pOrders = D.get('dukan_orders').filter((o) => o.partyId === p.id);
+        const pOrders = D.get('dukan_orders').filter((o) => o && o.partyId === p.id);
         D.renderSide(p.name, p.city || 'Party', [
             { label: 'Pending Orders', meta: String(pOrders.filter((o) => o.status !== 'Complete').length), active: true },
             { label: 'Completed Orders', meta: String(pOrders.filter((o) => o.status === 'Complete').length) },
@@ -60,9 +67,9 @@
         const orders = D.get('dukan_orders');
 
         if (step === 'parties') {
-            const getFiltered = () => parties.filter((p) =>
-                !searchQ || `${p.name} ${p.city} ${p.agent} ${p.mob} ${p.marka}`.toLowerCase().includes(searchQ.toLowerCase())
-            );
+            const getFiltered = () => parties.filter((p) => p && (
+                !searchQ || `${p.name || ''} ${p.city || ''} ${p.agent || ''} ${p.mob || ''} ${p.marka || ''}`.toLowerCase().includes(searchQ.toLowerCase())
+            ));
             const pg = D.paginate(getFiltered(), page);
             if (navIdx >= pg.rows.length) navIdx = 0;
 
@@ -102,8 +109,8 @@
             return;
         }
 
-        const p = parties.find((x) => x.id === selPartyId) || {};
-        const pOrders = orders.filter((o) => o.partyId === selPartyId);
+        const p = parties.find((x) => x && x.id === selPartyId) || {};
+        const pOrders = orders.filter((o) => o && o.partyId === selPartyId);
         const pendList = pOrders.filter((o) => o.status !== 'Complete');
         const compList = pOrders.filter((o) => o.status === 'Complete');
 
@@ -182,7 +189,7 @@
                         <td>${detailHTML}${chHTML}</td>
                         <td>${D.esc(o.marka || '-')}</td>
                         <td>${orderStatusView === 'Pending'
-                            ? `<button type="button" class="dk-btn-gold" style="padding:4px 9px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.loadOrderInChallan('${p.id}','${o.id}')">Challan →</button>`
+                            ? `<button type="button" class="dk-btn-gold" style="padding:4px 9px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.loadOrderInChallan('${D.esc(String(p.id || ''))}','${D.esc(String(o.id || ''))}')">Challan →</button>`
                             : '✅ Complete'}</td>
                     </tr>`;
                 }).join('') : `<tr><td colspan="4" style="text-align:center;color:#9ca3af;">Koi order nahi mila</td></tr>`;
@@ -224,7 +231,9 @@
                 onHighlight: (i) => showOrdSide(D.paginate(getFilteredOrders(), page).rows[i]),
                 onEnter: (i) => {
                     const o = D.paginate(getFilteredOrders(), page).rows[i];
-                    if (o && orderStatusView === 'Pending') D.loadOrderInChallan(p.id, o.id);
+                    if (o && orderStatusView === 'Pending' && typeof D.loadOrderInChallan === 'function') {
+                        D.loadOrderInChallan(p.id, o.id);
+                    }
                 }
             }
         });
