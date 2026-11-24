@@ -3,7 +3,7 @@
    - 2-Button Menu: [Design & Barcode] & [Barcode Register]
    - Clean Form (No Register Clutter)
    - Dedicated Barcode Register with Universal Search + Edit / Delete / TSC Print
-   - Fixed TSC 2-Up (50x25mm x 2) Thermal Alignment (No 90-deg Chrome Rotation)
+   - Pure Code Fix: Continuous Pitch 2-Up Printing (No Driver/Windows Changes Needed)
    File: dukan-erp/dukan-barcode.js
 ============================================================================ */
 (() => {
@@ -256,12 +256,17 @@
             <div class="dk-row"><label>Finished Stock (Live) :</label><input id="bc-fin" value="${liveFin} Pcs (Saree Finished Tab)" readonly style="background:#f9fafb;color:#15803d;"></div>
             <div class="dk-row"><label>Sticker Qty &amp; Size :</label>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                    <input type="number" id="bc-pqty" value="${liveFin > 0 ? liveFin : 10}" style="width:80px;">
+                    <input type="number" id="bc-pqty" value="${liveFin > 0 ? liveFin : 10}" style="width:72px;" title="Total Stickers">
                     <select id="bc-psize">
-                        <option value="tsc2up">TSC 2-Up Roll (50×25mm × 2)</option>
+                        <option value="tsc2up_pitch">TSC 2-Up (Lagatar - Bina Gap Skip)</option>
+                        <option value="tsc2up">TSC 2-Up Roll (104×25mm Page)</option>
                         <option value="tsc1up">TSC 1-Up Roll (50×25mm)</option>
                         <option value="a4">A4 Sticker Sheet</option>
                     </select>
+                    <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;width:auto;" title="Do stickers ke beech ka gap (mm)">
+                        Gap(mm):
+                        <input type="number" id="bc-gap" value="2.5" step="0.5" min="0" max="10" style="width:52px;">
+                    </label>
                     <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;width:auto;cursor:pointer;">
                         <input type="checkbox" id="bc-textonly" onchange="DukanERP.updSticker()" style="width:auto;">
                         Bina Barcode (2-Line)
@@ -485,7 +490,7 @@
         render('bc-kar');
     };
 
-    function printStickerJob(sp, nm, cd, count, mode, textOnly = false) {
+    function printStickerJob(sp, nm, cd, count, mode, textOnly = false, gapMm = 2.5) {
         const svg = D.barcodeSVG(cd, 26);
 
         const cellHTML = textOnly
@@ -503,7 +508,7 @@
         let bodyHTML = '';
         let pageCSS = '';
 
-        if (mode === 'tsc2up') {
+        if (mode === 'tsc2up_pitch') {
             pageCSS = `
                 @page { margin: 0; }
                 html, body {
@@ -514,8 +519,46 @@
                 }
                 .row2 {
                     width: 102mm;
+                    height: 25mm;
+                    margin: 0 auto ${gapMm}mm auto;
+                    box-sizing: border-box;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    gap: 2mm;
+                    overflow: hidden;
+                    page-break-inside: avoid;
+                    break-inside: avoid;
+                }
+                .row2:last-child { margin-bottom: 0; }
+                .lbl {
+                    width: 50mm;
                     height: 24mm;
-                    max-height: 24mm;
+                    padding: 0.8mm 1.5mm;
+                    box-sizing: border-box;
+                    text-align: center;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: center;
+                    align-items: center;
+                    overflow: hidden;
+                }`;
+            for (let i = 0; i < count; i += 2) {
+                bodyHTML += `<div class="row2">${cellHTML}${i + 1 < count ? cellHTML : '<div class="lbl"></div>'}</div>`;
+            }
+        } else if (mode === 'tsc2up') {
+            pageCSS = `
+                @page { margin: 0; }
+                html, body {
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    width: 102mm;
+                    background: #fff;
+                }
+                .row2 {
+                    width: 102mm;
+                    height: 24.4mm;
+                    max-height: 24.4mm;
                     margin: 0 auto;
                     box-sizing: border-box;
                     display: flex;
@@ -523,10 +566,8 @@
                     align-items: center;
                     gap: 2mm;
                     overflow: hidden;
-                }
-                .row2:not(:last-child) {
-                    page-break-after: always;
-                    break-after: page;
+                    page-break-inside: avoid;
+                    break-inside: avoid;
                 }
                 .lbl {
                     width: 50mm;
@@ -546,15 +587,11 @@
         } else if (mode === 'tsc1up') {
             pageCSS = `
                 @page { margin: 0; }
-                html, body {
-                    margin: 0 !important;
-                    padding: 0 !important;
-                    width: 50mm;
-                    background: #fff;
-                }
+                html, body { margin: 0 !important; padding: 0 !important; width: 50mm; background: #fff; }
                 .lbl {
                     width: 50mm;
                     height: 24mm;
+                    margin-bottom: ${gapMm}mm;
                     padding: 0.8mm 1.5mm;
                     box-sizing: border-box;
                     text-align: center;
@@ -563,11 +600,10 @@
                     justify-content: center;
                     align-items: center;
                     overflow: hidden;
+                    page-break-inside: avoid;
+                    break-inside: avoid;
                 }
-                .lbl:not(:last-child) {
-                    page-break-after: always;
-                    break-after: page;
-                }`;
+                .lbl:last-child { margin-bottom: 0; }`;
             bodyHTML = Array(count).fill(cellHTML).join('');
         } else {
             pageCSS = `
@@ -663,12 +699,13 @@
 
     D.printStickers = () => {
         const count = Math.max(1, parseInt(document.getElementById('bc-pqty')?.value || 1, 10));
-        const mode = document.getElementById('bc-psize')?.value || 'tsc2up';
+        const mode = document.getElementById('bc-psize')?.value || 'tsc2up_pitch';
         const textOnly = !!document.getElementById('bc-textonly')?.checked;
+        const gapMm = parseFloat(document.getElementById('bc-gap')?.value ?? '2.5') || 0;
         const sp = (document.getElementById('bc-spec')?.value || '3.60 CM EMB. JHALAR').toUpperCase();
         const nm = (document.getElementById('bc-des')?.value || 'RASHMIKA').toUpperCase();
         const cd = (document.getElementById('bc-code')?.value || `${nm}-KT`).toUpperCase();
-        printStickerJob(sp, nm, cd, count, mode, textOnly);
+        printStickerJob(sp, nm, cd, count, mode, textOnly, gapMm);
     };
 
     D.bcQuickPrint = (id) => {
@@ -679,6 +716,7 @@
         if (!qtyStr) return;
         const count = Math.max(1, parseInt(qtyStr, 10) || 1);
         const textOnly = !!document.getElementById('bc-textonly')?.checked;
-        printStickerJob(d.specs || '3.60 CM EMB. JHALAR', d.design, d.code || `${d.design}-KT`, count, 'tsc2up', textOnly);
+        const gapMm = parseFloat(document.getElementById('bc-gap')?.value ?? '2.5') || 2.5;
+        printStickerJob(d.specs || '3.60 CM EMB. JHALAR', d.design, d.code || `${d.design}-KT`, count, 'tsc2up_pitch', textOnly, gapMm);
     };
 })();
