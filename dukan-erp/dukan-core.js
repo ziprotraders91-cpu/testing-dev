@@ -7,7 +7,13 @@
 (() => {
     'use strict';
 
+    if (window.DukanERP?._coreLoaded) {
+        console.warn('[dukan-core] Already loaded — skip');
+        return;
+    }
+
     const D = window.DukanERP = Object.assign(window.DukanERP || {}, {
+        _coreLoaded: true,
         screen: 'gateway',
         gwIdx: 0,
         pageSize: 25,
@@ -159,8 +165,11 @@
     D.restoreFinishedByRef = (refId) => {
         if (!refId) return;
         const target = String(refId).trim();
-        const history = D.get('saree_history').filter((x) => !x || String(x.refId || '') !== target);
-        D.set('saree_history', history);
+        const prev = D.get('saree_history');
+        const history = prev.filter((x) => !x || String(x.refId || '') !== target);
+        if (history.length !== prev.length) {
+            D.set('saree_history', history);
+        }
         if (typeof window.invalidateSareeCalcCache === 'function') window.invalidateSareeCalcCache();
         if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
     };
@@ -171,6 +180,13 @@
         let rem = Math.round(D.num(qty));
         const targetDes = String(designName || '').trim().toUpperCase();
         if (!targetDes || rem <= 0) return;
+
+        const available = D.getDesignFinishedStock(designName);
+        if (rem > available) {
+            console.warn(`[deduct] ${targetDes}: need ${rem}, have ${available}`);
+            rem = available;
+            if (rem <= 0) return;
+        }
 
         const designs = D.get('dukan_designs');
         const dObj = designs.find((x) => String(x.design || '').toUpperCase() === targetDes);
@@ -189,6 +205,7 @@
 
         const history = D.get('saree_history');
         const now = Date.now();
+        const uid = Math.random().toString(36).slice(2, 6);
         let idx = 0;
 
         candidates.forEach((r) => {
@@ -197,7 +214,7 @@
             if (take <= 0) return;
             rem -= take;
             history.push({
-                id: `saree_out_${now}_${idx++}_ch`,
+                id: `saree_out_${now}_${idx++}_${uid}_ch`,
                 date: meta.date || D.today(),
                 sareeName: r.sareeName,
                 karigerName: r.karigerName,
@@ -216,7 +233,7 @@
 
         if (rem > 0) {
             history.push({
-                id: `saree_out_${now}_${idx}_ch`,
+                id: `saree_out_${now}_${idx}_${uid}_ch`,
                 date: meta.date || D.today(),
                 sareeName: dObj?.sareeName || targetDes,
                 karigerName: dObj?.kariger || 'DUKAN',
@@ -247,10 +264,23 @@
                 sentMap[k] = (sentMap[k] || 0) + D.num(it.qty);
             });
         });
-        const items = (ord.items || []).map((it) => {
+        const lastIdxMap = {};
+        (ord.items || []).forEach((it, idx) => {
+            const k = String(it.name || '').trim().toUpperCase();
+            lastIdxMap[k] = idx;
+        });
+        const remSentMap = { ...sentMap };
+        const items = (ord.items || []).map((it, idx) => {
             const k = String(it.name || '').trim().toUpperCase();
             const ordered = D.num(it.qty);
-            const sent = ord.status === 'Complete' && !challans.length ? ordered : (sentMap[k] || 0);
+            let sent = 0;
+            if (ord.status === 'Complete' && !challans.length) {
+                sent = ordered;
+            } else {
+                const availSent = remSentMap[k] || 0;
+                sent = (lastIdxMap[k] === idx) ? availSent : Math.min(ordered, availSent);
+                remSentMap[k] = Math.max(0, availSent - sent);
+            }
             const baki = Math.max(0, ordered - sent);
             return { ...it, ordered, sent, baki };
         });
@@ -272,8 +302,11 @@
         const ord = ords.find((o) => o.id === orderId);
         if (!ord) return;
         const prog = D.getOrderProgress(ord);
-        ord.status = prog.allDone ? 'Complete' : 'Pending';
-        D.set('dukan_orders', ords);
+        const nextStatus = prog.allDone ? 'Complete' : 'Pending';
+        if (ord.status !== nextStatus) {
+            ord.status = nextStatus;
+            D.set('dukan_orders', ords);
+        }
     };
     // ⭐ Alias fix for dukan-challan.js & dukan-order.js
     D.recalcOrderStatus = D.syncOrderStatus;
@@ -501,7 +534,14 @@
         box.style.display = 'flex';
         D._acceptYes = yesFn;
         D._acceptNo = noFn || (() => { box.style.display = 'none'; });
-        setTimeout(() => document.getElementById('dk-accept-yes')?.focus(), 15);
+        const yesBtn = document.getElementById('dk-accept-yes');
+        if (yesBtn) {
+            yesBtn.onclick = () => {
+                box.style.display = 'none';
+                if (typeof D._acceptYes === 'function') D._acceptYes();
+            };
+        }
+        setTimeout(() => yesBtn?.focus(), 15);
     };
 
     D.renderShell = (headLeftHTML, leftBodyHTML, footLeft = '[Enter] Agla Box · [Shift+Enter] Pichhla Box · [Ctrl+Enter] Save · [Esc] Back') => {
@@ -629,136 +669,141 @@
         }
     };
 
-    document.addEventListener('keydown', (e) => {
-        if (!e || !e.key) return;
+    if (!window._dkKeydownBound) {
+        window._dkKeydownBound = true;
+        document.addEventListener('keydown', (e) => {
+            if (!e || !e.key) return;
 
-        const sec = document.getElementById('dukan-section');
-        if (!sec || sec.style.display === 'none') return;
+            const sec = document.getElementById('dukan-section');
+            if (!sec || sec.style.display === 'none') return;
 
-        if (D.screen === 'gateway') {
-            if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); window.backToDashboard(); return; }
-            if (e.key === 'ArrowDown') { e.preventDefault(); e.stopImmediatePropagation(); D.gwIdx = (D.gwIdx + 1) % GW_ITEMS.length; window.openDukanGateway(); return; }
-            if (e.key === 'ArrowUp') { e.preventDefault(); e.stopImmediatePropagation(); D.gwIdx = (D.gwIdx - 1 + GW_ITEMS.length) % GW_ITEMS.length; window.openDukanGateway(); return; }
-            if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); D.runGw(D.gwIdx); return; }
-            if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key && e.key.length === 1) {
-                const idx = GW_ITEMS.findIndex((x) => x.k === e.key.toLowerCase());
-                if (idx >= 0) { e.preventDefault(); e.stopImmediatePropagation(); D.runGw(idx); }
-            }
-            return;
-        }
-
-        if (e.key === 'Escape') {
-            e.preventDefault(); e.stopImmediatePropagation();
-            D.handleEsc();
-            return;
-        }
-
-        const acc = document.getElementById('dk-accept-box');
-        if (acc && acc.style.display === 'flex') {
-            if (e.key.toLowerCase() === 'y' || (e.key === 'Enter' && document.activeElement?.id !== 'dk-accept-no')) {
-                e.preventDefault(); e.stopImmediatePropagation();
-                if (typeof D._acceptYes === 'function') D._acceptYes();
+            if (D.screen === 'gateway') {
+                if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); window.backToDashboard(); return; }
+                if (e.key === 'ArrowDown') { e.preventDefault(); e.stopImmediatePropagation(); D.gwIdx = (D.gwIdx + 1) % GW_ITEMS.length; window.openDukanGateway(); return; }
+                if (e.key === 'ArrowUp') { e.preventDefault(); e.stopImmediatePropagation(); D.gwIdx = (D.gwIdx - 1 + GW_ITEMS.length) % GW_ITEMS.length; window.openDukanGateway(); return; }
+                if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); D.runGw(D.gwIdx); return; }
+                if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key && e.key.length === 1) {
+                    const idx = GW_ITEMS.findIndex((x) => x.k === e.key.toLowerCase());
+                    if (idx >= 0) { e.preventDefault(); e.stopImmediatePropagation(); D.runGw(idx); }
+                }
                 return;
             }
-            if (e.key.toLowerCase() === 'n') {
+
+            if (e.key === 'Escape') {
                 e.preventDefault(); e.stopImmediatePropagation();
-                if (typeof D._acceptNo === 'function') D._acceptNo();
+                D.handleEsc();
                 return;
             }
-        }
 
-        if (e.ctrlKey && (e.key === 'Enter' || e.key.toLowerCase() === 'a')) {
-            if (typeof D.onFinishForm === 'function') {
-                e.preventDefault(); e.stopImmediatePropagation();
-                D.onFinishForm();
-                return;
-            }
-        }
-
-        const activeEl = document.activeElement;
-        const activeId = activeEl?.id || '';
-
-        if (e.key === 'Enter' && e.shiftKey && activeId && D.focusOrder.includes(activeId)) {
-            e.preventDefault(); e.stopImmediatePropagation();
-            D.moveFocus(activeId, -1);
-            return;
-        }
-
-        if (activeEl?.tagName === 'BUTTON' && !activeEl.classList.contains('dk-choice-btn')) {
-            if (e.key === 'Enter') {
-                e.preventDefault(); e.stopImmediatePropagation();
-                activeEl.click();
-            }
-            return;
-        }
-
-        if (activeId && D.sideBindings[activeId]) {
-            D.activeSideId = activeId;
-            const b = D.sideBindings[activeId];
-            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-                if (!D.sideItems.length) return;
-                e.preventDefault(); e.stopImmediatePropagation();
-                D.sideNavigated = true;
-                if (D.sideIdx < 0) D.sideIdx = e.key === 'ArrowDown' ? 0 : D.sideItems.length - 1;
-                else D.sideIdx = e.key === 'ArrowDown'
-                    ? (D.sideIdx + 1) % D.sideItems.length
-                    : (D.sideIdx - 1 + D.sideItems.length) % D.sideItems.length;
-                const opts = Array.from(document.querySelectorAll('#dk-side-items .dk-side-opt'));
-                opts.forEach((o, i) => o.classList.toggle('selected', i === D.sideIdx));
-                opts[D.sideIdx]?.scrollIntoView({ block: 'nearest' });
-                return;
-            }
-            if (e.key === 'Enter') {
-                e.preventDefault(); e.stopImmediatePropagation();
-                const valTrim = String(activeEl.value || '').trim();
-                if (typeof b.onEmptyEnter === 'function' && !valTrim && !D.sideNavigated) {
-                    b.onEmptyEnter();
+            const acc = document.getElementById('dk-accept-box');
+            if (acc && acc.style.display === 'flex') {
+                const accFocusId = document.activeElement?.id || '';
+                if (e.key.toLowerCase() === 'y' || (e.key === 'Enter' && accFocusId !== 'dk-accept-no' && accFocusId !== 'dk-accept-print')) {
+                    e.preventDefault(); e.stopImmediatePropagation();
+                    acc.style.display = 'none';
+                    if (typeof D._acceptYes === 'function') D._acceptYes();
                     return;
                 }
-                if (D.sideIdx >= 0 && D.sideItems[D.sideIdx]) {
-                    D.pickSide(D.sideIdx);
-                } else {
-                    D.moveFocus(activeId, 1);
+                if (e.key.toLowerCase() === 'n') {
+                    e.preventDefault(); e.stopImmediatePropagation();
+                    if (typeof D._acceptNo === 'function') D._acceptNo();
+                    return;
+                }
+            }
+
+            if (e.ctrlKey && (e.key === 'Enter' || e.key.toLowerCase() === 'a')) {
+                if (typeof D.onFinishForm === 'function') {
+                    e.preventDefault(); e.stopImmediatePropagation();
+                    D.onFinishForm();
+                    return;
+                }
+            }
+
+            const activeEl = document.activeElement;
+            const activeId = activeEl?.id || '';
+
+            if (e.key === 'Enter' && e.shiftKey && activeId && D.focusOrder.includes(activeId)) {
+                e.preventDefault(); e.stopImmediatePropagation();
+                D.moveFocus(activeId, -1);
+                return;
+            }
+
+            if (activeEl?.tagName === 'BUTTON' && !activeEl.classList.contains('dk-choice-btn')) {
+                if (e.key === 'Enter') {
+                    e.preventDefault(); e.stopImmediatePropagation();
+                    activeEl.click();
                 }
                 return;
             }
-        }
 
-        if (D.listNav) {
-            const rows = Array.from(document.querySelectorAll(D.listNav.selector));
-            const inSearch = Boolean(D.listNav.searchId && activeId === D.listNav.searchId);
-            const onChoice = Boolean(activeEl?.classList.contains('dk-choice-btn'));
-            const onBody = (!activeEl || activeEl === document.body);
-            if (rows.length && (inSearch || onChoice || onBody)) {
+            if (activeId && D.sideBindings[activeId]) {
+                D.activeSideId = activeId;
+                const b = D.sideBindings[activeId];
                 if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    if (!D.sideItems.length) return;
                     e.preventDefault(); e.stopImmediatePropagation();
-                    let cur = D.listNav.getIdx();
-                    cur = e.key === 'ArrowDown' ? (cur + 1) % rows.length : (cur - 1 + rows.length) % rows.length;
-                    D.listNav.setIdx(cur);
-                    rows.forEach((r, i) => r.classList.toggle('active', i === cur));
-                    rows[cur]?.scrollIntoView({ block: 'nearest' });
-                    if (typeof D.listNav.onHighlight === 'function') D.listNav.onHighlight(cur);
+                    D.sideNavigated = true;
+                    if (D.sideIdx < 0) D.sideIdx = e.key === 'ArrowDown' ? 0 : D.sideItems.length - 1;
+                    else D.sideIdx = e.key === 'ArrowDown'
+                        ? (D.sideIdx + 1) % D.sideItems.length
+                        : (D.sideIdx - 1 + D.sideItems.length) % D.sideItems.length;
+                    const opts = Array.from(document.querySelectorAll('#dk-side-items .dk-side-opt'));
+                    opts.forEach((o, i) => o.classList.toggle('selected', i === D.sideIdx));
+                    opts[D.sideIdx]?.scrollIntoView({ block: 'nearest' });
                     return;
                 }
                 if (e.key === 'Enter') {
                     e.preventDefault(); e.stopImmediatePropagation();
-                    D.listNav.onEnter(D.listNav.getIdx());
+                    const valTrim = String(activeEl.value || '').trim();
+                    if (typeof b.onEmptyEnter === 'function' && !valTrim && !D.sideNavigated) {
+                        b.onEmptyEnter();
+                        return;
+                    }
+                    if (D.sideIdx >= 0 && D.sideItems[D.sideIdx]) {
+                        D.pickSide(D.sideIdx);
+                    } else {
+                        D.moveFocus(activeId, 1);
+                    }
                     return;
                 }
             }
-        }
 
-        if (activeId && D.focusOrder.includes(activeId)) {
-            if (e.key === 'Enter') {
-                e.preventDefault(); e.stopImmediatePropagation();
-                if (typeof D.onCustomFieldEnter === 'function' && D.onCustomFieldEnter(activeId)) return;
-                D.moveFocus(activeId, 1);
-                return;
+            if (D.listNav) {
+                const rows = Array.from(document.querySelectorAll(D.listNav.selector));
+                const inSearch = Boolean(D.listNav.searchId && activeId === D.listNav.searchId);
+                const onChoice = Boolean(activeEl?.classList.contains('dk-choice-btn'));
+                const onBody = (!activeEl || activeEl === document.body);
+                if (rows.length && (inSearch || onChoice || onBody)) {
+                    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        e.preventDefault(); e.stopImmediatePropagation();
+                        let cur = D.listNav.getIdx();
+                        cur = e.key === 'ArrowDown' ? (cur + 1) % rows.length : (cur - 1 + rows.length) % rows.length;
+                        D.listNav.setIdx(cur);
+                        rows.forEach((r, i) => r.classList.toggle('active', i === cur));
+                        rows[cur]?.scrollIntoView({ block: 'nearest' });
+                        if (typeof D.listNav.onHighlight === 'function') D.listNav.onHighlight(cur);
+                        return;
+                    }
+                    if (e.key === 'Enter') {
+                        e.preventDefault(); e.stopImmediatePropagation();
+                        D.listNav.onEnter(D.listNav.getIdx());
+                        return;
+                    }
+                }
             }
-            if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && activeEl.tagName !== 'SELECT') {
-                e.preventDefault(); e.stopImmediatePropagation();
-                D.moveFocus(activeId, e.key === 'ArrowDown' ? 1 : -1);
+
+            if (activeId && D.focusOrder.includes(activeId)) {
+                if (e.key === 'Enter') {
+                    e.preventDefault(); e.stopImmediatePropagation();
+                    if (typeof D.onCustomFieldEnter === 'function' && D.onCustomFieldEnter(activeId)) return;
+                    D.moveFocus(activeId, 1);
+                    return;
+                }
+                if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && activeEl.tagName !== 'SELECT') {
+                    e.preventDefault(); e.stopImmediatePropagation();
+                    D.moveFocus(activeId, e.key === 'ArrowDown' ? 1 : -1);
+                }
             }
-        }
-    }, true);
+        }, true);
+    }
 })();
