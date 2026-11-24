@@ -3,7 +3,7 @@
    - 2-Button Menu: [Design & Barcode] & [Barcode Register]
    - Clean Form (No Register Clutter)
    - Dedicated Barcode Register with Universal Search + Edit / Delete / TSC Print
-   - Pure Code Fix: Continuous Pitch 2-Up Printing (No Driver/Windows Changes Needed)
+   - Pure Code Fix: Continuous Pitch + Top/Gap mm Calibration (Auto-Saved)
    File: dukan-erp/dukan-barcode.js
 ============================================================================ */
 (() => {
@@ -15,6 +15,7 @@
         return;
     }
 
+    const CFG_KEY = 'dukan_bc_print_cfg_v1';
     let viewMode = 'choice'; // 'choice' | 'form' | 'register'
     let choiceIdx = 0;
     let editId = '';
@@ -24,6 +25,33 @@
     let regSearch = '';
     let regPage = 1;
     let regNav = 0;
+
+    function loadPrintCfg() {
+        try {
+            const raw = localStorage.getItem(CFG_KEY);
+            const parsed = raw ? JSON.parse(raw) : {};
+            return {
+                mode: parsed.mode || 'tsc2up_pitch',
+                gap: parsed.gap !== undefined ? Number(parsed.gap) : 2.8,
+                top: parsed.top !== undefined ? Number(parsed.top) : 1.5,
+                textOnly: !!parsed.textOnly
+            };
+        } catch {
+            return { mode: 'tsc2up_pitch', gap: 2.8, top: 1.5, textOnly: false };
+        }
+    }
+
+    D.savePrintCfg = () => {
+        try {
+            const cfg = {
+                mode: document.getElementById('bc-psize')?.value || 'tsc2up_pitch',
+                gap: parseFloat(document.getElementById('bc-gap')?.value ?? '2.8') || 0,
+                top: parseFloat(document.getElementById('bc-top')?.value ?? '1.5') || 0,
+                textOnly: !!document.getElementById('bc-textonly')?.checked
+            };
+            localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
+        } catch { /* ignore */ }
+    };
 
     D.openBarcode = () => {
         D.screen = 'barcode';
@@ -236,6 +264,7 @@
         const finRows = D.getFinishedStockRows();
         const karigers = D.getKarigers();
         const cur = editId ? designs.find((x) => x && x.id === editId) : null;
+        const cfg = loadPrintCfg();
 
         const curKar = cur?.kariger || '';
         const curSaree = cur?.sareeName || linkedSareeName || '';
@@ -256,19 +285,23 @@
             <div class="dk-row"><label>Finished Stock (Live) :</label><input id="bc-fin" value="${liveFin} Pcs (Saree Finished Tab)" readonly style="background:#f9fafb;color:#15803d;"></div>
             <div class="dk-row"><label>Sticker Qty &amp; Size :</label>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                    <input type="number" id="bc-pqty" value="${liveFin > 0 ? liveFin : 10}" style="width:72px;" title="Total Stickers">
-                    <select id="bc-psize">
-                        <option value="tsc2up_pitch">TSC 2-Up (Lagatar - Bina Gap Skip)</option>
-                        <option value="tsc2up">TSC 2-Up Roll (104×25mm Page)</option>
-                        <option value="tsc1up">TSC 1-Up Roll (50×25mm)</option>
-                        <option value="a4">A4 Sticker Sheet</option>
+                    <input type="number" id="bc-pqty" value="${liveFin > 0 ? liveFin : 10}" style="width:68px;" title="Total Stickers">
+                    <select id="bc-psize" onchange="DukanERP.savePrintCfg()">
+                        <option value="tsc2up_pitch" ${cfg.mode === 'tsc2up_pitch' ? 'selected' : ''}>TSC 2-Up (Lagatar - Bina Gap Skip)</option>
+                        <option value="tsc2up" ${cfg.mode === 'tsc2up' ? 'selected' : ''}>TSC 2-Up Roll (104×25mm Page)</option>
+                        <option value="tsc1up" ${cfg.mode === 'tsc1up' ? 'selected' : ''}>TSC 1-Up Roll (50×25mm)</option>
+                        <option value="a4" ${cfg.mode === 'a4' ? 'selected' : ''}>A4 Sticker Sheet</option>
                     </select>
-                    <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;width:auto;" title="Do stickers ke beech ka gap (mm)">
+                    <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;width:auto;" title="Print ko thoda niche laane ke liye badhayein (+mm)">
+                        Top(mm):
+                        <input type="number" id="bc-top" value="${cfg.top}" step="0.5" min="-5" max="15" style="width:52px;" oninput="DukanERP.savePrintCfg()">
+                    </label>
+                    <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;width:auto;" title="Do sticker rows ke beech ka gap (mm)">
                         Gap(mm):
-                        <input type="number" id="bc-gap" value="2.5" step="0.5" min="0" max="10" style="width:52px;">
+                        <input type="number" id="bc-gap" value="${cfg.gap}" step="0.2" min="0" max="10" style="width:52px;" oninput="DukanERP.savePrintCfg()">
                     </label>
                     <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;width:auto;cursor:pointer;">
-                        <input type="checkbox" id="bc-textonly" onchange="DukanERP.updSticker()" style="width:auto;">
+                        <input type="checkbox" id="bc-textonly" ${cfg.textOnly ? 'checked' : ''} onchange="DukanERP.savePrintCfg(); DukanERP.updSticker();" style="width:auto;">
                         Bina Barcode (2-Line)
                     </label>
                 </div>
@@ -490,7 +523,7 @@
         render('bc-kar');
     };
 
-    function printStickerJob(sp, nm, cd, count, mode, textOnly = false, gapMm = 2.5) {
+    function printStickerJob(sp, nm, cd, count, mode, textOnly = false, gapMm = 2.8, topMm = 1.5) {
         const svg = D.barcodeSVG(cd, 26);
 
         const cellHTML = textOnly
@@ -507,6 +540,7 @@
 
         let bodyHTML = '';
         let pageCSS = '';
+        const topStyle = topMm >= 0 ? `padding-top: ${topMm}mm !important;` : `margin-top: ${topMm}mm !important;`;
 
         if (mode === 'tsc2up_pitch') {
             pageCSS = `
@@ -514,6 +548,7 @@
                 html, body {
                     margin: 0 !important;
                     padding: 0 !important;
+                    ${topStyle}
                     width: 102mm;
                     background: #fff;
                 }
@@ -552,6 +587,7 @@
                 html, body {
                     margin: 0 !important;
                     padding: 0 !important;
+                    ${topStyle}
                     width: 102mm;
                     background: #fff;
                 }
@@ -587,7 +623,7 @@
         } else if (mode === 'tsc1up') {
             pageCSS = `
                 @page { margin: 0; }
-                html, body { margin: 0 !important; padding: 0 !important; width: 50mm; background: #fff; }
+                html, body { margin: 0 !important; padding: 0 !important; ${topStyle} width: 50mm; background: #fff; }
                 .lbl {
                     width: 50mm;
                     height: 24mm;
@@ -698,14 +734,13 @@
     }
 
     D.printStickers = () => {
+        D.savePrintCfg();
         const count = Math.max(1, parseInt(document.getElementById('bc-pqty')?.value || 1, 10));
-        const mode = document.getElementById('bc-psize')?.value || 'tsc2up_pitch';
-        const textOnly = !!document.getElementById('bc-textonly')?.checked;
-        const gapMm = parseFloat(document.getElementById('bc-gap')?.value ?? '2.5') || 0;
+        const cfg = loadPrintCfg();
         const sp = (document.getElementById('bc-spec')?.value || '3.60 CM EMB. JHALAR').toUpperCase();
         const nm = (document.getElementById('bc-des')?.value || 'RASHMIKA').toUpperCase();
         const cd = (document.getElementById('bc-code')?.value || `${nm}-KT`).toUpperCase();
-        printStickerJob(sp, nm, cd, count, mode, textOnly, gapMm);
+        printStickerJob(sp, nm, cd, count, cfg.mode, cfg.textOnly, cfg.gap, cfg.top);
     };
 
     D.bcQuickPrint = (id) => {
@@ -715,8 +750,7 @@
         const qtyStr = prompt(`[${d.design}] ke kitne TSC 2-Up stickers print karne hain?`, String(bachi > 0 ? bachi : 10));
         if (!qtyStr) return;
         const count = Math.max(1, parseInt(qtyStr, 10) || 1);
-        const textOnly = !!document.getElementById('bc-textonly')?.checked;
-        const gapMm = parseFloat(document.getElementById('bc-gap')?.value ?? '2.5') || 2.5;
-        printStickerJob(d.specs || '3.60 CM EMB. JHALAR', d.design, d.code || `${d.design}-KT`, count, 'tsc2up_pitch', textOnly, gapMm);
+        const cfg = loadPrintCfg();
+        printStickerJob(d.specs || '3.60 CM EMB. JHALAR', d.design, d.code || `${d.design}-KT`, count, cfg.mode, cfg.textOnly, cfg.gap, cfg.top);
     };
 })();
