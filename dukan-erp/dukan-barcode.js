@@ -3,6 +3,7 @@
    - 2-Button Menu: [Design & Barcode] & [Barcode Register]
    - Clean Form (No Register Clutter)
    - Dedicated Barcode Register with Universal Search + Edit / Delete / TSC Print
+   - Fixed TSC 2-Up (50x25mm x 2) Thermal Alignment & Crisp Print Settings
    File: dukan-erp/dukan-barcode.js
 ============================================================================ */
 (() => {
@@ -251,16 +252,20 @@
             <div class="dk-row"><label>Saree (Finished) :</label><input id="bc-saree" value="${D.esc(curSaree)}" placeholder="Finished stage ka saree naam" autocomplete="off"></div>
             <div class="dk-row"><label>Design Name :</label><input id="bc-des" value="${D.esc(cur?.design || '')}" placeholder="Jaise: RASHMIKA" oninput="DukanERP.updSticker()" autocomplete="off"></div>
             <div class="dk-row"><label>Top Specs Line :</label><input id="bc-spec" value="${D.esc(cur?.specs || '3.60 CM EMB. JHALAR')}" oninput="DukanERP.updSticker()" autocomplete="off"></div>
-            <div class="dk-row"><label>Barcode Code :</label><input id="bc-code" value="${D.esc(cur?.code || '')}" placeholder="Jaise: RASHMIKA-KT" oninput="DukanERP.updSticker()" autocomplete="off"></div>
+            <div class="dk-row"><label>Barcode Code :</label><input id="bc-code" value="${D.esc(cur?.code || '')}" placeholder="Jaise: D.NO.6610" oninput="DukanERP.updSticker()" autocomplete="off"></div>
             <div class="dk-row"><label>Finished Stock (Live) :</label><input id="bc-fin" value="${liveFin} Pcs (Saree Finished Tab)" readonly style="background:#f9fafb;color:#15803d;"></div>
             <div class="dk-row"><label>Sticker Qty &amp; Size :</label>
-                <div style="display:flex; gap:8px;">
-                    <input type="number" id="bc-pqty" value="${liveFin > 0 ? liveFin : 10}" style="width:90px;">
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <input type="number" id="bc-pqty" value="${liveFin > 0 ? liveFin : 10}" style="width:80px;">
                     <select id="bc-psize">
                         <option value="tsc2up">TSC 2-Up Roll (50×25mm × 2)</option>
                         <option value="tsc1up">TSC 1-Up Roll (50×25mm)</option>
                         <option value="a4">A4 Sticker Sheet</option>
                     </select>
+                    <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;width:auto;cursor:pointer;">
+                        <input type="checkbox" id="bc-textonly" onchange="DukanERP.updSticker()" style="width:auto;">
+                        Bina Barcode (2-Line)
+                    </label>
                 </div>
             </div>
 
@@ -397,14 +402,22 @@
         const sp = (document.getElementById('bc-spec')?.value || '3.60 CM EMB. JHALAR').toUpperCase();
         const nm = (document.getElementById('bc-des')?.value || 'RASHMIKA').toUpperCase();
         const cd = (document.getElementById('bc-code')?.value || (nm ? `${nm}-KT` : 'RASHMIKA-KT')).toUpperCase();
+        const textOnly = !!document.getElementById('bc-textonly')?.checked;
         const box = document.getElementById('dk-sticker-prev');
         if (!box) return;
-        box.innerHTML = `
-            <div style="font-size:10.5px; font-weight:800; color:#000; line-height:1.15;">${D.esc(sp)}</div>
-            <div style="font-size:16px; font-weight:800; color:#000; line-height:1.15; margin:1px 0;">${D.esc(nm)}</div>
-            <div style="padding:0 10px;">${D.barcodeSVG(cd, 28)}</div>
-            <div style="font-size:11.5px; font-weight:800; color:#000; line-height:1.15;">${D.esc(cd)}</div>
-        `;
+        if (textOnly) {
+            box.innerHTML = `
+                <div style="font-size:11px; font-weight:800; color:#000; line-height:1.2; margin-bottom:6px;">${D.esc(sp)}</div>
+                <div style="font-size:15px; font-weight:900; color:#000; line-height:1.2; letter-spacing:0.6px;">${D.esc(cd || nm)}</div>
+            `;
+        } else {
+            box.innerHTML = `
+                <div style="font-size:10px; font-weight:800; color:#000; line-height:1.15;">${D.esc(sp)}</div>
+                <div style="font-size:15px; font-weight:800; color:#000; line-height:1.15; margin:1px 0;">${D.esc(nm)}</div>
+                <div style="padding:0 10px;">${D.barcodeSVG(cd, 26)}</div>
+                <div style="font-size:11px; font-weight:800; color:#000; line-height:1.15;">${D.esc(cd)}</div>
+            `;
+        }
     };
 
     D.askBarcodeSave = () => {
@@ -472,29 +485,108 @@
         render('bc-kar');
     };
 
-    function printStickerJob(sp, nm, cd, count, mode) {
+    /* ========================================================================
+       FIXED TSC PRINT ENGINE:
+       - Exact 104mm x 25mm 2-Up alignment (1mm margin + 50mm + 2mm gap + 50mm + 1mm)
+       - 24.4mm safe row height + no trailing blank page
+       - Crisp thermal contrast & anti-blur SVG rendering
+    ======================================================================== */
+    function printStickerJob(sp, nm, cd, count, mode, textOnly = false) {
         const svg = D.barcodeSVG(cd, 26);
-        const cellHTML = `
-            <div class="lbl">
-                <div class="sp">${D.esc(sp)}</div>
-                <div class="nm">${D.esc(nm)}</div>
-                <div class="bc">${svg}</div>
-                <div class="cd">${D.esc(cd)}</div>
-            </div>`;
+
+        const cellHTML = textOnly
+            ? `<div class="lbl lbl-2line">
+                   <div class="sp sp-2line">${D.esc(sp)}</div>
+                   <div class="cd cd-2line">${D.esc(cd || nm)}</div>
+               </div>`
+            : `<div class="lbl">
+                   <div class="sp">${D.esc(sp)}</div>
+                   <div class="nm">${D.esc(nm)}</div>
+                   <div class="bc">${svg}</div>
+                   <div class="cd">${D.esc(cd)}</div>
+               </div>`;
 
         let bodyHTML = '';
         let pageCSS = '';
 
         if (mode === 'tsc2up') {
-            pageCSS = `@page{size:104mm 25mm;margin:0} body{margin:0;padding:0} .row2{width:104mm;height:25mm;display:flex;justify-content:space-between;align-items:center;page-break-after:always;overflow:hidden} .lbl{width:50mm;height:24mm;padding:1mm 2mm;box-sizing:border-box;text-align:center;display:flex;flex-direction:column;justify-content:center;align-items:center}`;
+            pageCSS = `
+                @page { size: 104mm 25mm; margin: 0; }
+                html, body {
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    width: 104mm;
+                    background: #fff;
+                }
+                .row2 {
+                    width: 104mm;
+                    height: 24.4mm;
+                    max-height: 24.4mm;
+                    padding: 0 1mm;
+                    box-sizing: border-box;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    gap: 2mm;
+                    overflow: hidden;
+                }
+                .row2:not(:last-child) {
+                    page-break-after: always;
+                    break-after: page;
+                }
+                .lbl {
+                    width: 50mm;
+                    height: 23.6mm;
+                    padding: 0.8mm 1.5mm;
+                    box-sizing: border-box;
+                    text-align: center;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: center;
+                    align-items: center;
+                    overflow: hidden;
+                }`;
             for (let i = 0; i < count; i += 2) {
                 bodyHTML += `<div class="row2">${cellHTML}${i + 1 < count ? cellHTML : '<div class="lbl"></div>'}</div>`;
             }
         } else if (mode === 'tsc1up') {
-            pageCSS = `@page{size:50mm 25mm;margin:0} body{margin:0;padding:0} .lbl{width:50mm;height:25mm;padding:1mm 2mm;box-sizing:border-box;text-align:center;display:flex;flex-direction:column;justify-content:center;align-items:center;page-break-after:always;overflow:hidden}`;
+            pageCSS = `
+                @page { size: 50mm 25mm; margin: 0; }
+                html, body { margin: 0 !important; padding: 0 !important; width: 50mm; background: #fff; }
+                .lbl {
+                    width: 50mm;
+                    height: 24.2mm;
+                    padding: 0.8mm 1.5mm;
+                    box-sizing: border-box;
+                    text-align: center;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: center;
+                    align-items: center;
+                    overflow: hidden;
+                }
+                .lbl:not(:last-child) { page-break-after: always; break-after: page; }`;
             bodyHTML = Array(count).fill(cellHTML).join('');
         } else {
-            pageCSS = `@page{size:A4;margin:8mm} body{margin:0;display:flex;flex-wrap:wrap;gap:4mm} .lbl{width:50mm;height:25mm;border:1px dashed #ccc;padding:1mm 2mm;box-sizing:border-box;text-align:center;display:flex;flex-direction:column;justify-content:center;align-items:center;page-break-inside:avoid}`;
+            pageCSS = `
+                @page { size: A4; margin: 8mm; }
+                html, body { margin: 0; padding: 0; background: #fff; }
+                body { display: flex; flex-wrap: wrap; gap: 3mm; align-content: flex-start; }
+                .lbl {
+                    width: 50mm;
+                    height: 25mm;
+                    border: 1px dashed #ccc;
+                    padding: 1mm 1.5mm;
+                    box-sizing: border-box;
+                    text-align: center;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: center;
+                    align-items: center;
+                    page-break-inside: avoid;
+                    break-inside: avoid;
+                    overflow: hidden;
+                }`;
             bodyHTML = Array(count).fill(cellHTML).join('');
         }
 
@@ -503,26 +595,79 @@
             D.toast('⚠️ Print popup block ho gaya! Browser me popup allow karein.');
             return;
         }
-        w.document.write(`<html><head><style>
-            ${pageCSS}
-            *{font-family:Arial,Helvetica,sans-serif;color:#000}
-            .sp{font-size:8.5pt;font-weight:700;line-height:1.1;white-space:nowrap;overflow:hidden;max-width:46mm}
-            .nm{font-size:12.5pt;font-weight:800;line-height:1.1;margin:0.5mm 0}
-            .bc{width:38mm;height:7mm;display:flex;align-items:center}
-            .bc svg{width:100%;height:100%}
-            .cd{font-size:9.5pt;font-weight:700;line-height:1.1;margin-top:0.5mm}
-        </style></head><body>${bodyHTML}</body></html>`);
+        w.document.open();
+        w.document.write(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>TSC Sticker Print</title>
+<style>
+    * {
+        font-family: Arial, Helvetica, sans-serif;
+        color: #000 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    ${pageCSS}
+    .sp {
+        font-size: 8.2pt;
+        font-weight: 800;
+        line-height: 1.1;
+        white-space: nowrap;
+        max-width: 47mm;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        letter-spacing: -0.2px;
+    }
+    .nm {
+        font-size: 11.5pt;
+        font-weight: 900;
+        line-height: 1.1;
+        margin: 0.6mm 0;
+        max-width: 47mm;
+        white-space: nowrap;
+        overflow: hidden;
+    }
+    .bc {
+        width: 39mm;
+        height: 7mm;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .bc svg {
+        width: 100%;
+        height: 100%;
+        shape-rendering: crispEdges;
+    }
+    .cd {
+        font-size: 8.8pt;
+        font-weight: 800;
+        line-height: 1.1;
+        margin-top: 0.5mm;
+        letter-spacing: 0.3px;
+    }
+    /* Photo-style 2-line layout (jab Bina Barcode tick ho) */
+    .lbl-2line { justify-content: center; gap: 2.2mm; }
+    .sp-2line { font-size: 8.8pt; font-weight: 800; letter-spacing: -0.25px; max-width: 47.5mm; }
+    .cd-2line { font-size: 11.5pt; font-weight: 900; letter-spacing: 0.7px; margin-top: 0; }
+</style>
+</head>
+<body>${bodyHTML}</body>
+</html>`);
         w.document.close();
-        setTimeout(() => w.print(), 150);
+        w.focus();
+        setTimeout(() => w.print(), 250);
     }
 
     D.printStickers = () => {
         const count = Math.max(1, parseInt(document.getElementById('bc-pqty')?.value || 1, 10));
         const mode = document.getElementById('bc-psize')?.value || 'tsc2up';
+        const textOnly = !!document.getElementById('bc-textonly')?.checked;
         const sp = (document.getElementById('bc-spec')?.value || '3.60 CM EMB. JHALAR').toUpperCase();
         const nm = (document.getElementById('bc-des')?.value || 'RASHMIKA').toUpperCase();
         const cd = (document.getElementById('bc-code')?.value || `${nm}-KT`).toUpperCase();
-        printStickerJob(sp, nm, cd, count, mode);
+        printStickerJob(sp, nm, cd, count, mode, textOnly);
     };
 
     D.bcQuickPrint = (id) => {
@@ -532,6 +677,7 @@
         const qtyStr = prompt(`[${d.design}] ke kitne TSC 2-Up stickers print karne hain?`, String(bachi > 0 ? bachi : 10));
         if (!qtyStr) return;
         const count = Math.max(1, parseInt(qtyStr, 10) || 1);
-        printStickerJob(d.specs || '3.60 CM EMB. JHALAR', d.design, d.code || `${d.design}-KT`, count, 'tsc2up');
+        const textOnly = !!document.getElementById('bc-textonly')?.checked;
+        printStickerJob(d.specs || '3.60 CM EMB. JHALAR', d.design, d.code || `${d.design}-KT`, count, 'tsc2up', textOnly);
     };
 })();
