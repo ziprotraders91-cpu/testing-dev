@@ -20,6 +20,9 @@
     let regSearch = '';
     let regPage = 1;
     let regNav = 0;
+    let isSavingChallan = false;
+    let lastSaveTime = 0;
+    let isDeletingChallan = false;
 
     function bindEscHandler() {
         D.onEsc = () => {
@@ -37,7 +40,7 @@
         };
     }
 
-    D.openChallan = (chId = '') => {
+    D.openChallan = (chId = '', opts = {}) => {
         D.screen = 'challan';
         D.onCustomFieldEnter = null;
         bindEscHandler();
@@ -46,6 +49,7 @@
             const rec = D.get('dukan_challans').find((c) => c.id === chId);
             if (rec) {
                 viewMode = 'form';
+                fromRegister = !!opts.fromReg;
                 editChallanId = rec.id;
                 selFirmId = rec.firmId || '';
                 selPartyId = rec.partyId || '';
@@ -73,13 +77,11 @@
     };
 
     D.loadChallan = (chId) => {
-        fromRegister = false;
-        D.openChallan(chId);
+        D.openChallan(chId, { fromReg: false });
     };
 
     D.chEditFromReg = (chId) => {
-        fromRegister = true;
-        D.openChallan(chId);
+        D.openChallan(chId, { fromReg: true });
     };
 
     // Manual Mode (Option 1): Order se auto-add nahi hoga, bagal me Order ke Baki items dikhenge
@@ -91,9 +93,9 @@
         fromRegister = false;
         editChallanId = '';
         oldOrderId = '';
-        selPartyId = partyId || '';
-        linkedOrderId = orderId || '';
         const ord = D.get('dukan_orders').find((o) => o.id === orderId);
+        selPartyId = partyId || ord?.partyId || '';
+        linkedOrderId = orderId || '';
         selFirmId = ord?.firmId || '';
         chBatch = [];
         render(selFirmId ? 'ch-no' : 'ch-firm', null);
@@ -135,6 +137,18 @@
         render();
     };
 
+    function getEffectiveFinishedStock(designName) {
+        const norm = String(designName || '').trim().toUpperCase();
+        const currentAvail = D.getDesignFinishedStock(norm);
+        if (!editChallanId) return currentAvail;
+        const prevRec = D.get('dukan_challans').find((c) => c.id === editChallanId);
+        if (!prevRec) return currentAvail;
+        const prevQty = (prevRec.items || [])
+            .filter((it) => String(it.name || '').trim().toUpperCase() === norm)
+            .reduce((sum, it) => sum + D.num(it.qty), 0);
+        return currentAvail + prevQty;
+    }
+
     function getOrderPendingItems(ord) {
         if (!ord) return [];
         const prog = D.getOrderProgress(ord);
@@ -168,13 +182,17 @@
         D.renderSide(`Order #${ord.no} — Baki Items`, `Marka: ${ord.marka || '-'}`, list, false);
     }
 
-    function renderChBatchTable() {
-        const tb = document.getElementById('ch-items-tb');
+    function updateBatchTotals() {
         const totEl = document.getElementById('ch-batch-tot');
-        if (!tb) return;
         const totPcs = chBatch.reduce((a, b) => a + D.num(b.qty), 0);
         const totAmt = chBatch.reduce((a, b) => a + D.num(b.qty) * D.num(b.rate), 0);
         if (totEl) totEl.textContent = `Total: ${chBatch.length} Designs · ${totPcs} Pcs · ₹ ${totAmt.toLocaleString('en-IN')}`;
+    }
+
+    function renderChBatchTable() {
+        const tb = document.getElementById('ch-items-tb');
+        if (!tb) return;
+        updateBatchTotals();
 
         tb.innerHTML = chBatch.length ? chBatch.map((it, i) => {
             const finAvail = D.getDesignFinishedStock(it.name);
@@ -182,24 +200,55 @@
                 <td>${i + 1}</td>
                 <td><strong>${D.esc(it.name)}</strong></td>
                 <td style="color:#15803d;font-weight:700;">${finAvail} Pc</td>
-                <td style="width:72px;"><input type="number" value="${D.num(it.qty)}" min="1" onchange="DukanERP.chUpdRow(${i},'qty',this.value)"></td>
-                <td style="width:78px;"><input type="number" value="${D.num(it.rate)}" min="0" onchange="DukanERP.chUpdRow(${i},'rate',this.value)"></td>
-                <td>₹ ${(D.num(it.qty) * D.num(it.rate)).toLocaleString('en-IN')}</td>
+                <td style="width:72px;"><input type="number" value="${D.num(it.qty)}" min="1" oninput="DukanERP.chLiveRow(${i},'qty',this.value)" onchange="DukanERP.chUpdRow(${i},'qty',this.value)"></td>
+                <td style="width:78px;"><input type="number" value="${D.num(it.rate)}" min="0" oninput="DukanERP.chLiveRow(${i},'rate',this.value)" onchange="DukanERP.chUpdRow(${i},'rate',this.value)"></td>
+                <td id="ch-row-amt-${i}">₹ ${(D.num(it.qty) * D.num(it.rate)).toLocaleString('en-IN')}</td>
                 <td style="text-align:center;"><button type="button" class="dk-btn" style="padding:2px 6px;color:#dc2626;" onclick="DukanERP.chDelRow(${i})">✕</button></td>
             </tr>`;
         }).join('')
         : `<tr><td colspan="7" style="text-align:center;color:#9ca3af;padding:12px;">Manual Mode: Item chunein → Qty → Rate → +Add (Enter)</td></tr>`;
     }
 
+    D.chLiveRow = (i, field, val) => {
+        if (!chBatch[i]) return;
+        const n = D.num(val);
+        if (field === 'qty') {
+            const normName = String(chBatch[i].name || '').trim().toUpperCase();
+            const otherQty = chBatch
+                .filter((b, idx) => idx !== i && String(b.name || '').trim().toUpperCase() === normName)
+                .reduce((a, b) => a + D.num(b.qty), 0);
+            const finAvail = getEffectiveFinishedStock(normName);
+            if (n <= 0 || n + otherQty > finAvail) return;
+            chBatch[i].qty = n;
+        } else {
+            chBatch[i][field] = Math.max(0, n);
+        }
+        const amtEl = document.getElementById(`ch-row-amt-${i}`);
+        if (amtEl) amtEl.textContent = `₹ ${(D.num(chBatch[i].qty) * D.num(chBatch[i].rate)).toLocaleString('en-IN')}`;
+        updateBatchTotals();
+    };
+
     D.chUpdRow = (i, field, val) => {
         if (!chBatch[i]) return;
         const n = D.num(val);
-        if (field === 'qty' && n <= 0) {
-            D.toast('⚠️ Qty 0 se zyada rakhein (ya ✕ se hatayein)');
-            renderChBatchTable();
-            return;
+        if (field === 'qty') {
+            if (n <= 0) {
+                D.toast('⚠️ Qty 0 se zyada rakhein');
+                renderChBatchTable();
+                return;
+            }
+            const normName = String(chBatch[i].name || '').trim().toUpperCase();
+            const otherQty = chBatch
+                .filter((b, idx) => idx !== i && String(b.name || '').trim().toUpperCase() === normName)
+                .reduce((a, b) => a + D.num(b.qty), 0);
+            const finAvail = getEffectiveFinishedStock(normName);
+            if (n + otherQty > finAvail) {
+                D.toast(`⚠️ Sirf ${finAvail} Pc available!`);
+                renderChBatchTable();
+                return;
+            }
         }
-        chBatch[i][field] = n;
+        chBatch[i][field] = field === 'rate' ? Math.max(0, n) : n;
         renderChBatchTable();
     };
 
@@ -209,10 +258,27 @@
         const rtEl = document.getElementById('ch-cur-rate');
         const name = (nmEl?.value || '').trim().toUpperCase();
         const qty = D.num(qtEl?.value);
+        const rate = Math.max(0, D.num(rtEl?.value));
         if (!name) { D.toast('⚠️ Item / Design chunein!'); return D.focusField('ch-cur-name'); }
         if (qty <= 0) { D.toast('⚠️ Challan Qty (Pcs) bharein!'); return D.focusField('ch-cur-qty'); }
 
-        chBatch.push({ name, qty, rate: D.num(rtEl?.value) });
+        const finAvail = getEffectiveFinishedStock(name);
+        const alreadyInBatch = chBatch
+            .filter((b) => String(b.name || '').trim().toUpperCase() === name)
+            .reduce((a, b) => a + D.num(b.qty), 0);
+        if (qty + alreadyInBatch > finAvail) {
+            D.toast(`⚠️ Sirf ${finAvail} Pc available (batch me ${alreadyInBatch})!`);
+            return D.focusField('ch-cur-qty');
+        }
+
+        const existing = chBatch.findIndex((b) => String(b.name || '').trim().toUpperCase() === name);
+        if (existing >= 0) {
+            chBatch[existing].qty = D.num(chBatch[existing].qty) + qty;
+            if (rate > 0) chBatch[existing].rate = rate;
+        } else {
+            chBatch.push({ name, qty, rate });
+        }
+
         nmEl.value = '';
         qtEl.value = '';
         rtEl.value = '';
@@ -300,8 +366,12 @@
 
         const drawRows = () => {
             const flt = getFiltered();
-            const pg = D.paginate(flt, regPage);
-            if (regNav >= pg.rows.length) regNav = 0;
+            let pg = D.paginate(flt, regPage);
+            if (pg.totalPages && regPage > pg.totalPages) {
+                regPage = pg.totalPages;
+                pg = D.paginate(flt, regPage);
+            }
+            if (regNav >= pg.rows.length) regNav = Math.max(0, pg.rows.length - 1);
 
             const tb = document.getElementById('ch-reg-tb');
             if (tb) {
@@ -309,16 +379,17 @@
                     const ord = c.orderId ? orders.find((o) => o.id === c.orderId) : null;
                     const totPcs = (c.items || []).reduce((a, b) => a + D.num(b.qty), 0);
                     const itemsSummary = (c.items || []).map((it) => `${D.esc(it.name)}:${it.qty}`).join(', ');
+                    const escId = D.esc(c.id);
                     return `
-                        <tr class="dk-nav-row ${i === regNav ? 'active' : ''}" onclick="DukanERP.chEditFromReg('${c.id}')">
+                        <tr class="dk-nav-row ${i === regNav ? 'active' : ''}" onclick="DukanERP.chEditFromReg('${escId}')">
                             <td><strong>#${D.esc(c.no)}</strong><br><small>${D.fmtDate(c.date)}</small></td>
                             <td><strong>${D.esc(c.partyName)}</strong><br><small>Marka: ${D.esc(c.marka || '-')}</small></td>
                             <td><strong>${totPcs} Pc</strong><br><small>${itemsSummary}</small></td>
                             <td>${ord ? `#${D.esc(ord.no)}` : '-'}</td>
                             <td style="white-space:nowrap;">
-                                <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.chEditFromReg('${c.id}')">✏️ Edit</button>
-                                <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.printSavedChallan('${c.id}')">🖨️ A5</button>
-                                <button type="button" class="dk-btn-del" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.deleteChallan('${c.id}')">🗑️ Del</button>
+                                <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.chEditFromReg('${escId}')">✏️ Edit</button>
+                                <button type="button" class="dk-btn" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.printSavedChallan('${escId}')">🖨️ A5</button>
+                                <button type="button" class="dk-btn-del" style="padding:3px 7px;font-size:11px;" onclick="event.stopPropagation(); DukanERP.deleteChallan('${escId}')">🗑️ Del</button>
                             </td>
                         </tr>`;
                 }).join('') : `<tr><td colspan="5" style="text-align:center;color:#9ca3af;">Koi saved challan nahi mila</td></tr>`;
@@ -353,6 +424,13 @@
                 <tbody id="ch-reg-tb"></tbody>
             </table>
             <div id="ch-reg-pg"></div>
+            <div class="dk-accept" id="dk-accept-box">
+                <strong id="dk-accept-msg">Delete Challan?</strong>
+                <div style="display:flex; gap:8px;">
+                    <button type="button" class="dk-btn-gold" id="dk-accept-yes">Yes (Y)</button>
+                    <button type="button" class="dk-btn" id="dk-accept-no" onclick="document.getElementById('dk-accept-box').style.display='none';">No (N)</button>
+                </div>
+            </div>
         `;
 
         D.renderShell(headL, left, '[↑ ↓] Select · [Enter / Click] Edit & Delete kholein · [Esc] Menu');
@@ -384,31 +462,52 @@
         });
     }
 
-    function renderFormScreen(focusId = 'ch-firm', rec = null) {
+    function readCurrentDraft() {
+        return {
+            firmName: document.getElementById('ch-firm')?.value || '',
+            firmMeta: document.getElementById('ch-firm-meta')?.value || '',
+            partyName: document.getElementById('ch-party')?.value || '',
+            ordText: document.getElementById('ch-ord')?.value || '',
+            address: document.getElementById('ch-addr')?.value || '',
+            mob: document.getElementById('ch-mob')?.value || '',
+            gst: document.getElementById('ch-gst')?.value || '',
+            no: document.getElementById('ch-no')?.value || '',
+            date: document.getElementById('ch-date')?.value || D.today(),
+            marka: document.getElementById('ch-marka')?.value || ''
+        };
+    }
+
+    function renderFormScreen(focusId = 'ch-firm', rec = null, draft = null) {
         const firms = D.get('dukan_firms');
         const parties = D.get('dukan_parties');
         const orders = D.get('dukan_orders');
         const challans = D.get('dukan_challans');
         const designOpts = D.getSellableDesignOptions();
 
+        const isEdit = !!editChallanId;
+        const editRec = isEdit ? (rec || challans.find((c) => c.id === editChallanId) || null) : null;
+        const getActiveOrd = () => (linkedOrderId ? orders.find((o) => o.id === linkedOrderId) : null);
+
         const fObj = selFirmId ? (firms.find((x) => x.id === selFirmId) || {}) : {};
         const p = selPartyId ? (parties.find((x) => x.id === selPartyId) || {}) : {};
-        const ordObj = linkedOrderId ? orders.find((o) => o.id === linkedOrderId) : null;
+        const ordObj = getActiveOrd();
 
-        const firmVal = rec ? (rec.firmName || fObj.name || '') : (fObj.name || '');
-        const firmMeta = fObj.name
-            ? `${fObj.address || ''} · Mob: ${fObj.mob || '-'} · GST: ${fObj.gst || '-'}`
-            : '';
-        const partyVal = rec ? (rec.partyName || p.name || '') : (p.name || '');
-        const addrVal = rec ? (rec.address || '') : [p.address, p.city].filter(Boolean).join(', ');
-        const mobVal = rec ? (rec.mob || '') : (p.mob || '');
-        const gstVal = rec ? (rec.gst || '') : (p.gst || '');
-        const chNoVal = rec ? (rec.no || '') : '';
-        const chDateVal = rec ? (rec.date || D.today()) : D.today();
-        const markaVal = rec ? (rec.marka || '') : (ordObj ? (ordObj.marka || p.marka || '') : (p.marka || ''));
+        const firmVal = draft ? draft.firmName : (rec ? (rec.firmName || fObj.name || '') : (fObj.name || ''));
+        const firmMeta = draft
+            ? (fObj.name ? `${fObj.address || ''} · Mob: ${fObj.mob || '-'} · GST: ${fObj.gst || '-'}` : draft.firmMeta)
+            : (fObj.name ? `${fObj.address || ''} · Mob: ${fObj.mob || '-'} · GST: ${fObj.gst || '-'}` : '');
+
+        const partyVal = draft ? draft.partyName : (rec ? (rec.partyName || p.name || '') : (p.name || ordObj?.partyName || ''));
+        const addrVal = draft ? draft.address : (rec ? (rec.address || '') : [p.address, p.city].filter(Boolean).join(', '));
+        const mobVal = draft ? draft.mob : (rec ? (rec.mob || '') : (p.mob || ''));
+        const gstVal = draft ? draft.gst : (rec ? (rec.gst || '') : (p.gst || ''));
+        const chNoVal = draft ? draft.no : (rec ? (rec.no || '') : '');
+        const chDateVal = draft ? draft.date : (rec ? (rec.date || D.today()) : D.today());
+        const markaVal = draft ? draft.marka : (rec ? (rec.marka || '') : (ordObj ? (ordObj.marka || p.marka || '') : (p.marka || '')));
+        const ordTextVal = draft ? draft.ordText : (ordObj ? `#${ordObj.no}` : '');
 
         const headL = `
-            <h2>Challan &amp; Packing Slip (${rec ? `Edit #${D.esc(rec.no)}` : 'Manual Mode'})</h2>
+            <h2>Challan &amp; Packing Slip (${isEdit ? `Edit #${D.esc(editRec?.no || chNoVal)}` : 'Manual Mode'})</h2>
             <button type="button" class="dk-tab" onclick="DukanERP.chOpenChoice(1)">📋 Challan Register (${challans.length})</button>
             <button type="button" class="dk-btn" onclick="DukanERP.chBackToChoice()">← Menu</button>
         `;
@@ -418,7 +517,7 @@
             <div class="dk-row"><label>Firm Info :</label><input id="ch-firm-meta" value="${D.esc(firmMeta)}" placeholder="Firm select karne par khud bharega" readonly style="background:#f9fafb;"></div>
             <div class="dk-sec">Party &amp; Order Details</div>
             <div class="dk-row"><label>Party Name :</label><input id="ch-party" value="${D.esc(partyVal)}" placeholder="Type karein ya Side List chunein..." autocomplete="off"></div>
-            <div class="dk-row"><label>Order # (Baki List) :</label><input id="ch-ord" value="${D.esc(ordObj ? `#${ordObj.no}` : '')}" placeholder="Side List se Pending Order chunein..." autocomplete="off"></div>
+            <div class="dk-row"><label>Order # (Baki List) :</label><input id="ch-ord" value="${D.esc(ordTextVal)}" placeholder="Side List se Pending Order chunein..." autocomplete="off"></div>
             <div class="dk-row"><label>Address / City :</label><input id="ch-addr" value="${D.esc(addrVal)}"></div>
             <div class="dk-row"><label>Mobile / GST :</label><div style="display:flex;gap:8px;"><input id="ch-mob" value="${D.esc(mobVal)}" placeholder="Mobile"><input id="ch-gst" value="${D.esc(gstVal)}" placeholder="GSTIN"></div></div>
             <div class="dk-row"><label>Challan No / Date :</label><div style="display:flex;gap:8px;"><input id="ch-no" value="${D.esc(chNoVal)}" placeholder="Manual Challan No." autocomplete="off"><input id="ch-date" type="date" value="${D.esc(chDateVal)}"><input id="ch-marka" value="${D.esc(markaVal)}" placeholder="Marka"></div></div>
@@ -444,17 +543,17 @@
             <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; flex-wrap:wrap; gap:8px;">
                 <strong id="ch-batch-tot" style="color:#92400e;font-size:12.5px;">Total: 0 Designs · 0 Pcs</strong>
                 <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                    ${rec ? `<button type="button" class="dk-btn-del" onclick="DukanERP.deleteChallan('${rec.id}')">🗑️ Delete Challan</button>` : ''}
+                    ${isEdit ? `<button type="button" class="dk-btn-del" onclick="DukanERP.deleteChallan('${D.esc(editChallanId)}')">🗑️ Delete Challan</button>` : ''}
                     <button type="button" class="dk-btn" onclick="DukanERP.printChallanAndSlip()">🖨️ Print A5 Challan &amp; Slip</button>
-                    <button type="button" class="dk-btn-gold" onclick="DukanERP.askChallanSave()">💾 ${rec ? 'Update' : 'Save'} [Ctrl+Enter]</button>
+                    <button type="button" class="dk-btn-gold" onclick="DukanERP.askChallanSave()">💾 ${isEdit ? 'Update' : 'Save'} [Ctrl+Enter]</button>
                 </div>
             </div>
 
             <div class="dk-accept" id="dk-accept-box">
-                <strong>${rec ? 'Update Challan (Purana Stock Restore hoke Naya Minus hoga)?' : 'Save Challan &amp; Minus Finished Stock?'}</strong>
+                <strong id="dk-accept-msg">${isEdit ? 'Update Challan (Purana Stock Restore hoke Naya Minus hoga)?' : 'Save Challan &amp; Minus Finished Stock?'}</strong>
                 <div style="display:flex; gap:8px;">
-                    <button type="button" class="dk-btn-gold" id="dk-accept-yes" onclick="DukanERP.saveChallan()">Yes (Y)</button>
-                    <button type="button" class="dk-btn" onclick="DukanERP.printChallanAndSlip()">🖨️ Print A5</button>
+                    <button type="button" class="dk-btn-gold" id="dk-accept-yes">Yes (Y)</button>
+                    <button type="button" class="dk-btn" id="dk-accept-print" onclick="DukanERP.printChallanAndSlip()">🖨️ Print A5</button>
                     <button type="button" class="dk-btn" id="dk-accept-no" onclick="document.getElementById('dk-accept-box').style.display='none'; DukanERP.focusField('ch-cur-name');">No (N)</button>
                 </div>
             </div>
@@ -480,33 +579,51 @@
                 'ch-party': {
                     title: `List of Parties (${parties.length})`,
                     getItems: (q) => parties.filter((x) => !q || `${x.name} ${x.city} ${x.marka}`.toLowerCase().includes(q.toLowerCase()))
-                        .slice(0, 60).map((x) => ({ id: x.id, label: x.name, meta: `${x.city || ''} · ${x.marka || ''}` })),
+                        .slice(0, 60).map((x) => ({ id: x.id, label: x.name, meta: `${x.city || ''} · ${x.marka || ''}`, party: x })),
                     onPick: (it) => {
+                        const cur = readCurrentDraft();
+                        const np = it.party || {};
                         selPartyId = it.id;
                         linkedOrderId = '';
                         if (!editChallanId) chBatch = [];
-                        render('ch-ord', rec);
+                        renderFormScreen('ch-ord', null, {
+                            ...cur,
+                            partyName: np.name || it.label || '',
+                            ordText: '',
+                            address: [np.address, np.city].filter(Boolean).join(', '),
+                            mob: np.mob || '',
+                            gst: np.gst || '',
+                            marka: np.marka || cur.marka || ''
+                        });
                     }
                 },
                 'ch-ord': {
-                    title: `${p.name || 'Party'} — Pending Orders`,
+                    title: `${p.name || partyVal || 'Party'} — Pending Orders`,
                     noAutoHighlight: true,
-                    getItems: (q) => orders
-                        .filter((o) => (!selPartyId || o.partyId === selPartyId || o.partyName === partyVal) && (o.status !== 'Complete' || o.id === linkedOrderId) && (!q || `${o.no} ${o.marka}`.toLowerCase().includes(q.toLowerCase())))
-                        .map((o) => {
-                            const prog = D.getOrderProgress(o);
-                            const bakiTxt = prog.items.filter((x) => x.baki > 0).map((x) => `${x.name}:${x.baki}`).join(', ');
-                            return { id: o.id, pid: o.partyId, label: `Order #${o.no}`, meta: `Baki: ${bakiTxt || '0'}`, ord: o };
-                        }),
+                    getItems: (q) => {
+                        const pTxt = (document.getElementById('ch-party')?.value || partyVal || '').trim().toUpperCase();
+                        return orders
+                            .filter((o) => {
+                                const partyMatch = (!selPartyId && !pTxt)
+                                    || (selPartyId && o.partyId === selPartyId)
+                                    || (pTxt && String(o.partyName || '').trim().toUpperCase() === pTxt);
+                                const statusMatch = o.status !== 'Complete' || o.id === linkedOrderId;
+                                const qMatch = !q || `${o.no} ${o.marka}`.toLowerCase().includes(q.toLowerCase());
+                                return partyMatch && statusMatch && qMatch;
+                            })
+                            .map((o) => {
+                                const prog = D.getOrderProgress(o);
+                                const bakiTxt = prog.items.filter((x) => x.baki > 0).map((x) => `${x.name}:${x.baki}`).join(', ');
+                                return { id: o.id, pid: o.partyId, label: `Order #${o.no}`, meta: `Baki: ${bakiTxt || '0'}`, ord: o };
+                            });
+                    },
                     onPick: (it) => {
                         if (editChallanId) {
+                            const cur = readCurrentDraft();
                             linkedOrderId = it.id;
-                            document.getElementById('ch-ord').value = `#${it.ord.no}`;
-                            if (!document.getElementById('ch-marka').value.trim()) {
-                                document.getElementById('ch-marka').value = it.ord.marka || '';
-                            }
-                            showOrderPendingSide(it.ord);
-                            D.focusField('ch-no');
+                            cur.ordText = `#${it.ord.no}`;
+                            if (!cur.marka.trim()) cur.marka = it.ord.marka || '';
+                            renderFormScreen('ch-no', null, cur);
                         } else {
                             D.loadOrderInChallan(it.pid, it.id);
                         }
@@ -519,8 +636,9 @@
                     getItems: (q) => {
                         const ql = q.toLowerCase();
                         const items = [];
-                        if (ordObj) {
-                            getOrderPendingItems(ordObj)
+                        const activeOrd = getActiveOrd();
+                        if (activeOrd) {
+                            getOrderPendingItems(activeOrd)
                                 .filter((x) => !ql || x.name.toLowerCase().includes(ql))
                                 .forEach((x) => {
                                     items.push({
@@ -579,125 +697,204 @@
     D.askChallanSave = () => {
         const partyTxt = (document.getElementById('ch-party')?.value || '').trim();
         const chNo = (document.getElementById('ch-no')?.value || '').trim();
-        if (!partyTxt) { D.toast('⚠️ Pehle Party chunein!'); return D.focusField('ch-party'); }
-        if (!chNo) { D.toast('⚠️ Manual Challan No. bharein!'); return D.focusField('ch-no'); }
-        if (!chBatch.length) { D.toast('⚠️ Kam se kam 1 item Batch me +Add karein!'); return D.focusField('ch-cur-name'); }
+        if (!partyTxt) { D.toast('⚠️ Party chunein!'); return D.focusField('ch-party'); }
+        if (!chNo) { D.toast('⚠️ Challan No. bharein!'); return D.focusField('ch-no'); }
+        if (!chBatch.length) { D.toast('⚠️ 1 item add karein!'); return D.focusField('ch-cur-name'); }
+        if (chBatch.some((r) => D.num(r.qty) <= 0)) {
+            D.toast('⚠️ Har item ki Qty 0 se zyada rakhein!');
+            return;
+        }
+        if (isSavingChallan) { D.toast('⏳ Save chal raha hai...'); return; }
+
+        const msgEl = document.getElementById('dk-accept-msg');
+        if (msgEl) {
+            msgEl.textContent = editChallanId
+                ? 'Update Challan (Purana Stock Restore hoke Naya Minus hoga)?'
+                : 'Save Challan & Minus Finished Stock?';
+        }
+        const prBtn = document.getElementById('dk-accept-print');
+        if (prBtn) prBtn.style.display = '';
+
         D.askAccept(() => D.saveChallan());
     };
 
     D.saveChallan = () => {
+        // Guard 1: Already saving
+        if (isSavingChallan) {
+            D.toast('⏳ Save chal raha hai...');
+            return;
+        }
+        // Guard 2: 1 second debounce
+        const now = Date.now();
+        if (now - lastSaveTime < 1000) {
+            D.toast('⏳ 1 second baad try karein');
+            return;
+        }
+        // Guard 3: Validation
         const partyTxt = (document.getElementById('ch-party')?.value || '').trim().toUpperCase();
         const chNo = (document.getElementById('ch-no')?.value || '').trim();
-        if (!partyTxt || !chNo || !chBatch.length) return;
-
-        const parties = D.get('dukan_parties');
-        const p = parties.find((x) => x.id === selPartyId || String(x.name || '').toUpperCase() === partyTxt) || {};
-        const challans = D.get('dukan_challans');
-        const prevRec = editChallanId ? challans.find((c) => c.id === editChallanId) : null;
-        const chId = editChallanId || `ch_${Date.now()}`;
-
-        if (editChallanId) {
-            D.restoreFinishedStockByRef(editChallanId);
+        const chDate = document.getElementById('ch-date')?.value || D.today();
+        if (!partyTxt) { D.toast('⚠️ Party chunein!'); return D.focusField('ch-party'); }
+        if (!chNo) { D.toast('⚠️ Challan No. bharein!'); return D.focusField('ch-no'); }
+        if (!chBatch.length) { D.toast('⚠️ 1 item add karein!'); return D.focusField('ch-cur-name'); }
+        if (chBatch.some((r) => D.num(r.qty) <= 0)) {
+            D.toast('⚠️ Har item ki Qty 0 se zyada rakhein!');
+            return;
         }
 
-        const rec = {
-            id: chId,
-            no: chNo,
-            date: document.getElementById('ch-date')?.value || D.today(),
-            firmId: selFirmId,
-            firmName: (document.getElementById('ch-firm')?.value || '').trim().toUpperCase(),
-            partyId: selPartyId || p.id || partyTxt,
-            partyName: partyTxt,
-            city: p.city || prevRec?.city || '',
-            address: document.getElementById('ch-addr')?.value || '',
-            mob: document.getElementById('ch-mob')?.value || '',
-            gst: document.getElementById('ch-gst')?.value || '',
-            marka: document.getElementById('ch-marka')?.value || '',
-            orderId: linkedOrderId,
-            items: chBatch.map((r) => ({ ...r }))
-        };
+        isSavingChallan = true;
+        lastSaveTime = now;
+        try {
+            const challans = D.get('dukan_challans');
+            const parties = D.get('dukan_parties');
+            const firms = D.get('dukan_firms');
 
-        if (editChallanId) {
-            const idx = challans.findIndex((c) => c.id === editChallanId);
-            if (idx >= 0) challans[idx] = rec;
-            else challans.push(rec);
-        } else {
-            challans.push(rec);
-        }
-        D.set('dukan_challans', challans);
+            // Guard 4: Stale editChallanId check
+            const prevRec = editChallanId ? challans.find((c) => c.id === editChallanId) : null;
+            const isActualEdit = !!prevRec;
+            const chId = isActualEdit
+                ? editChallanId
+                : `ch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-        rec.items.forEach((it) => {
-            D.deductFinishedStock(it.name, D.num(it.qty), {
-                date: rec.date,
-                partyName: rec.partyName,
-                chNo: rec.no,
-                marka: rec.marka,
-                refId: chId
+            const pById = selPartyId ? parties.find((x) => x.id === selPartyId) : null;
+            const pValid = pById && String(pById.name || '').trim().toUpperCase() === partyTxt ? pById : null;
+            const p = pValid || parties.find((x) => String(x.name || '').trim().toUpperCase() === partyTxt) || {};
+            const finalPartyId = p.id || (pValid ? selPartyId : partyTxt);
+
+            const firmTxt = (document.getElementById('ch-firm')?.value || '').trim().toUpperCase();
+            const fById = selFirmId ? firms.find((x) => x.id === selFirmId) : null;
+            const finalFirmId = (fById && String(fById.name || '').trim().toUpperCase() === firmTxt)
+                ? selFirmId
+                : (firms.find((x) => String(x.name || '').trim().toUpperCase() === firmTxt)?.id || '');
+
+            // Guard 5: Duplicate check (only new)
+            if (!isActualEdit) {
+                const dup = challans.find((c) =>
+                    c.no === chNo &&
+                    c.partyId === finalPartyId &&
+                    c.date === chDate
+                );
+                if (dup) {
+                    D.toast(`⚠️ Challan #${chNo} already exists (${D.fmtDate(chDate)})!`);
+                    return;
+                }
+            }
+
+            // Restore old stock only if actual edit
+            if (isActualEdit) {
+                D.restoreFinishedStockByRef(editChallanId);
+            }
+
+            const rec = {
+                id: chId,
+                no: chNo,
+                date: chDate,
+                firmId: finalFirmId,
+                firmName: firmTxt,
+                partyId: finalPartyId,
+                partyName: partyTxt,
+                city: p.city || prevRec?.city || '',
+                address: document.getElementById('ch-addr')?.value || '',
+                mob: document.getElementById('ch-mob')?.value || '',
+                gst: document.getElementById('ch-gst')?.value || '',
+                marka: document.getElementById('ch-marka')?.value || '',
+                orderId: linkedOrderId,
+                items: chBatch.map((r) => ({ ...r }))
+            };
+
+            if (isActualEdit) {
+                const idx = challans.findIndex((c) => c.id === editChallanId);
+                challans[idx] = rec;
+            } else {
+                challans.push(rec);
+            }
+            D.set('dukan_challans', challans);
+
+            // Stock deduct
+            rec.items.forEach((it) => {
+                D.deductFinishedStock(it.name, D.num(it.qty), {
+                    date: rec.date,
+                    partyName: rec.partyName,
+                    chNo: rec.no,
+                    marka: rec.marka,
+                    refId: chId
+                });
             });
-        });
 
-        if (oldOrderId && oldOrderId !== linkedOrderId) {
-            D.recalcOrderStatus(oldOrderId);
-        }
-        if (linkedOrderId) {
-            D.recalcOrderStatus(linkedOrderId);
-        }
+            // Order status
+            if (oldOrderId && oldOrderId !== linkedOrderId) D.recalcOrderStatus(oldOrderId);
+            if (linkedOrderId) D.recalcOrderStatus(linkedOrderId);
 
-        D.toast(editChallanId
-            ? `✅ Challan #${rec.no} update hua (Stock adjust + Order status update)!`
-            : `✅ Challan #${rec.no} save hua aur Finished Stock se minus ho gaya!`);
+            D.toast(isActualEdit
+                ? `✅ Challan #${rec.no} update + stock adjust!`
+                : `✅ Challan #${rec.no} save + stock minus!`);
 
-        editChallanId = '';
-        selFirmId = '';
-        selPartyId = '';
-        linkedOrderId = '';
-        oldOrderId = '';
-        chBatch = [];
-
-        if (fromRegister) {
-            fromRegister = false;
-            viewMode = 'register';
-            render();
-        } else {
-            viewMode = 'form';
-            render('ch-firm', null);
-        }
-    };
-
-    D.deleteChallan = (chId) => {
-        if (!chId) return;
-        const challans = D.get('dukan_challans');
-        const target = challans.find((c) => c.id === chId);
-        if (!target) return;
-        if (!confirm(`Kya aap Challan #${target.no} delete karna chahte hain? Iska Finished Stock wapas restore ho jayega.`)) return;
-
-        D.restoreFinishedStockByRef(chId);
-        D.set('dukan_challans', challans.filter((c) => c.id !== chId));
-        if (target.orderId) D.recalcOrderStatus(target.orderId);
-
-        D.toast(`🗑️ Challan #${target.no} delete hua aur Finished Stock restore ho gaya!`);
-        editChallanId = '';
-        chBatch = [];
-
-        if (fromRegister || viewMode === 'register') {
-            fromRegister = false;
-            viewMode = 'register';
-            render();
-        } else {
-            viewMode = 'form';
+            // Reset state
+            editChallanId = '';
             selFirmId = '';
             selPartyId = '';
             linkedOrderId = '';
             oldOrderId = '';
-            render('ch-firm', null);
+            chBatch = [];
+            fromRegister = false;
+            viewMode = 'register';
+            render();
+
+        } catch (e) {
+            console.error('[saveChallan]', e);
+            D.toast('❌ Save fail: ' + e.message);
+        } finally {
+            isSavingChallan = false;
         }
+    };
+
+    D.deleteChallan = (chId) => {
+        if (!chId || isDeletingChallan) return;
+        const challans = D.get('dukan_challans');
+        const target = challans.find((c) => c.id === chId);
+        if (!target) { D.toast('⚠️ Already deleted!'); return; }
+
+        const msgEl = document.getElementById('dk-accept-msg');
+        if (msgEl) {
+            msgEl.textContent = `🗑️ Challan #${target.no} delete karein? (Finished Stock wapas restore hoga)`;
+        }
+        const prBtn = document.getElementById('dk-accept-print');
+        if (prBtn) prBtn.style.display = 'none';
+
+        D.askAccept(() => {
+            isDeletingChallan = true;
+            try {
+                const fresh = D.get('dukan_challans');
+                if (!fresh.find((c) => c.id === chId)) return;
+
+                D.restoreFinishedStockByRef(chId);
+                D.set('dukan_challans', fresh.filter((c) => c.id !== chId));
+                if (target.orderId) D.recalcOrderStatus(target.orderId);
+
+                if (editChallanId === chId) editChallanId = '';
+                chBatch = [];
+                D.toast(`🗑️ Challan #${target.no} delete + stock restore!`);
+
+                viewMode = 'register';
+                fromRegister = false;
+                render();
+            } finally {
+                isDeletingChallan = false;
+            }
+        });
     };
 
     function buildChallanA5HTML(data) {
         const firms = D.get('dukan_firms');
-        const fObj = firms.find((x) => x.id === data.firmId || x.name === data.firmName) || firms[0] || {};
+        const fObj = firms.find((x) =>
+            (data.firmId && x.id === data.firmId) ||
+            (data.firmName && String(x.name || '').toUpperCase() === String(data.firmName).toUpperCase())
+        ) || (!data.firmName ? firms[0] : null) || {};
         const parties = D.get('dukan_parties');
-        const pObj = parties.find((x) => x.id === data.partyId || x.name === data.partyName) || {};
+        const pObj = parties.find((x) =>
+            (data.partyId && x.id === data.partyId) ||
+            (data.partyName && String(x.name || '').toUpperCase() === String(data.partyName).toUpperCase())
+        ) || {};
 
         const firmName = data.firmName || fObj.name || 'FIRM';
         const toCity = data.city || pObj.city || 'DESTINATION';
@@ -785,6 +982,10 @@
             items: chBatch
         });
         const w = window.open('', '_blank', 'width=720,height=650');
+        if (!w) {
+            D.toast('⚠️ Popup blocked! Browser me popups allow karein.');
+            return;
+        }
         w.document.write(html);
         w.document.close();
         setTimeout(() => w.print(), 150);
@@ -794,6 +995,10 @@
         const rec = D.get('dukan_challans').find((c) => c.id === chId);
         if (!rec) return;
         const w = window.open('', '_blank', 'width=720,height=650');
+        if (!w) {
+            D.toast('⚠️ Popup blocked! Browser me popups allow karein.');
+            return;
+        }
         w.document.write(buildChallanA5HTML(rec));
         w.document.close();
         setTimeout(() => w.print(), 150);
