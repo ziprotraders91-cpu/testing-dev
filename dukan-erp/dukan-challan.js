@@ -149,6 +149,28 @@
         return currentAvail + prevQty;
     }
 
+    function getOrderItemBakiForChallan(ord, itemName, excludeChallanId = null) {
+        if (!ord) return Infinity;
+        const targetName = String(itemName || '').trim().toUpperCase();
+        const matchingItems = (ord.items || []).filter((it) =>
+            String(it.name || '').trim().toUpperCase() === targetName
+        );
+        if (!matchingItems.length) return 0;
+        const ordered = matchingItems.reduce((sum, it) => sum + D.num(it.qty), 0);
+        const challans = D.get('dukan_challans').filter((c) =>
+            c.orderId === ord.id && c.id !== excludeChallanId
+        );
+        let sent = 0;
+        challans.forEach((c) => {
+            (c.items || []).forEach((it) => {
+                if (String(it.name || '').trim().toUpperCase() === targetName) {
+                    sent += D.num(it.qty);
+                }
+            });
+        });
+        return Math.max(0, ordered - sent);
+    }
+
     function getOrderPendingItems(ord) {
         if (!ord) return [];
         const prog = D.getOrderProgress(ord);
@@ -219,6 +241,11 @@
                 .reduce((a, b) => a + D.num(b.qty), 0);
             const finAvail = getEffectiveFinishedStock(normName);
             if (n <= 0 || n + otherQty > finAvail) return;
+            if (linkedOrderId) {
+                const ord = D.get('dukan_orders').find((o) => o.id === linkedOrderId);
+                const itemBaki = getOrderItemBakiForChallan(ord, normName, editChallanId);
+                if (n + otherQty > itemBaki) return;
+            }
             chBatch[i].qty = n;
         } else {
             chBatch[i][field] = Math.max(0, n);
@@ -237,15 +264,24 @@
                 renderChBatchTable();
                 return;
             }
-            const normName = String(chBatch[i].name || '').trim().toUpperCase();
-            const otherQty = chBatch
-                .filter((b, idx) => idx !== i && String(b.name || '').trim().toUpperCase() === normName)
+            const itemName = String(chBatch[i].name || '').trim().toUpperCase();
+            const otherInBatch = chBatch
+                .filter((b, idx) => idx !== i && String(b.name || '').trim().toUpperCase() === itemName)
                 .reduce((a, b) => a + D.num(b.qty), 0);
-            const finAvail = getEffectiveFinishedStock(normName);
-            if (n + otherQty > finAvail) {
+            const finAvail = getEffectiveFinishedStock(itemName);
+            if (n + otherInBatch > finAvail) {
                 D.toast(`⚠️ Sirf ${finAvail} Pc available!`);
                 renderChBatchTable();
                 return;
+            }
+            if (linkedOrderId) {
+                const ord = D.get('dukan_orders').find((o) => o.id === linkedOrderId);
+                const itemBaki = getOrderItemBakiForChallan(ord, itemName, editChallanId);
+                if (n + otherInBatch > itemBaki) {
+                    D.toast(`⚠️ Order me sirf ${itemBaki} Pc baki hai!`);
+                    renderChBatchTable();
+                    return;
+                }
             }
         }
         chBatch[i][field] = field === 'rate' ? Math.max(0, n) : n;
@@ -269,6 +305,15 @@
         if (qty + alreadyInBatch > finAvail) {
             D.toast(`⚠️ Sirf ${finAvail} Pc available (batch me ${alreadyInBatch})!`);
             return D.focusField('ch-cur-qty');
+        }
+
+        if (linkedOrderId) {
+            const ord = D.get('dukan_orders').find((o) => o.id === linkedOrderId);
+            const itemBaki = getOrderItemBakiForChallan(ord, name, editChallanId);
+            if (qty + alreadyInBatch > itemBaki) {
+                D.toast(`⚠️ Order me sirf ${itemBaki} Pc baki hai (batch me ${alreadyInBatch})!`);
+                return D.focusField('ch-cur-qty');
+            }
         }
 
         const existing = chBatch.findIndex((b) => String(b.name || '').trim().toUpperCase() === name);
@@ -618,15 +663,33 @@
                             });
                     },
                     onPick: (it) => {
-                        if (editChallanId) {
-                            const cur = readCurrentDraft();
-                            linkedOrderId = it.id;
-                            cur.ordText = `#${it.ord.no}`;
-                            if (!cur.marka.trim()) cur.marka = it.ord.marka || '';
-                            renderFormScreen('ch-no', null, cur);
-                        } else {
-                            D.loadOrderInChallan(it.pid, it.id);
+                        const cur = readCurrentDraft();
+                        linkedOrderId = it.id;
+                        if (!selFirmId && it.ord?.firmId) {
+                            selFirmId = it.ord.firmId;
+                            const ordFirm = firms.find((f) => f.id === selFirmId);
+                            if (ordFirm) {
+                                cur.firmName = ordFirm.name || '';
+                                cur.firmMeta = `${ordFirm.address || ''} · Mob: ${ordFirm.mob || '-'} · GST: ${ordFirm.gst || '-'}`;
+                            }
                         }
+                        if (!selPartyId && (it.pid || it.ord?.partyName)) {
+                            const ordParty = parties.find((x) => (it.pid && x.id === it.pid)
+                                || (it.ord?.partyName && String(x.name || '').toUpperCase() === String(it.ord.partyName).toUpperCase()));
+                            if (ordParty) {
+                                selPartyId = ordParty.id;
+                                cur.partyName = ordParty.name || '';
+                                cur.address = [ordParty.address, ordParty.city].filter(Boolean).join(', ');
+                                cur.mob = ordParty.mob || '';
+                                cur.gst = ordParty.gst || '';
+                            } else {
+                                cur.partyName = it.ord?.partyName || cur.partyName;
+                            }
+                        }
+                        cur.ordText = `#${it.ord.no}`;
+                        if (!cur.marka.trim()) cur.marka = it.ord.marka || '';
+                        renderFormScreen(selFirmId ? 'ch-no' : 'ch-firm', null, cur);
+                        D.toast(`📋 Order #${it.ord.no} link hua — Bagal ki list se Baki items manually add karein`);
                     },
                     onEmptyEnter: () => D.focusField('ch-no')
                 },
@@ -704,6 +767,23 @@
             D.toast('⚠️ Har item ki Qty 0 se zyada rakhein!');
             return;
         }
+        if (linkedOrderId) {
+            const ord = D.get('dukan_orders').find((o) => o.id === linkedOrderId);
+            if (ord) {
+                const totalsByDesign = {};
+                chBatch.forEach((item) => {
+                    const k = String(item.name || '').trim().toUpperCase();
+                    totalsByDesign[k] = (totalsByDesign[k] || 0) + D.num(item.qty);
+                });
+                for (const itemName of Object.keys(totalsByDesign)) {
+                    const itemBaki = getOrderItemBakiForChallan(ord, itemName, editChallanId);
+                    if (totalsByDesign[itemName] > itemBaki) {
+                        D.toast(`❌ ${itemName}: order me sirf ${itemBaki} Pc baki hai, ${totalsByDesign[itemName]} Pc bhej rahe!`);
+                        return;
+                    }
+                }
+            }
+        }
         if (isSavingChallan) { D.toast('⏳ Save chal raha hai...'); return; }
 
         const msgEl = document.getElementById('dk-accept-msg');
@@ -777,6 +857,25 @@
                 if (dup) {
                     D.toast(`⚠️ Challan #${chNo} already exists (${D.fmtDate(chDate)})!`);
                     return;
+                }
+            }
+
+            // Guard 6: Order Baki limit check (stock restore se pehle)
+            if (linkedOrderId) {
+                const ord = D.get('dukan_orders').find((o) => o.id === linkedOrderId);
+                if (ord) {
+                    const totalsByDesign = {};
+                    chBatch.forEach((item) => {
+                        const k = String(item.name || '').trim().toUpperCase();
+                        totalsByDesign[k] = (totalsByDesign[k] || 0) + D.num(item.qty);
+                    });
+                    for (const itemName of Object.keys(totalsByDesign)) {
+                        const itemBaki = getOrderItemBakiForChallan(ord, itemName, editChallanId);
+                        if (totalsByDesign[itemName] > itemBaki) {
+                            D.toast(`❌ ${itemName}: order me sirf ${itemBaki} Pc baki hai, ${totalsByDesign[itemName]} Pc bhej rahe!`);
+                            return;
+                        }
+                    }
                 }
             }
 
