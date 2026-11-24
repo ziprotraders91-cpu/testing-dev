@@ -16,6 +16,9 @@
     let selPartyId = '';
     let selFirmId = '';
     let batch = [];
+    let isSavingOrder = false;
+    let lastOrderSaveTime = 0;
+    let isDeletingOrder = false;
 
     let regSearch = '', regPage = 1, regNav = 0;
     let repStatus = 'Pending', repStep = 'parties', repPartyId = '', repSearch = '', repOrdSearch = '', repPage = 1, repNav = 0;
@@ -50,11 +53,11 @@
         };
     }
 
-    D.openOrderForm = (ordId = '') => {
+    D.openOrderForm = (ordId = '', opts = {}) => {
         D.screen = 'order';
         D.onCustomFieldEnter = null;
         bindOrderEsc();
-        fromExternal = false;
+        fromExternal = !!opts.fromExt;
 
         if (ordId) {
             const ord = D.get('dukan_orders').find((o) => o.id === ordId);
@@ -84,8 +87,7 @@
 
     D.openOrderEdit = (ordId) => {
         fromRegister = false;
-        D.openOrderForm(ordId);
-        fromExternal = true;
+        D.openOrderForm(ordId, { fromExt: true });
     };
 
     D.ofEditFromReg = (ordId) => {
@@ -168,14 +170,27 @@
         const qty = D.num(qtEl?.value);
         if (!name) { D.toast('⚠️ Item / Design chunein!'); return D.focusField('of-cur-name'); }
         if (qty <= 0) { D.toast('⚠️ Qnty (Pcs) bharein!'); return D.focusField('of-cur-qty'); }
+        if (!Number.isInteger(qty)) {
+            D.toast('⚠️ Qty poora number (Pcs) me daalein!');
+            return D.focusField('of-cur-qty');
+        }
 
-        batch.push({
-            name,
-            qty,
-            rate: D.num(rtEl?.value),
-            fold: (flEl?.value || 'Box Fold').trim(),
-            cancel: (cnEl?.value || '-').trim()
-        });
+        const foldVal = (flEl?.value || 'Box Fold').trim();
+        const cancelVal = (cnEl?.value || '-').trim();
+        const existing = batch.findIndex((b) =>
+            b.name === name && b.fold === foldVal && b.cancel === cancelVal
+        );
+        if (existing >= 0) {
+            batch[existing].qty = D.num(batch[existing].qty) + qty;
+        } else {
+            batch.push({
+                name,
+                qty,
+                rate: D.num(rtEl?.value),
+                fold: foldVal,
+                cancel: cancelVal
+            });
+        }
 
         nmEl.value = '';
         qtEl.value = '';
@@ -184,7 +199,11 @@
         cnEl.value = '-';
 
         renderBatchTable();
-        D.toast(`✅ Added: ${name} (${qty} Pc) — Agla item chunein ya [Ctrl+Enter] se GST No. par jayein`);
+        if (existing >= 0) {
+            D.toast(`✅ ${name} qty ${batch[existing].qty} ho gayi (merged)`);
+        } else {
+            D.toast(`✅ Added: ${name} (${qty} Pc) — Agla item chunein ya [Ctrl+Enter] se GST No. par jayein`);
+        }
         D.focusField('of-cur-name');
     };
 
@@ -266,8 +285,12 @@
 
         const drawRows = () => {
             const flt = getFiltered();
-            const pg = D.paginate(flt, regPage);
-            if (regNav >= pg.rows.length) regNav = 0;
+            let pg = D.paginate(flt, regPage);
+            if (pg.totalPages && regPage > pg.totalPages) {
+                regPage = pg.totalPages;
+                pg = D.paginate(flt, regPage);
+            }
+            if (regNav >= pg.rows.length) regNav = Math.max(0, pg.rows.length - 1);
 
             const tb = document.getElementById('of-reg-tb');
             if (tb) {
@@ -327,6 +350,13 @@
                 <tbody id="of-reg-tb"></tbody>
             </table>
             <div id="of-reg-pg"></div>
+            <div class="dk-accept" id="dk-accept-box">
+                <strong id="dk-accept-msg">Delete Order?</strong>
+                <div style="display:flex; gap:8px;">
+                    <button type="button" class="dk-btn-gold" id="dk-accept-yes">Yes (Y)</button>
+                    <button type="button" class="dk-btn" id="dk-accept-no" onclick="document.getElementById('dk-accept-box').style.display='none';">No (N)</button>
+                </div>
+            </div>
         `;
 
         D.renderShell(headL, left, '[↑ ↓] Select · [Enter / Click] Edit & Delete kholein · [Esc] Menu');
@@ -462,10 +492,10 @@
             </div>
 
             <div class="dk-accept" id="dk-accept-box">
-                <strong>${ord ? 'Update Order Form?' : 'Save Order Form?'}</strong>
+                <strong id="dk-accept-msg">${ord ? 'Update Order Form?' : 'Save Order Form?'}</strong>
                 <div style="display:flex; gap:8px;">
-                    <button type="button" class="dk-btn-gold" id="dk-accept-yes" onclick="DukanERP.saveOrder()">Yes (Y)</button>
-                    <button type="button" class="dk-btn" onclick="DukanERP.printOrderBook()">🖨️ Print A5</button>
+                    <button type="button" class="dk-btn-gold" id="dk-accept-yes">Yes (Y)</button>
+                    <button type="button" class="dk-btn" id="dk-accept-print" onclick="DukanERP.printOrderBook()">🖨️ Print A5</button>
                     <button type="button" class="dk-btn" id="dk-accept-no" onclick="document.getElementById('dk-accept-box').style.display='none'; DukanERP.focusField('of-rem');">No (N)</button>
                 </div>
             </div>
@@ -558,88 +588,163 @@
     D.askOrderSave = () => {
         const partyTxt = (document.getElementById('of-party')?.value || '').trim();
         const ordNo = (document.getElementById('of-no')?.value || '').trim();
-        if (!partyTxt) { D.toast('⚠️ M/s. Party Name bharein!'); return D.focusField('of-party'); }
+        if (!partyTxt) { D.toast('⚠️ Party Name bharein!'); return D.focusField('of-party'); }
         if (!ordNo) { D.toast('⚠️ Order No. bharein!'); return D.focusField('of-no'); }
-        if (!batch.length) { D.toast('⚠️ Kam se kam 1 item Batch me +Add karein!'); return D.focusField('of-cur-name'); }
+        if (!batch.length) { D.toast('⚠️ 1 item add karein!'); return D.focusField('of-cur-name'); }
+        if (isSavingOrder) { D.toast('⏳ Save chal raha hai...'); return; }
+
+        const msgEl = document.getElementById('dk-accept-msg');
+        if (msgEl) msgEl.textContent = editOrderId ? 'Update Order Form?' : 'Save Order Form?';
+        const prBtn = document.getElementById('dk-accept-print');
+        if (prBtn) prBtn.style.display = '';
+
         D.askAccept(() => D.saveOrder());
     };
 
     D.saveOrder = () => {
+        // Guard 1: Already saving
+        if (isSavingOrder) {
+            D.toast('⏳ Save chal raha hai...');
+            return;
+        }
+        // Guard 2: 1 second debounce
+        const now = Date.now();
+        if (now - lastOrderSaveTime < 1000) {
+            D.toast('⏳ 1 second baad try karein');
+            return;
+        }
+        // Guard 3: Validation
         const partyTxt = (document.getElementById('of-party')?.value || '').trim().toUpperCase();
         const ordNo = (document.getElementById('of-no')?.value || '').trim();
-        if (!partyTxt || !ordNo || !batch.length) return;
+        const ordDate = document.getElementById('of-date')?.value || D.today();
+        if (!partyTxt) { D.toast('⚠️ Party Name bharein!'); return D.focusField('of-party'); }
+        if (!ordNo) { D.toast('⚠️ Order No. bharein!'); return D.focusField('of-no'); }
+        if (!batch.length) { D.toast('⚠️ 1 item add karein!'); return D.focusField('of-cur-name'); }
 
-        const orders = D.get('dukan_orders');
-        const rec = {
-            id: editOrderId || `ord_${Date.now()}`,
-            no: ordNo,
-            date: document.getElementById('of-date').value || D.today(),
-            firmId: selFirmId,
-            firmName: (document.getElementById('of-firm').value || '').trim().toUpperCase(),
-            partyId: selPartyId || partyTxt,
-            partyName: partyTxt,
-            partyAddress: document.getElementById('of-party-addr').value,
-            partyMob: document.getElementById('of-party-mob').value,
-            gst: document.getElementById('of-tin').value,
-            marka: document.getElementById('of-marka').value,
-            transport: document.getElementById('of-tr').value,
-            agent: document.getElementById('of-agent').value,
-            pack: document.getElementById('of-pack').value,
-            fold: document.getElementById('of-fold').value,
-            remarks: document.getElementById('of-rem').value,
-            status: 'Pending',
-            items: batch.map((r) => ({ ...r }))
-        };
+        isSavingOrder = true;
+        lastOrderSaveTime = now;
+        try {
+            const orders = D.get('dukan_orders');
 
-        if (editOrderId) {
-            const idx = orders.findIndex((o) => o.id === editOrderId);
-            if (idx >= 0) orders[idx] = rec;
-            D.set('dukan_orders', orders);
-            D.recalcOrderStatus(rec.id);
-            D.toast(`✅ Order #${ordNo} update ho gaya!`);
-        } else {
-            orders.push(rec);
-            D.set('dukan_orders', orders);
-            D.toast(`✅ Order #${ordNo} (${batch.length} items) save ho gaya!`);
-        }
+            // Guard 4: Stale editOrderId — record mila toh edit, nahi toh NEW
+            const prevOrd = editOrderId ? orders.find((o) => o.id === editOrderId) : null;
+            const isActualEdit = !!prevOrd;
+            const ordId = isActualEdit
+                ? editOrderId
+                : `ord_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-        editOrderId = '';
-        selFirmId = '';
-        selPartyId = '';
-        batch = [];
+            // Guard 5: Duplicate check (only new entry)
+            if (!isActualEdit) {
+                const dup = orders.find((o) =>
+                    o.no === ordNo &&
+                    o.partyId === (selPartyId || partyTxt) &&
+                    o.date === ordDate
+                );
+                if (dup) {
+                    D.toast(`⚠️ Order #${ordNo} already saved (${D.fmtDate(ordDate)})!`);
+                    return;
+                }
+            }
 
-        if (fromRegister) {
-            fromRegister = false;
-            viewMode = 'register';
-            renderOrderScreen();
-        } else {
-            viewMode = 'form';
-            renderOrderScreen('of-firm', null);
+            // Guard 6: Status preserve karo (Complete order edit pe Pending na bane)
+            let finalStatus = 'Pending';
+            if (isActualEdit && prevOrd) {
+                const hasChallans = D.get('dukan_challans').some((c) => c.orderId === editOrderId);
+                if (prevOrd.status === 'Complete' && !hasChallans) {
+                    finalStatus = 'Complete';   // auto-completed order preserve
+                }
+            }
+
+            const rec = {
+                id: ordId,
+                no: ordNo,
+                date: ordDate,
+                firmId: selFirmId,
+                firmName: (document.getElementById('of-firm').value || '').trim().toUpperCase(),
+                partyId: selPartyId || partyTxt,
+                partyName: partyTxt,
+                partyAddress: document.getElementById('of-party-addr').value,
+                partyMob: document.getElementById('of-party-mob').value,
+                gst: document.getElementById('of-tin').value,
+                marka: document.getElementById('of-marka').value,
+                transport: document.getElementById('of-tr').value,
+                agent: document.getElementById('of-agent').value,
+                pack: document.getElementById('of-pack').value,
+                fold: document.getElementById('of-fold').value,
+                remarks: document.getElementById('of-rem').value,
+                status: finalStatus,
+                items: batch.map((r) => ({ ...r }))
+            };
+
+            if (isActualEdit) {
+                const idx = orders.findIndex((o) => o.id === editOrderId);
+                orders[idx] = rec;
+                D.set('dukan_orders', orders);
+                // Sirf tab recalc karo jab challans hon
+                const hasChallans = D.get('dukan_challans').some((c) => c.orderId === ordId);
+                if (hasChallans) D.recalcOrderStatus(rec.id);
+                D.toast(`✅ Order #${ordNo} update ho gaya!`);
+            } else {
+                orders.push(rec);
+                D.set('dukan_orders', orders);
+                D.toast(`✅ Order #${ordNo} (${batch.length} items) save ho gaya!`);
+            }
+
+            // Reset state
+            editOrderId = '';
+            selFirmId = '';
+            selPartyId = '';
+            batch = [];
+            fromExternal = false;
+
+            if (fromRegister) {
+                fromRegister = false;
+                viewMode = 'register';
+                renderOrderScreen();
+            } else {
+                viewMode = 'form';
+                renderOrderScreen('of-firm', null);
+            }
+
+        } catch (e) {
+            console.error('[saveOrder]', e);
+            D.toast('❌ Save fail: ' + e.message);
+        } finally {
+            isSavingOrder = false;
         }
     };
 
     D.deleteOrder = (ordId) => {
-        if (!ordId) return;
+        if (!ordId || isDeletingOrder) return;
         const orders = D.get('dukan_orders');
         const target = orders.find((o) => o.id === ordId);
-        if (!target) return;
-        if (!confirm(`Kya aap sach me Order #${target.no} delete karna chahte hain?`)) return;
+        if (!target) { D.toast('⚠️ Already deleted!'); return; }
 
-        D.set('dukan_orders', orders.filter((o) => o.id !== ordId));
-        D.toast(`🗑️ Order #${target.no} delete ho gaya!`);
-        editOrderId = '';
-        selFirmId = '';
-        selPartyId = '';
-        batch = [];
+        const msgEl = document.getElementById('dk-accept-msg');
+        if (msgEl) msgEl.textContent = `🗑️ Order #${target.no} delete karein?`;
+        const prBtn = document.getElementById('dk-accept-print');
+        if (prBtn) prBtn.style.display = 'none';
 
-        if (fromRegister || viewMode === 'register') {
-            fromRegister = false;
-            viewMode = 'register';
-            renderOrderScreen();
-        } else {
-            viewMode = 'form';
-            renderOrderScreen('of-firm', null);
-        }
+        D.askAccept(() => {
+            isDeletingOrder = true;
+            try {
+                const fresh = D.get('dukan_orders');
+                if (!fresh.find((o) => o.id === ordId)) return;
+
+                D.set('dukan_orders', fresh.filter((o) => o.id !== ordId));
+
+                if (editOrderId === ordId) editOrderId = '';
+                if (fromExternal) fromExternal = false;
+                batch = [];
+                D.toast(`🗑️ Order #${target.no} delete ho gaya!`);
+
+                viewMode = 'register';
+                fromRegister = false;
+                renderOrderScreen();
+            } finally {
+                isDeletingOrder = false;
+            }
+        });
     };
 
     const buildOrderA5HTML = (data) => {
@@ -701,6 +806,7 @@
             items: batch
         });
         const w = window.open('', '_blank', 'width=720,height=650');
+        if (!w) { D.toast('⚠️ Popup blocked! Browser me popups allow karein.'); return; }
         w.document.write(html);
         w.document.close(); setTimeout(() => w.print(), 150);
     };
@@ -709,6 +815,7 @@
         const ord = D.get('dukan_orders').find((o) => o.id === ordId);
         if (!ord) return;
         const w = window.open('', '_blank', 'width=720,height=650');
+        if (!w) { D.toast('⚠️ Popup blocked! Browser me popups allow karein.'); return; }
         w.document.write(buildOrderA5HTML(ord));
         w.document.close(); setTimeout(() => w.print(), 150);
     };
