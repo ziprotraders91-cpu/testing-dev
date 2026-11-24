@@ -16,6 +16,9 @@
     }
 
     const CFG_KEY = 'dukan_bc_print_cfg_v1';
+    let isSavingDesign = false;
+    let lastDesignSaveTime = 0;
+    let isDeletingDesign = false;
     let viewMode = 'choice'; // 'choice' | 'form' | 'register'
     let choiceIdx = 0;
     let editId = '';
@@ -32,8 +35,8 @@
             const parsed = raw ? JSON.parse(raw) : {};
             return {
                 mode: parsed.mode || 'tsc2up_pitch',
-                gap: parsed.gap !== undefined ? Number(parsed.gap) : 2.8,
-                top: parsed.top !== undefined ? Number(parsed.top) : 1.5,
+                gap: parsed.gap !== undefined && Number.isFinite(Number(parsed.gap)) ? Number(parsed.gap) : 2.8,
+                top: parsed.top !== undefined && Number.isFinite(Number(parsed.top)) ? Number(parsed.top) : 1.5,
                 textOnly: !!parsed.textOnly
             };
         } catch {
@@ -41,16 +44,25 @@
         }
     }
 
-    D.savePrintCfg = () => {
-        try {
-            const cfg = {
-                mode: document.getElementById('bc-psize')?.value || 'tsc2up_pitch',
-                gap: parseFloat(document.getElementById('bc-gap')?.value ?? '2.8') || 0,
-                top: parseFloat(document.getElementById('bc-top')?.value ?? '1.5') || 0,
-                textOnly: !!document.getElementById('bc-textonly')?.checked
-            };
-            localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
-        } catch { /* ignore */ }
+    let _saveCfgTimer = null;
+    D.savePrintCfg = (immediate = false) => {
+        const writeCfg = () => {
+            try {
+                const cfg = {
+                    mode: document.getElementById('bc-psize')?.value || 'tsc2up_pitch',
+                    gap: parseFloat(document.getElementById('bc-gap')?.value ?? '2.8') || 0,
+                    top: parseFloat(document.getElementById('bc-top')?.value ?? '1.5') || 0,
+                    textOnly: !!document.getElementById('bc-textonly')?.checked
+                };
+                localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
+            } catch (_) { /* ignore */ }
+        };
+        if (_saveCfgTimer) clearTimeout(_saveCfgTimer);
+        if (immediate === true) {
+            writeCfg();
+            return;
+        }
+        _saveCfgTimer = setTimeout(writeCfg, 300);
     };
 
     D.openBarcode = () => {
@@ -176,8 +188,12 @@
 
         const drawRows = () => {
             const flt = getFiltered();
-            const pg = D.paginate(flt, regPage);
-            if (regNav >= pg.rows.length) regNav = 0;
+            let pg = D.paginate(flt, regPage);
+            if (pg.totalPages && regPage > pg.totalPages) {
+                regPage = pg.totalPages;
+                pg = D.paginate(flt, regPage);
+            }
+            if (regNav >= pg.rows.length) regNav = Math.max(0, pg.rows.length - 1);
 
             const tb = document.getElementById('bc-reg-tb');
             if (tb) {
@@ -228,6 +244,13 @@
                 <tbody id="bc-reg-tb"></tbody>
             </table>
             <div id="bc-reg-pg"></div>
+            <div class="dk-accept" id="dk-accept-box">
+                <strong id="dk-accept-msg">Delete Design &amp; Barcode?</strong>
+                <div style="display:flex; gap:8px;">
+                    <button type="button" class="dk-btn-gold" id="dk-accept-yes">Yes (Y)</button>
+                    <button type="button" class="dk-btn" id="dk-accept-no" onclick="document.getElementById('dk-accept-box').style.display='none';">No (N)</button>
+                </div>
+            </div>
         `;
 
         D.renderShell(headL, left, '[↑ ↓] Select · [Enter / Click] Edit & Delete kholein · [Esc] Menu');
@@ -317,9 +340,9 @@
             </div>
 
             <div class="dk-accept" id="dk-accept-box">
-                <strong>${cur ? 'Update' : 'Save'} Design &amp; Barcode?</strong>
+                <strong id="dk-accept-msg">${cur ? 'Update' : 'Save'} Design &amp; Barcode?</strong>
                 <div style="display:flex; gap:8px;">
-                    <button type="button" class="dk-btn-gold" id="dk-accept-yes" onclick="DukanERP.saveDesign()">Yes (Y)</button>
+                    <button type="button" class="dk-btn-gold" id="dk-accept-yes">Yes (Y)</button>
                     <button type="button" class="dk-btn" id="dk-accept-no" onclick="document.getElementById('dk-accept-box').style.display='none'; DukanERP.focusField('bc-spec');">No (N)</button>
                 </div>
             </div>
@@ -424,14 +447,23 @@
     }
 
     D.bcEditFromReg = (id) => {
+        const rec = D.get('dukan_designs').find((x) => x && x.id === id);
+        if (!rec) { D.toast('⚠️ Design nahi mila!'); return; }
         editId = id;
+        linkedSareeName = rec.sareeName || '';
+        linkedKarkhanaId = rec.karkhanaId || 'k_main';
         fromRegister = true;
         viewMode = 'form';
         render('bc-spec');
     };
 
     D.loadDesign = (id) => {
+        const rec = D.get('dukan_designs').find((x) => x && x.id === id);
+        if (!rec) { D.toast('⚠️ Design nahi mila!'); return; }
         editId = id;
+        linkedSareeName = rec.sareeName || '';
+        linkedKarkhanaId = rec.karkhanaId || 'k_main';
+        fromRegister = false;
         viewMode = 'form';
         render('bc-spec');
     };
@@ -461,66 +493,138 @@
     D.askBarcodeSave = () => {
         const des = (document.getElementById('bc-des')?.value || '').trim();
         if (!des) { D.toast('⚠️ Design Name bharein!'); return D.focusField('bc-des'); }
+        if (isSavingDesign) { D.toast('⏳ Save chal raha hai...'); return; }
+
+        const msgEl = document.getElementById('dk-accept-msg');
+        if (msgEl) msgEl.textContent = `${editId ? 'Update' : 'Save'} Design & Barcode?`;
+
         D.askAccept(() => D.saveDesign());
     };
 
     D.saveDesign = () => {
+        // Guard 1: Already saving
+        if (isSavingDesign) {
+            D.toast('⏳ Save chal raha hai...');
+            return;
+        }
+        // Guard 2: Debounce
+        const now = Date.now();
+        if (now - lastDesignSaveTime < 1000) {
+            D.toast('⏳ 1 second baad try karein');
+            return;
+        }
+        // Guard 3: Validation
         const kariger = (document.getElementById('bc-kar')?.value || '').trim().toUpperCase();
         const sareeName = (document.getElementById('bc-saree')?.value || '').trim().toUpperCase();
         const design = (document.getElementById('bc-des')?.value || '').trim().toUpperCase();
-        if (!design) return D.focusField('bc-des');
+        if (!design) { D.toast('⚠️ Design Name bharein!'); return D.focusField('bc-des'); }
         const specs = (document.getElementById('bc-spec')?.value || '').trim().toUpperCase();
         const code = (document.getElementById('bc-code')?.value || `${design}-KT`).trim().toUpperCase();
 
-        const list = D.get('dukan_designs');
-        const existing = editId ? list.find((x) => x && x.id === editId) : list.find((x) => x && x.design === design);
-        if (existing) {
-            existing.kariger = kariger || existing.kariger;
-            existing.sareeName = sareeName || existing.sareeName || design;
-            existing.karkhanaId = linkedKarkhanaId || existing.karkhanaId || 'k_main';
-            existing.design = design;
-            existing.specs = specs;
-            existing.code = code;
-        } else {
-            list.push({
-                id: `des_${Date.now()}`,
-                kariger,
-                sareeName: sareeName || design,
-                karkhanaId: linkedKarkhanaId || 'k_main',
-                design,
-                specs,
-                code
-            });
-        }
-        D.set('dukan_designs', list);
-        D.toast(`✅ [${design}] save ho gaya!`);
-        editId = '';
-        linkedSareeName = '';
-        if (fromRegister) {
+        isSavingDesign = true;
+        lastDesignSaveTime = now;
+        try {
+            const list = D.get('dukan_designs');
+
+            // Guard 4: Stale editId check
+            const prevRec = editId ? list.find((x) => x && x.id === editId) : null;
+            const isActualEdit = !!prevRec;
+
+            // Guard 5: Duplicate design name check
+            const dupByName = list.find((x) =>
+                x && x.design === design &&
+                x.id !== editId &&
+                (!isActualEdit || x.id !== prevRec.id)
+            );
+            if (dupByName) {
+                D.toast(`⚠️ Design [${design}] already exists!`);
+                return;
+            }
+
+            // Guard 6: Design name change warning (agar challan/order reference hai)
+            if (isActualEdit && prevRec.design !== design) {
+                const challans = D.get('dukan_challans');
+                const usedInChallan = challans.some((c) =>
+                    (c.items || []).some((it) => String(it.name || '').toUpperCase() === prevRec.design)
+                );
+                if (usedInChallan) {
+                    D.toast(`⚠️ [${prevRec.design}] challan me use hua hai. Naam badla toh history mismatch hoga!`);
+                    if (!window.confirm(`[${prevRec.design}] challan/order me use hua hai. Naam badalkar [${design}] karein?`)) {
+                        return;
+                    }
+                }
+            }
+
+            if (isActualEdit) {
+                prevRec.kariger = kariger || prevRec.kariger;
+                prevRec.sareeName = sareeName || prevRec.sareeName || design;
+                prevRec.karkhanaId = linkedKarkhanaId || prevRec.karkhanaId || 'k_main';
+                prevRec.design = design;
+                prevRec.specs = specs;
+                prevRec.code = code;
+            } else {
+                list.push({
+                    id: `des_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                    kariger,
+                    sareeName: sareeName || design,
+                    karkhanaId: linkedKarkhanaId || 'k_main',
+                    design,
+                    specs,
+                    code
+                });
+            }
+
+            D.set('dukan_designs', list);
+            D.toast(isActualEdit
+                ? `✅ [${design}] update ho gaya!`
+                : `✅ [${design}] save ho gaya!`);
+
+            editId = '';
+            linkedSareeName = '';
+            linkedKarkhanaId = 'k_main';
             fromRegister = false;
             viewMode = 'register';
+            render();
+
+        } catch (e) {
+            console.error('[saveDesign]', e);
+            D.toast('❌ Save fail: ' + e.message);
+        } finally {
+            isSavingDesign = false;
         }
-        render('bc-kar');
     };
 
     D.deleteDesign = () => {
-        if (!editId) return;
+        if (!editId) { D.toast('⚠️ Koi design selected nahi!'); return; }
         D.deleteDesignById(editId);
     };
 
     D.deleteDesignById = (id) => {
+        if (!id || isDeletingDesign) return;
         const list = D.get('dukan_designs');
         const target = list.find((x) => x && x.id === id);
-        if (!target) return;
-        if (!confirm(`Kya aap [${target.design}] Design & Barcode delete karna chahte hain?`)) return;
-        D.set('dukan_designs', list.filter((x) => x && x.id !== id));
-        D.toast(`🗑️ [${target.design}] delete ho gaya!`);
-        editId = '';
-        if (fromRegister || viewMode === 'register') {
-            fromRegister = false;
-            viewMode = 'register';
-        }
-        render('bc-kar');
+        if (!target) { D.toast('⚠️ Already deleted!'); return; }
+
+        const msgEl = document.getElementById('dk-accept-msg');
+        if (msgEl) msgEl.textContent = `🗑️ [${target.design}] Design & Barcode delete karein?`;
+
+        D.askAccept(() => {
+            isDeletingDesign = true;
+            try {
+                const fresh = D.get('dukan_designs');
+                if (!fresh.find((x) => x && x.id === id)) return;
+
+                D.set('dukan_designs', fresh.filter((x) => x && x.id !== id));
+
+                if (editId === id) editId = '';
+                fromRegister = false;
+                viewMode = 'register';
+                D.toast(`🗑️ [${target.design}] delete ho gaya!`);
+                render();
+            } finally {
+                isDeletingDesign = false;
+            }
+        });
     };
 
     function printStickerJob(sp, nm, cd, count, mode, textOnly = false, gapMm = 2.8, topMm = 1.5) {
@@ -734,8 +838,8 @@
     }
 
     D.printStickers = () => {
-        D.savePrintCfg();
-        const count = Math.max(1, parseInt(document.getElementById('bc-pqty')?.value || 1, 10));
+        D.savePrintCfg(true);
+        const count = Math.max(1, parseInt(document.getElementById('bc-pqty')?.value, 10) || 1);
         const cfg = loadPrintCfg();
         const sp = (document.getElementById('bc-spec')?.value || '3.60 CM EMB. JHALAR').toUpperCase();
         const nm = (document.getElementById('bc-des')?.value || 'RASHMIKA').toUpperCase();
@@ -745,12 +849,25 @@
 
     D.bcQuickPrint = (id) => {
         const d = D.get('dukan_designs').find((x) => x && x.id === id);
-        if (!d) return;
+        if (!d) { D.toast('⚠️ Design nahi mila!'); return; }
+
         const bachi = D.getDesignFinishedStock(d);
-        const qtyStr = prompt(`[${d.design}] ke kitne TSC 2-Up stickers print karne hain?`, String(bachi > 0 ? bachi : 10));
-        if (!qtyStr) return;
-        const count = Math.max(1, parseInt(qtyStr, 10) || 1);
+        const defaultQty = bachi > 0 ? bachi : 10;
+
+        const input = window.prompt ? window.prompt(`[${d.design}] ke kitne TSC 2-Up stickers print karne hain?`, String(defaultQty)) : String(defaultQty);
+        if (input === null) return;
+        const count = Math.max(1, parseInt(input, 10) || defaultQty);
+
         const cfg = loadPrintCfg();
-        printStickerJob(d.specs || '3.60 CM EMB. JHALAR', d.design, d.code || `${d.design}-KT`, count, cfg.mode, cfg.textOnly, cfg.gap, cfg.top);
+        printStickerJob(
+            d.specs || '3.60 CM EMB. JHALAR',
+            d.design,
+            d.code || `${d.design}-KT`,
+            count,
+            cfg.mode,
+            cfg.textOnly,
+            cfg.gap,
+            cfg.top
+        );
     };
 })();
