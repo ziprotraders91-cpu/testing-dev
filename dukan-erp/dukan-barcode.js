@@ -3,7 +3,7 @@
    - 2-Button Menu: [Design & Barcode] & [Barcode Register]
    - Clean Form (No Register Clutter)
    - Dedicated Barcode Register with Universal Search + Edit / Delete / TSC Print
-   - Fixed TSC 2-Up (50x25mm x 2) Thermal Alignment & Crisp Print Settings
+   - Fixed TSC 2-Up (50x25mm x 2) Thermal Alignment (No 90-deg Chrome Rotation)
    File: dukan-erp/dukan-barcode.js
 ============================================================================ */
 (() => {
@@ -252,7 +252,7 @@
             <div class="dk-row"><label>Saree (Finished) :</label><input id="bc-saree" value="${D.esc(curSaree)}" placeholder="Finished stage ka saree naam" autocomplete="off"></div>
             <div class="dk-row"><label>Design Name :</label><input id="bc-des" value="${D.esc(cur?.design || '')}" placeholder="Jaise: RASHMIKA" oninput="DukanERP.updSticker()" autocomplete="off"></div>
             <div class="dk-row"><label>Top Specs Line :</label><input id="bc-spec" value="${D.esc(cur?.specs || '3.60 CM EMB. JHALAR')}" oninput="DukanERP.updSticker()" autocomplete="off"></div>
-            <div class="dk-row"><label>Barcode Code :</label><input id="bc-code" value="${D.esc(cur?.code || '')}" placeholder="Jaise: D.NO.6610" oninput="DukanERP.updSticker()" autocomplete="off"></div>
+            <div class="dk-row"><label>Barcode Code :</label><input id="bc-code" value="${D.esc(cur?.code || '')}" placeholder="Jaise: RASHMIKA-KT" oninput="DukanERP.updSticker()" autocomplete="off"></div>
             <div class="dk-row"><label>Finished Stock (Live) :</label><input id="bc-fin" value="${liveFin} Pcs (Saree Finished Tab)" readonly style="background:#f9fafb;color:#15803d;"></div>
             <div class="dk-row"><label>Sticker Qty &amp; Size :</label>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -485,12 +485,6 @@
         render('bc-kar');
     };
 
-    /* ========================================================================
-       FIXED TSC PRINT ENGINE:
-       - Exact 104mm x 25mm 2-Up alignment (1mm margin + 50mm + 2mm gap + 50mm + 1mm)
-       - 24.4mm safe row height + no trailing blank page
-       - Crisp thermal contrast & anti-blur SVG rendering
-    ======================================================================== */
     function printStickerJob(sp, nm, cd, count, mode, textOnly = false) {
         const svg = D.barcodeSVG(cd, 26);
 
@@ -511,18 +505,18 @@
 
         if (mode === 'tsc2up') {
             pageCSS = `
-                @page { size: 104mm 25mm; margin: 0; }
+                @page { margin: 0; }
                 html, body {
                     margin: 0 !important;
                     padding: 0 !important;
-                    width: 104mm;
+                    width: 102mm;
                     background: #fff;
                 }
                 .row2 {
-                    width: 104mm;
-                    height: 24.4mm;
-                    max-height: 24.4mm;
-                    padding: 0 1mm;
+                    width: 102mm;
+                    height: 24mm;
+                    max-height: 24mm;
+                    margin: 0 auto;
                     box-sizing: border-box;
                     display: flex;
                     justify-content: space-between;
@@ -536,7 +530,7 @@
                 }
                 .lbl {
                     width: 50mm;
-                    height: 23.6mm;
+                    height: 23.5mm;
                     padding: 0.8mm 1.5mm;
                     box-sizing: border-box;
                     text-align: center;
@@ -551,11 +545,16 @@
             }
         } else if (mode === 'tsc1up') {
             pageCSS = `
-                @page { size: 50mm 25mm; margin: 0; }
-                html, body { margin: 0 !important; padding: 0 !important; width: 50mm; background: #fff; }
+                @page { margin: 0; }
+                html, body {
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    width: 50mm;
+                    background: #fff;
+                }
                 .lbl {
                     width: 50mm;
-                    height: 24.2mm;
+                    height: 24mm;
                     padding: 0.8mm 1.5mm;
                     box-sizing: border-box;
                     text-align: center;
@@ -565,7 +564,10 @@
                     align-items: center;
                     overflow: hidden;
                 }
-                .lbl:not(:last-child) { page-break-after: always; break-after: page; }`;
+                .lbl:not(:last-child) {
+                    page-break-after: always;
+                    break-after: page;
+                }`;
             bodyHTML = Array(count).fill(cellHTML).join('');
         } else {
             pageCSS = `
@@ -647,7 +649,6 @@
         margin-top: 0.5mm;
         letter-spacing: 0.3px;
     }
-    /* Photo-style 2-line layout (jab Bina Barcode tick ho) */
     .lbl-2line { justify-content: center; gap: 2.2mm; }
     .sp-2line { font-size: 8.8pt; font-weight: 800; letter-spacing: -0.25px; max-width: 47.5mm; }
     .cd-2line { font-size: 11.5pt; font-weight: 900; letter-spacing: 0.7px; margin-top: 0; }
