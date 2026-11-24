@@ -13,6 +13,12 @@
     const D = window.DukanERP;
     if (!D) return;
 
+    if (window._daybookLoaded) {
+        console.warn('[dukan-daybook] Already loaded — skip');
+        return;
+    }
+    window._daybookLoaded = true;
+
     let dbMode = 'menu';          // 'menu' | 'report'
     let dbTab = 'all';            // 'all' | 'orders' | 'challans' | 'parties'
     let dbDate = D.today();
@@ -585,79 +591,85 @@
     /* ========================================================================
        100% ZERO-MOUSE KEYBOARD SHORTCUT LAYER FOR DAYBOOK
     ======================================================================== */
-    window.addEventListener('keydown', (e) => {
-        if (!e || !e.key) return;
-        const sec = document.getElementById('dukan-section');
-        if (!sec || sec.style.display === 'none' || D.screen !== 'daybook') return;
+    if (!window._dbKeyBound) {
+        window._dbKeyBound = true;
+        window.addEventListener('keydown', (e) => {
+            if (!e || !e.key) return;
+            const sec = document.getElementById('dukan-section');
+            if (!sec || sec.style.display === 'none' || D.screen !== 'daybook') return;
 
-        const activeId = document.activeElement?.id || '';
-        const inDateBox = (activeId === 'dk-db-date' || activeId === 'dk-db-menu-date');
+            const activeId = document.activeElement?.id || '';
+            const inDateBox = (activeId === 'dk-db-date' || activeId === 'dk-db-menu-date');
 
-        // F2 or Alt+D -> Date Box focus
-        if (e.key === 'F2' || (e.altKey && e.key.toLowerCase() === 'd')) {
-            e.preventDefault(); e.stopImmediatePropagation();
-            D.focusField(dbMode === 'menu' ? 'dk-db-menu-date' : 'dk-db-date');
-            return;
-        }
-
-        // F3 -> Toggle Selected Date <-> All Dates
-        if (e.key === 'F3') {
-            e.preventDefault(); e.stopImmediatePropagation();
-            D.dbToggleAllDates();
-            return;
-        }
-
-        // F4 or Tab (Report mode) -> Cycle tabs
-        if (e.key === 'F4' || (dbMode === 'report' && e.key === 'Tab')) {
-            e.preventDefault(); e.stopImmediatePropagation();
-            if (dbMode === 'menu') D.dbToggleAllDates();
-            else D.dbCycleTab();
-            return;
-        }
-
-        // Alt+P -> Print DayBook Summary
-        if (e.altKey && e.key.toLowerCase() === 'p') {
-            e.preventDefault(); e.stopImmediatePropagation();
-            if (dbMode === 'report') D.printDayBook();
-            return;
-        }
-
-        // Alt+V -> Print Highlighted Order/Challan
-        if (e.altKey && e.key.toLowerCase() === 'v') {
-            e.preventDefault(); e.stopImmediatePropagation();
-            if (dbMode === 'report') D.printSelectedDayBookVoucher();
-            return;
-        }
-
-        // PageDown / PageUp -> Pagination without mouse
-        if (dbMode === 'report' && (e.key === 'PageDown' || e.key === 'PageUp')) {
-            e.preventDefault(); e.stopImmediatePropagation();
-            const ds = buildDayBookDataset();
-            const pg = D.paginate(getFilteredRows(ds), dbPage);
-            const nxt = e.key === 'PageDown' ? Math.min(pg.pages, pg.page + 1) : Math.max(1, pg.page - 1);
-            if (nxt !== pg.page) window.dkDbPage(nxt);
-            return;
-        }
-
-        // Menu Mode single-letter Tally shortcuts (A, O, H, P, T)
-        if (dbMode === 'menu' && !inDateBox && !e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
-            const k = e.key.toLowerCase();
-            if (k === 't') { e.preventDefault(); e.stopImmediatePropagation(); D.dbSetToday(); return; }
-            const map = { a: ['all', 0], o: ['orders', 1], h: ['challans', 2], p: ['parties', 3] };
-            if (map[k]) {
+            // F2 or Alt+D -> Date Box focus
+            if (e.key === 'F2' || (e.altKey && e.key.toLowerCase() === 'd')) {
                 e.preventDefault(); e.stopImmediatePropagation();
-                D.dbOpenTab(map[k][0], map[k][1]);
+                D.focusField(dbMode === 'menu' ? 'dk-db-menu-date' : 'dk-db-date');
+                return;
             }
-        }
-    }, true);
+
+            // F3 -> Toggle Selected Date <-> All Dates
+            if (e.key === 'F3') {
+                e.preventDefault(); e.stopImmediatePropagation();
+                D.dbToggleAllDates();
+                return;
+            }
+
+            // F4 or Tab (Report mode) -> Cycle tabs
+            if (e.key === 'F4' || (dbMode === 'report' && e.key === 'Tab')) {
+                e.preventDefault(); e.stopImmediatePropagation();
+                if (dbMode === 'menu') D.dbToggleAllDates();
+                else D.dbCycleTab();
+                return;
+            }
+
+            // Alt+P -> Print DayBook Summary
+            if (e.altKey && e.key.toLowerCase() === 'p') {
+                e.preventDefault(); e.stopImmediatePropagation();
+                if (dbMode === 'report') D.printDayBook();
+                return;
+            }
+
+            // Alt+V -> Print Highlighted Order/Challan
+            if (e.altKey && e.key.toLowerCase() === 'v') {
+                e.preventDefault(); e.stopImmediatePropagation();
+                if (dbMode === 'report') D.printSelectedDayBookVoucher();
+                return;
+            }
+
+            // PageDown / PageUp -> Pagination without mouse
+            if (dbMode === 'report' && (e.key === 'PageDown' || e.key === 'PageUp')) {
+                e.preventDefault(); e.stopImmediatePropagation();
+                const ds = buildDayBookDataset();
+                const pg = D.paginate(getFilteredRows(ds), dbPage);
+                const nxt = e.key === 'PageDown' ? Math.min(pg.pages, pg.page + 1) : Math.max(1, pg.page - 1);
+                if (nxt !== pg.page) window.dkDbPage(nxt);
+                return;
+            }
+
+            // Menu Mode single-letter Tally shortcuts (A, O, H, P, T)
+            if (dbMode === 'menu' && !inDateBox && !e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
+                const k = e.key.toLowerCase();
+                if (k === 't') { e.preventDefault(); e.stopImmediatePropagation(); D.dbSetToday(); return; }
+                const map = { a: ['all', 0], o: ['orders', 1], h: ['challans', 2], p: ['parties', 3] };
+                if (map[k]) {
+                    e.preventDefault(); e.stopImmediatePropagation();
+                    D.dbOpenTab(map[k][0], map[k][1]);
+                }
+            }
+        }, true);
+    }
 
     // Cloud Sync auto-refresh agar DayBook khula ho
-    const origRefresh = window.triggerActiveSectionRefresh;
-    window.triggerActiveSectionRefresh = () => {
-        if (typeof origRefresh === 'function') origRefresh();
-        const sec = document.getElementById('dukan-section');
-        if (sec && sec.style.display !== 'none' && D.screen === 'daybook') {
-            render();
-        }
-    };
+    if (!window._dbRefreshBound) {
+        window._dbRefreshBound = true;
+        const origRefresh = window.triggerActiveSectionRefresh;
+        window.triggerActiveSectionRefresh = () => {
+            if (typeof origRefresh === 'function') origRefresh();
+            const sec = document.getElementById('dukan-section');
+            if (sec && sec.style.display !== 'none' && D.screen === 'daybook') {
+                render();
+            }
+        };
+    }
 })();
