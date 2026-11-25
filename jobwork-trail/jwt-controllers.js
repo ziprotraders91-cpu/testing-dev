@@ -570,30 +570,32 @@
         if (J.s.stockInwardOpen) setTimeout(() => document.getElementById('jwt-inw-saree')?.focus(), 20);
     };
     window.jwtSaveInward = () => {
-        const dDate = J.toIsoDate(document.getElementById('jwt-inw-date')?.value) || J.getTodayIso();
-        const saree = J.normText(document.getElementById('jwt-inw-saree')?.value);
-        const maker = J.normText(document.getElementById('jwt-inw-maker')?.value, 'DIRECT INWARD');
-        const pcs = J.safeInt(document.getElementById('jwt-inw-pcs')?.value);
-        const stage = document.getElementById('jwt-inw-stage')?.value || 'fresh';
-        if (!saree || pcs <= 0) return J.toast('Saree Design aur Sahi Pcs bharein!', true);
+        return J.safeSave('isSavingInward', () => {
+            const dDate = J.toIsoDate(document.getElementById('jwt-inw-date')?.value) || J.getTodayIso();
+            const saree = J.normText(document.getElementById('jwt-inw-saree')?.value);
+            const maker = J.normText(document.getElementById('jwt-inw-maker')?.value, 'DIRECT INWARD');
+            const pcs = J.safeInt(document.getElementById('jwt-inw-pcs')?.value);
+            const stage = document.getElementById('jwt-inw-stage')?.value || 'fresh';
+            if (!saree || pcs <= 0) return J.toast('Saree Design aur Sahi Pcs bharein!', true);
 
-        const activeG = J.getActiveGodam();
-        const kid = (activeG && activeG !== 'all') ? activeG : 'k_main';
-        const bucket = (stage === 'finished') ? 'finished' : (stage === 'lott' ? 'lott' : 'unfinished');
-        const doneStages = (stage === 'fresh' || stage === 'lott') ? [] : (stage === 'finished' ? ['calender'] : [stage]);
+            const activeG = J.getActiveGodam();
+            const kid = (activeG && activeG !== 'all') ? activeG : 'k_main';
+            const bucket = (stage === 'finished') ? 'finished' : (stage === 'lott' ? 'lott' : 'unfinished');
+            const doneStages = (stage === 'fresh' || stage === 'lott') ? [] : (stage === 'finished' ? ['calender'] : [stage]);
 
-        const sH = J.safeArr(J.getStoreSafe('saree_history')).slice();
-        sH.push({
-            id: J.genId('saree_man'), date: dDate, sareeName: saree, karigerName: maker, kariger: maker,
-            partyName: maker, karkhanaId: kid, type: stage,
-            typeLabel: `Direct Godown Inward (${J.formatTrail(doneStages, bucket)})`,
-            aai: pcs, gai: 0, isOut: false, doneStages, stageBucket: bucket, note: 'Direct Inward', timestamp: Date.now()
+            const sH = J.safeArr(J.getStoreSafe('saree_history')).slice();
+            sH.push({
+                id: J.genId('saree_man'), date: dDate, sareeName: saree, karigerName: maker, kariger: maker,
+                partyName: maker, karkhanaId: kid, type: stage,
+                typeLabel: `Direct Godown Inward (${J.formatTrail(doneStages, bucket)})`,
+                aai: pcs, gai: 0, isOut: false, doneStages, stageBucket: bucket, note: 'Direct Inward', timestamp: Date.now()
+            });
+            J.setStoreSafe('saree_history', sH);
+            J.s.stockInwardOpen = false;
+            J.invalidateAllCaches();
+            J.toast(`✅ ${pcs} Pcs [${saree}] jama ho gayi!`);
+            J.renderScreen();
         });
-        J.setStoreSafe('saree_history', sH);
-        J.s.stockInwardOpen = false;
-        J.invalidateAllCaches();
-        J.toast(`✅ ${pcs} Pcs [${saree}] jama ho gayi!`);
-        J.renderScreen();
     };
 
     window.jwtOpenFinalOut = () => window.jwtGo('final-out-menu');
@@ -628,9 +630,18 @@
     window.jwtEditFinalOut = (entryId) => { J.s.editFoId = entryId; J.renderScreen(); };
     window.jwtCancelFinalOutEdit = () => { J.s.editFoId = null; J.renderScreen(); };
 
-    window.jwtOpenBillNew = () => { J.s.billSelectedWorkerId = null; J.s.billWorkerIdx = 0; window.jwtGo('bills-new'); };
+    window.jwtOpenBillNew = () => {
+        J.s.billSelectedWorkerId = null;
+        J.s.billWorkerIdx = 0;
+        J.s.billAcceptOpen = false;
+        window.jwtGo('bills-new');
+    };
     window.jwtOpenBillsList = (mode) => { J.s.billsListMode = mode || 'pending'; window.jwtGo('bills-list'); };
-    window.jwtOpenBillDetail = (bId) => { J.s.activeBillId = bId; window.jwtGo('bill-detail'); };
+    window.jwtOpenBillDetail = (bId) => {
+        J.s.activeBillId = bId;
+        J.s.billPayAcceptOpen = false;
+        window.jwtGo('bill-detail');
+    };
 
     J.renderBillWorkerList = (q) => {
         const box = document.getElementById('jwt-b-wlist');
@@ -700,34 +711,52 @@
     };
 
     window.jwtSaveNewBill = () => {
-        const dDate = J.toIsoDate(document.getElementById('jwt-b-date')?.value) || J.getTodayIso();
-        const billNo = String(document.getElementById('jwt-b-no')?.value || '-').trim();
-        const pcs = J.safeInt(document.getElementById('jwt-b-pcs')?.value);
-        const amt = J.safeNum(document.getElementById('jwt-b-amt')?.value);
-        const paidNow = Math.max(0, J.safeNum(document.getElementById('jwt-b-paid')?.value, 0));
-        const mode = document.getElementById('jwt-b-mode')?.value || 'Cash';
-        const note = String(document.getElementById('jwt-b-note')?.value || billNo).trim();
-        const worker = J.getSnapshot().workers.find((w) => w.id === J.s.billSelectedWorkerId);
+        return J.safeSave('isSavingBill', () => {
+            const dDate = J.toIsoDate(document.getElementById('jwt-b-date')?.value) || J.getTodayIso();
+            const billNo = String(document.getElementById('jwt-b-no')?.value || '-').trim();
+            const pcs = J.safeInt(document.getElementById('jwt-b-pcs')?.value);
+            const amt = J.safeNum(document.getElementById('jwt-b-amt')?.value);
+            const paidNow = Math.max(0, J.safeNum(document.getElementById('jwt-b-paid')?.value, 0));
+            const mode = document.getElementById('jwt-b-mode')?.value || 'Cash';
+            const note = String(document.getElementById('jwt-b-note')?.value || billNo).trim();
+            const worker = J.getSnapshot().workers.find((w) => w.id === J.s.billSelectedWorkerId);
 
-        if (!worker || amt <= 0) return J.toast('Worker aur Total Bill Amount (₹) bharein!', true);
-        if (paidNow > amt) return J.toast('Paid Amount Total Bill se zyada nahi ho sakta!', true);
+            if (!worker || amt <= 0) return J.toast('Worker aur Total Bill Amount (₹) bharein!', true);
+            if (paidNow > amt) return J.toast('Paid Amount Total Bill se zyada nahi ho sakta!', true);
 
-        const billId = `bill_${Date.now()}`;
-        const bills = J.safeArr(J.getStoreSafe('jw_bills_list')).slice();
-        bills.push({ id: billId, billNo, date: dDate, workerId: worker.id, workerName: worker.name, workType: worker.group, pcs, billAmt: amt, paidAmt: paidNow, note });
-        J.setStoreSafe('jw_bills_list', bills);
+            const snapshot = {
+                bills: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('jw_bills_list')))),
+                pays: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('jw_payments_list'))))
+            };
+            let mutatedStorage = false;
+            try {
+                const billId = J.genId('bill');
+                const bills = J.safeArr(J.getStoreSafe('jw_bills_list')).slice();
+                bills.push({ id: billId, billNo, date: dDate, workerId: worker.id, workerName: worker.name, workType: worker.group, pcs, billAmt: amt, paidAmt: paidNow, note });
+                mutatedStorage = true;
+                J.setStoreSafe('jw_bills_list', bills);
 
-        if (paidNow > 0) {
-            const pays = J.safeArr(J.getStoreSafe('jw_payments_list')).slice();
-            pays.push({ id: `pay_${Date.now()}`, billId, billNo, date: dDate, workerName: worker.name, amount: paidNow, mode, note: note || `Bill #${billNo} Payment` });
-            J.setStoreSafe('jw_payments_list', pays);
-        }
+                if (paidNow > 0) {
+                    const pays = J.safeArr(J.getStoreSafe('jw_payments_list')).slice();
+                    pays.push({ id: J.genId('pay'), billId, billNo, date: dDate, workerName: worker.name, amount: paidNow, mode, note: note || `Bill #${billNo} Payment` });
+                    J.setStoreSafe('jw_payments_list', pays);
+                }
 
-        J.invalidateAllCaches();
-        const isPaidFull = (paidNow >= amt);
-        J.toast(isPaidFull ? `✅ Bill #${billNo} Paid Bill me save ho gaya!` : `✅ Bill #${billNo} Pending Bill me save ho gaya!`);
-        J.s.billsListMode = isPaidFull ? 'paid' : 'pending';
-        J.jwtBackTo('bills-menu');
+                J.s.billAcceptOpen = false;
+                J.invalidateAllCaches();
+                const isPaidFull = (paidNow >= amt);
+                J.toast(isPaidFull ? `✅ Bill #${billNo} Paid Bill me save ho gaya!` : `✅ Bill #${billNo} Pending Bill me save ho gaya!`);
+                J.s.billsListMode = isPaidFull ? 'paid' : 'pending';
+                J.jwtBackTo('bills-menu');
+            } catch (err) {
+                if (mutatedStorage) {
+                    J.setStoreSafe('jw_bills_list', snapshot.bills);
+                    J.setStoreSafe('jw_payments_list', snapshot.pays);
+                    J.invalidateAllCaches();
+                }
+                throw err;
+            }
+        });
     };
 
     window.jwtAskBpAccept = () => {
@@ -758,56 +787,110 @@
     };
 
     window.jwtSaveBillPayment = (billId) => {
-        const dDate = J.toIsoDate(document.getElementById('jwt-bp-date')?.value) || J.getTodayIso();
-        const amt = J.safeNum(document.getElementById('jwt-bp-amt')?.value);
-        const mode = document.getElementById('jwt-bp-mode')?.value || 'Cash';
-        const note = String(document.getElementById('jwt-bp-note')?.value || '').trim();
-        if (amt <= 0) return J.toast('Sahi Amount daalein!', true);
+        return J.safeSave('isSavingBill', () => {
+            const dDate = J.toIsoDate(document.getElementById('jwt-bp-date')?.value) || J.getTodayIso();
+            const amt = J.safeNum(document.getElementById('jwt-bp-amt')?.value);
+            const mode = document.getElementById('jwt-bp-mode')?.value || 'Cash';
+            const note = String(document.getElementById('jwt-bp-note')?.value || '').trim();
+            if (amt <= 0) return J.toast('Sahi Amount daalein!', true);
 
-        let targetBill = null;
-        const bills = J.safeArr(J.getStoreSafe('jw_bills_list')).map((b) => {
-            if (String(b.id) !== String(billId)) return b;
-            targetBill = { ...b, paidAmt: J.safeNum(b.paidAmt) + amt };
-            return targetBill;
+            const snapshot = {
+                bills: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('jw_bills_list')))),
+                pays: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('jw_payments_list'))))
+            };
+
+            let targetBill = null;
+            const bills = J.safeArr(J.getStoreSafe('jw_bills_list')).map((b) => {
+                if (String(b.id) !== String(billId)) return b;
+                targetBill = { ...b, paidAmt: J.safeNum(b.paidAmt) + amt };
+                return targetBill;
+            });
+            if (!targetBill) return;
+
+            let mutatedStorage = false;
+            try {
+                const pays = J.safeArr(J.getStoreSafe('jw_payments_list')).slice();
+                pays.push({ id: J.genId('pay'), billId, billNo: targetBill.billNo || '-', date: dDate, workerName: targetBill.workerName, amount: amt, mode, note });
+                mutatedStorage = true;
+                J.setStoreSafe('jw_bills_list', bills);
+                J.setStoreSafe('jw_payments_list', pays);
+                J.s.billPayAcceptOpen = false;
+                J.invalidateAllCaches();
+                J.toast(`✅ ₹ ${amt.toFixed(2)} Payment save ho gaya!`);
+                J.renderScreen();
+            } catch (err) {
+                if (mutatedStorage) {
+                    J.setStoreSafe('jw_bills_list', snapshot.bills);
+                    J.setStoreSafe('jw_payments_list', snapshot.pays);
+                    J.invalidateAllCaches();
+                }
+                throw err;
+            }
         });
-        if (!targetBill) return;
-
-        const pays = J.safeArr(J.getStoreSafe('jw_payments_list')).slice();
-        pays.push({ id: `pay_${Date.now()}`, billId, billNo: targetBill.billNo || '-', date: dDate, workerName: targetBill.workerName, amount: amt, mode, note });
-        J.setStoreSafe('jw_bills_list', bills);
-        J.setStoreSafe('jw_payments_list', pays);
-        J.invalidateAllCaches();
-        J.toast(`✅ ₹ ${amt.toFixed(2)} Payment save ho gaya!`);
-        J.renderScreen();
     };
 
     window.jwtDeleteBillPay = (payId, billId) => {
-        if (!confirm('Is payment ko delete karein?')) return;
-        const pays = J.safeArr(J.getStoreSafe('jw_payments_list'));
-        const targetP = pays.find((p) => String(p.id) === String(payId));
-        if (!targetP) return;
+        return J.safeSave('isDeleting', () => {
+            const snapshot = {
+                bills: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('jw_bills_list')))),
+                pays: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('jw_payments_list'))))
+            };
+            const pays = J.safeArr(J.getStoreSafe('jw_payments_list'));
+            const targetP = pays.find((p) => String(p.id) === String(payId));
+            if (!targetP) return;
 
-        const bills = J.safeArr(J.getStoreSafe('jw_bills_list')).map((b) => {
-            if (String(b.id) !== String(billId)) return b;
-            return { ...b, paidAmt: Math.max(0, J.safeNum(b.paidAmt) - J.safeNum(targetP.amount)) };
+            const bills = J.safeArr(J.getStoreSafe('jw_bills_list')).map((b) => {
+                if (String(b.id) !== String(billId)) return b;
+                return { ...b, paidAmt: Math.max(0, J.safeNum(b.paidAmt) - J.safeNum(targetP.amount)) };
+            });
+
+            let mutatedStorage = false;
+            try {
+                mutatedStorage = true;
+                J.setStoreSafe('jw_bills_list', bills);
+                J.setStoreSafe('jw_payments_list', pays.filter((p) => String(p.id) !== String(payId)));
+                J.invalidateAllCaches();
+                J.toast('Payment delete ho gaya!');
+                J.renderScreen();
+            } catch (err) {
+                if (mutatedStorage) {
+                    J.setStoreSafe('jw_bills_list', snapshot.bills);
+                    J.setStoreSafe('jw_payments_list', snapshot.pays);
+                    J.invalidateAllCaches();
+                }
+                throw err;
+            }
         });
-        J.setStoreSafe('jw_bills_list', bills);
-        J.setStoreSafe('jw_payments_list', pays.filter((p) => String(p.id) !== String(payId)));
-        J.invalidateAllCaches();
-        J.toast('Payment delete ho gaya!');
-        J.renderScreen();
     };
 
     window.jwtDeleteBill = (billId) => {
-        if (!confirm('Kya is Bill ko delete karna chahte hain?')) return;
-        const bills = J.safeArr(J.getStoreSafe('jw_bills_list')).filter((b) => String(b.id) !== String(billId));
-        const pays = J.safeArr(J.getStoreSafe('jw_payments_list')).filter((p) => String(p.billId) !== String(billId));
-        J.setStoreSafe('jw_bills_list', bills);
-        J.setStoreSafe('jw_payments_list', pays);
-        J.s.activeBillId = null;
-        J.invalidateAllCaches();
-        J.toast('Bill delete ho gaya!');
-        J.jwtBackTo('bills-list');
+        return J.safeSave('isDeleting', () => {
+            const snapshot = {
+                bills: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('jw_bills_list')))),
+                pays: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('jw_payments_list'))))
+            };
+            const bills = J.safeArr(J.getStoreSafe('jw_bills_list')).filter((b) => String(b.id) !== String(billId));
+            const pays = J.safeArr(J.getStoreSafe('jw_payments_list')).filter((p) => String(p.billId) !== String(billId));
+
+            let mutatedStorage = false;
+            try {
+                mutatedStorage = true;
+                J.setStoreSafe('jw_bills_list', bills);
+                J.setStoreSafe('jw_payments_list', pays);
+                J.s.activeBillId = null;
+                J.s.billPayAcceptOpen = false;
+                J.invalidateAllCaches();
+                J.toast('Bill delete ho gaya!');
+                J.jwtBackTo('bills-list');
+            } catch (err) {
+                if (mutatedStorage) {
+                    J.setStoreSafe('jw_bills_list', snapshot.bills);
+                    J.setStoreSafe('jw_payments_list', snapshot.pays);
+                    J.invalidateAllCaches();
+                }
+                throw err;
+            }
+        });
     };
 
     window.jwtFilterList = () => {
@@ -1089,30 +1172,54 @@
     window.openSareeModule = () => J.openModuleAt('owner-menu', 'external');
     J.syncTallyMasterGroups = () => {};
 
-    const origInvalidateJw = window.invalidateJobWorkCache;
-    window.invalidateJobWorkCache = (workerId) => {
-        if (J.s) J.s.cachedSnapshot = null;
-        if (typeof origInvalidateJw === 'function') origInvalidateJw(workerId);
-    };
+    if (!window._jwtCtrlHooksBound) {
+        window._jwtCtrlHooksBound = true;
 
-    const origInvalidateSaree = window.invalidateSareeCalcCache;
-    window.invalidateSareeCalcCache = () => {
-        if (J.s) J.s.cachedSnapshot = null;
-        if (typeof origInvalidateSaree === 'function') origInvalidateSaree();
-    };
+        const origInvalidateJw = window.invalidateJobWorkCache;
+        window.invalidateJobWorkCache = (workerId) => {
+            if (J.s) J.s.cachedSnapshot = null;
+            if (typeof origInvalidateJw === 'function') origInvalidateJw(workerId);
+        };
 
-    const origTriggerRefresh = window.triggerActiveSectionRefresh;
-    window.triggerActiveSectionRefresh = () => {
-        if (J.s) J.s.cachedSnapshot = null;
-        if (typeof origTriggerRefresh === 'function') origTriggerRefresh();
-        const sec = document.getElementById('jw-trail-section');
-        if (sec && sec.style.display !== 'none' && typeof J.renderScreen === 'function') {
-            J.renderScreen();
-        }
-    };
+        const origInvalidateSaree = window.invalidateSareeCalcCache;
+        window.invalidateSareeCalcCache = () => {
+            if (J.s) J.s.cachedSnapshot = null;
+            if (typeof origInvalidateSaree === 'function') origInvalidateSaree();
+        };
 
-    window.removeEventListener('keydown', J.handleKeyDown, true);
-    window.addEventListener('keydown', J.handleKeyDown, true);
+        const origTriggerRefresh = window.triggerActiveSectionRefresh;
+        window.triggerActiveSectionRefresh = () => {
+            if (J.s) J.s.cachedSnapshot = null;
+            if (typeof origTriggerRefresh === 'function') origTriggerRefresh();
+            const sec = document.getElementById('jw-trail-section');
+            if (!sec || sec.style.display === 'none' || typeof J.renderScreen !== 'function') return;
+
+            const s = J.s || {};
+            const isEditingForm = (
+                s.curView === 'jw-voucher' ||
+                s.curView === 'final-out' ||
+                s.curView === 'bills-new' ||
+                Boolean(s.editWorkerRowInfo) ||
+                Boolean(s.editFoId) ||
+                Boolean(s.stockInwardOpen) ||
+                Boolean(s.billAcceptOpen) ||
+                Boolean(s.billPayAcceptOpen) ||
+                Boolean(s.vchAcceptOpen) ||
+                Boolean(s.foAcceptOpen)
+            );
+            const activeTag = document.activeElement?.tagName || '';
+            const isTypingInSection = sec.contains(document.activeElement) && (activeTag === 'INPUT' || activeTag === 'SELECT' || activeTag === 'TEXTAREA');
+            if (!isEditingForm && !isTypingInSection) {
+                J.renderScreen();
+            }
+        };
+    }
+
+    if (window._jwtCtrlKeyHandler) {
+        window.removeEventListener('keydown', window._jwtCtrlKeyHandler, true);
+    }
+    window._jwtCtrlKeyHandler = J.handleKeyDown;
+    window.addEventListener('keydown', window._jwtCtrlKeyHandler, true);
 
     const initJwtControllers = () => {
         if (typeof J.ensureSectionDOM === 'function') J.ensureSectionDOM();
