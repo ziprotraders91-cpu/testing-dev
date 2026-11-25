@@ -6,18 +6,27 @@
    - TallyPrime White & Gold 2-Column Guided Drill-Down Voucher
    - Step-by-Step Right-Pane Pickers:
      Category -> [Sancha Type] -> Mode -> Item Name -> [Sancha Maker] -> Qty
+   - Smart Godown Resolution (Never 'all') + Header Godown Selector
    - Maker-Wise Sancha Stock Isolation & Live Balance Preview
    - Tally-Style "Accept? (Yes / No)" Confirmation Bar at End
    - Zero-Mouse Enter Chaining, Shift+Enter Back & Instant A6 Print
+   Hardening: Save Lock • Snapshot Rollback • Duplicate Guard • PWA Safe UI
 ============================================================================ */
 
 (() => {
     'use strict';
 
+    if (window._stockExpressLoaded) {
+        console.warn('[StockExpress] Already loaded — skip duplicate');
+        return;
+    }
+    window._stockExpressLoaded = true;
+
     let activeCategory = 'bana'; // 'bana' | 'zari' | 'sancha'
     let stockMode = 'purana';     // 'purana' | 'naya'
     let sanchaCat = 'tani';       // 'tani' | 'chukka'
     let lastSavedStockEntry = null;
+    let isSubmittingStock = false;
 
     // Right-Pane Tally Picker State
     let stkPickerMode = 'category'; // 'category' | 'sancha_type' | 'mode' | 'item_purana' | 'item_naya' | 'sancha_person' | 'preview'
@@ -31,6 +40,8 @@
         return [];
     };
 
+    const cloneSnap = (v) => JSON.parse(JSON.stringify(toArray(v)));
+
     const esc = (s) => {
         if (typeof window.sanitizeHTML === 'function') return window.sanitizeHTML(s);
         return String(s || '').replace(/[&<>"']/g, (m) => ({
@@ -43,11 +54,22 @@
         return isNaN(n) || !isFinite(n) ? fallback : n;
     };
 
+    const normName = (s) => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
     const normPerson = (p) => {
         if (typeof window.normalizePerson === 'function') return window.normalizePerson(p);
         const s = String(p ?? '').trim();
         if (!s || s === '-' || s.toLowerCase() === 'undefined' || s.toLowerCase() === 'null') return '';
         return s;
+    };
+
+    const uidSuffix = () => `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+    const setStockStatus = (htmlMsg, isError = false) => {
+        const el = document.getElementById('stk-status-msg');
+        if (!el) return;
+        el.style.color = isError ? '#dc2626' : '#b47d00';
+        el.innerHTML = htmlMsg;
     };
 
     const getToday = () => {
@@ -64,10 +86,39 @@
         return rawDate || new Date().toISOString().split('T')[0];
     };
 
+    const getSafeKarkhanasList = () => {
+        let list = (typeof window.getKarkhanasSafe === 'function')
+            ? window.getKarkhanasSafe()
+            : toArray(window.getStore ? window.getStore('karkhana_list') : []);
+        list = toArray(list).filter((k) => k && k.id && k.name);
+        if (!list.length) {
+            list = [{ id: 'k_main', name: 'Main Godown', isDefault: true }];
+        }
+        return list;
+    };
+
+    // Never return 'all' for stock inward/lookup — always resolve to a concrete Godown ID
     const getActiveTargetGodown = () => {
-        return (typeof window.getActiveKarkhanaId === 'function')
+        const selEl = document.getElementById('stk-godown-select');
+        if (selEl && selEl.value && selEl.value !== 'all') {
+            return selEl.value;
+        }
+        const active = (typeof window.getActiveKarkhanaId === 'function')
             ? window.getActiveKarkhanaId()
             : (window.currentDashboardKarkhanaFilter || 'k_main');
+        const kList = getSafeKarkhanasList();
+        if (active && active !== 'all' && kList.some((k) => String(k.id) === String(active))) {
+            return String(active);
+        }
+        const defK = kList.find((k) => k.isDefault || k.id === 'k_main') || kList[0];
+        return defK ? String(defK.id) : 'k_main';
+    };
+
+    const matchesItemGodown = (itemKid, targetKid) => {
+        const kList = getSafeKarkhanasList();
+        const defId = (kList.find((k) => k.isDefault || k.id === 'k_main') || kList[0])?.id || 'k_main';
+        const cleanItem = (!itemKid || itemKid === 'all') ? defId : String(itemKid);
+        return cleanItem === String(targetKid);
     };
 
     const getStockExpressDatalists = () => {
@@ -76,8 +127,8 @@
         let banaOpts = '';
         rawBana.forEach((b) => {
             const n = b?.name ? b.name.trim() : '';
-            if (n && uB.indexOf(n.toLowerCase()) === -1) {
-                uB.push(n.toLowerCase());
+            if (n && uB.indexOf(normName(n)) === -1) {
+                uB.push(normName(n));
                 banaOpts += `<option value="${esc(n)}">`;
             }
         });
@@ -87,8 +138,8 @@
         let zariOpts = '';
         rawZari.forEach((z) => {
             const n = z?.name ? z.name.trim() : '';
-            if (n && uZ.indexOf(n.toLowerCase()) === -1) {
-                uZ.push(n.toLowerCase());
+            if (n && uZ.indexOf(normName(n)) === -1) {
+                uZ.push(normName(n));
                 zariOpts += `<option value="${esc(n)}">`;
             }
         });
@@ -98,8 +149,8 @@
         let sanchaOpts = '';
         rawSancha.forEach((s) => {
             const n = s?.name ? s.name.trim() : '';
-            if (n && uS.indexOf(n.toLowerCase()) === -1) {
-                uS.push(n.toLowerCase());
+            if (n && uS.indexOf(normName(n)) === -1) {
+                uS.push(normName(n));
                 sanchaOpts += `<option value="${esc(n)}">`;
             }
         });
@@ -109,43 +160,61 @@
 
     const getCategoryStockItems = (cat, subSanchaCat, targetKid, queryText = '') => {
         const q = String(queryText || '').trim().toLowerCase();
-        const seen = new Set();
-        const items = [];
+        const seenCurrent = new Set();
+        const seenOther = new Set();
+        const currentGodownItems = [];
+        const otherGodownItems = [];
 
         if (cat === 'bana') {
             const raw = toArray(window.getStore ? window.getStore('bana_stock') : []);
             raw.forEach((x) => {
                 const nm = x?.name ? x.name.trim() : '';
                 if (!nm) return;
-                const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-                if (!matchKid) return;
-                const key = nm.toLowerCase();
-                if (seen.has(key)) return;
-                seen.add(key);
+                const key = normName(nm);
                 if (q && !key.includes(q)) return;
 
-                const bacha = (typeof window.getBanaItemStats === 'function')
-                    ? safeNum(window.getBanaItemStats(nm, targetKid).bacha)
-                    : safeNum(x.bacha);
-                items.push({ name: nm, bacha });
+                if (matchesItemGodown(x.karkhanaId, targetKid)) {
+                    if (seenCurrent.has(key)) return;
+                    seenCurrent.add(key);
+                    const bacha = (typeof window.getBanaItemStats === 'function')
+                        ? safeNum(window.getBanaItemStats(nm, targetKid).bacha)
+                        : safeNum(x.bacha);
+                    currentGodownItems.push({ name: nm, bacha, isOtherGodown: false });
+                } else {
+                    if (seenOther.has(key)) return;
+                    seenOther.add(key);
+                    otherGodownItems.push({ name: nm, bacha: 0, isOtherGodown: true });
+                }
             });
+            return [
+                ...currentGodownItems,
+                ...otherGodownItems.filter((o) => !seenCurrent.has(normName(o.name)))
+            ];
         } else if (cat === 'zari') {
             const raw = toArray(window.getStore ? window.getStore('zari_stock') : []);
             raw.forEach((x) => {
                 const nm = x?.name ? x.name.trim() : '';
                 if (!nm) return;
-                const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-                if (!matchKid) return;
-                const key = nm.toLowerCase();
-                if (seen.has(key)) return;
-                seen.add(key);
+                const key = normName(nm);
                 if (q && !key.includes(q)) return;
 
-                const bacha = (typeof window.getZariItemStats === 'function')
-                    ? safeNum(window.getZariItemStats(nm, targetKid).bacha)
-                    : safeNum(x.bacha);
-                items.push({ name: nm, bacha });
+                if (matchesItemGodown(x.karkhanaId, targetKid)) {
+                    if (seenCurrent.has(key)) return;
+                    seenCurrent.add(key);
+                    const bacha = (typeof window.getZariItemStats === 'function')
+                        ? safeNum(window.getZariItemStats(nm, targetKid).bacha)
+                        : safeNum(x.bacha);
+                    currentGodownItems.push({ name: nm, bacha, isOtherGodown: false });
+                } else {
+                    if (seenOther.has(key)) return;
+                    seenOther.add(key);
+                    otherGodownItems.push({ name: nm, bacha: 0, isOtherGodown: true });
+                }
             });
+            return [
+                ...currentGodownItems,
+                ...otherGodownItems.filter((o) => !seenCurrent.has(normName(o.name)))
+            ];
         } else if (cat === 'sancha') {
             const subCatLower = String(subSanchaCat || 'tani').toLowerCase();
             if (typeof window.getSanchaUniqueStockRows === 'function') {
@@ -156,38 +225,48 @@
                     if (!nm) return;
                     const hay = `${nm} ${per}`.toLowerCase();
                     if (q && !hay.includes(q)) return;
-                    items.push({ name: nm, person: per, bacha: safeNum(r.bacha) });
+                    const key = `${normName(nm)}___${per.toLowerCase()}`;
+                    seenCurrent.add(key);
+                    currentGodownItems.push({ name: nm, person: per, bacha: safeNum(r.bacha), isOtherGodown: false });
                 });
-            } else {
-                const raw = toArray(window.getStore ? window.getStore('sancha_items') : []);
-                raw.forEach((x) => {
-                    const nm = x?.name ? x.name.trim() : '';
-                    if (!nm) return;
-                    const itemCat = String(x.category || 'tani').toLowerCase();
-                    if (itemCat !== subCatLower) return;
-                    const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-                    if (!matchKid) return;
-                    const per = normPerson(x.person);
-                    const key = `${nm.toLowerCase()}___${per.toLowerCase()}`;
-                    if (seen.has(key)) return;
-                    seen.add(key);
-                    if (q && !`${nm} ${per}`.toLowerCase().includes(q)) return;
+            }
+            // Fallback / also include sancha items from other godowns so spelling stays consistent
+            const raw = toArray(window.getStore ? window.getStore('sancha_items') : []);
+            raw.forEach((x) => {
+                const nm = x?.name ? x.name.trim() : '';
+                if (!nm) return;
+                const itemCat = String(x.category || 'tani').toLowerCase();
+                if (itemCat !== subCatLower) return;
+                const per = normPerson(x.person);
+                if (q && !`${nm} ${per}`.toLowerCase().includes(q)) return;
+                const key = `${normName(nm)}___${per.toLowerCase()}`;
 
+                if (matchesItemGodown(x.karkhanaId, targetKid)) {
+                    if (seenCurrent.has(key)) return;
+                    seenCurrent.add(key);
                     const bacha = (typeof window.getSanchaItemStats === 'function')
                         ? safeNum(window.getSanchaItemStats(null, nm, subCatLower, targetKid, per).bacha)
                         : safeNum(x.bacha);
-                    items.push({ name: nm, person: per, bacha });
-                });
-            }
+                    currentGodownItems.push({ name: nm, person: per, bacha, isOtherGodown: false });
+                } else {
+                    if (seenOther.has(key)) return;
+                    seenOther.add(key);
+                    otherGodownItems.push({ name: nm, person: per, bacha: 0, isOtherGodown: true });
+                }
+            });
+            return [
+                ...currentGodownItems,
+                ...otherGodownItems.filter((o) => !seenCurrent.has(`${normName(o.name)}___${String(o.person || '').toLowerCase()}`))
+            ];
         }
 
-        return items;
+        return currentGodownItems;
     };
 
     const getSanchaMakerPickerItems = (subSanchaCat, targetKid, itemNameFilter = '', queryText = '') => {
         const subCatLower = String(subSanchaCat || 'tani').toLowerCase();
         const q = String(queryText || '').trim().toLowerCase();
-        const itemLower = String(itemNameFilter || '').trim().toLowerCase();
+        const itemLower = normName(itemNameFilter);
 
         const makerMap = new Map();
         const addMaker = (rawName, bachaAdd = 0, hasSelectedItem = false) => {
@@ -207,7 +286,7 @@
             rows.forEach((r) => {
                 const per = normPerson(r.person);
                 if (!per) return;
-                const matchIt = itemLower && String(r.name || '').trim().toLowerCase() === itemLower;
+                const matchIt = itemLower && normName(r.name) === itemLower;
                 if (!itemLower || matchIt) {
                     addMaker(per, safeNum(r.bacha), matchIt);
                 } else {
@@ -218,9 +297,10 @@
             const raw = toArray(window.getStore ? window.getStore('sancha_items') : []);
             raw.forEach((x) => {
                 if (!x) return;
+                if (!matchesItemGodown(x.karkhanaId, targetKid)) return;
                 const per = normPerson(x.person);
                 if (!per) return;
-                const matchIt = itemLower && String(x.name || '').trim().toLowerCase() === itemLower;
+                const matchIt = itemLower && normName(x.name) === itemLower;
                 addMaker(per, matchIt ? safeNum(x.bacha) : 0, matchIt);
             });
         }
@@ -403,6 +483,7 @@
         stockMode = 'purana';
         sanchaCat = 'tani';
         lastSavedStockEntry = null;
+        isSubmittingStock = false;
         stkPickerMode = 'category';
         stkPickerItems = [];
         stkPickerActiveIdx = 0;
@@ -411,9 +492,10 @@
         const today = getToday();
         const { banaOpts } = getStockExpressDatalists();
         const activeKid = getActiveTargetGodown();
-        const godamName = (typeof window.getKarkhanaNameById === 'function')
-            ? window.getKarkhanaNameById(activeKid)
-            : 'Main Godown';
+        const karkhanas = getSafeKarkhanasList();
+        const godownOptionsHtml = karkhanas.map((k) =>
+            `<option value="${esc(k.id)}" ${String(k.id) === String(activeKid) ? 'selected' : ''}>Godown: ${esc(k.name)}</option>`
+        ).join('');
 
         const modalHtml = `
         <div id="master-stock-express-modal" class="stk-overlay">
@@ -423,7 +505,7 @@
                 <div class="stk-header">
                     <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                         <h3 class="stk-title">Stock Inward Voucher</h3>
-                        <span style="font-size:11.5px; background:#ffffff; border:1px solid #d9b86c; padding:3px 9px; border-radius:4px; font-weight:700; color:#92400e;">Godown: ${esc(godamName)}</span>
+                        <select id="stk-godown-select" style="font-size:11.5px; background:#ffffff; border:1px solid #d9b86c; padding:4px 8px; border-radius:4px; font-weight:700; color:#92400e; cursor:pointer; outline:none;">${godownOptionsHtml}</select>
                         <div style="display:flex; gap:5px; margin-left:4px;">
                             <button type="button" id="stk-cat-bana" class="stk-pill-btn active" onclick="switchStockCategory('bana', true)">Bana [F1]</button>
                             <button type="button" id="stk-cat-zari" class="stk-pill-btn" onclick="switchStockCategory('zari', true)">Zari [F2]</button>
@@ -646,12 +728,15 @@
 
             const targetKid = getActiveTargetGodown();
             const list = getCategoryStockItems(activeCategory, sanchaCat, targetKid, queryText);
-            stkPickerItems = list.map(it => ({
-                label: it.name,
-                sub: it.person ? `${it.person} · ${it.bacha.toFixed(2)} Kg` : `${it.bacha.toFixed(2)} Kg`,
-                data: it.name,
-                person: it.person || ''
-            }));
+            stkPickerItems = list.map(it => {
+                const kgTxt = it.isOtherGodown ? 'Other Godown' : `${it.bacha.toFixed(2)} Kg`;
+                return {
+                    label: it.name,
+                    sub: it.person ? `${it.person} · ${kgTxt}` : kgTxt,
+                    data: it.name,
+                    person: it.person || ''
+                };
+            });
             if (stkPickerActiveIdx >= stkPickerItems.length) stkPickerActiveIdx = 0;
             if (stkPickerActiveIdx < 0) stkPickerActiveIdx = 0;
         } else if (mode === 'item_naya') {
@@ -660,12 +745,15 @@
 
             const targetKid = getActiveTargetGodown();
             const list = getCategoryStockItems(activeCategory, sanchaCat, targetKid, queryText);
-            stkPickerItems = list.map(it => ({
-                label: it.name,
-                sub: it.person ? `${it.person} · ${it.bacha.toFixed(2)} Kg` : `${it.bacha.toFixed(2)} Kg`,
-                data: it.name,
-                readOnly: true
-            }));
+            stkPickerItems = list.map(it => {
+                const kgTxt = it.isOtherGodown ? 'Other Godown' : `${it.bacha.toFixed(2)} Kg`;
+                return {
+                    label: it.name,
+                    sub: it.person ? `${it.person} · ${kgTxt}` : kgTxt,
+                    data: it.name,
+                    readOnly: true
+                };
+            });
         } else if (mode === 'sancha_person') {
             if (titleEl) titleEl.textContent = `List of Sancha Makers (${sanchaCat === 'chukka' ? 'Chukka' : 'Tani'})`;
             if (hintEl) hintEl.textContent = '↑↓ + Enter or Type New';
@@ -759,9 +847,9 @@
 
         let curBacha = 0;
         if (nameVal !== '-') {
-            if (activeCategory === 'bana' && !isNew && typeof window.getBanaItemStats === 'function') {
+            if (activeCategory === 'bana' && typeof window.getBanaItemStats === 'function') {
                 curBacha = safeNum(window.getBanaItemStats(nameVal, targetKid).bacha);
-            } else if (activeCategory === 'zari' && !isNew && typeof window.getZariItemStats === 'function') {
+            } else if (activeCategory === 'zari' && typeof window.getZariItemStats === 'function') {
                 curBacha = safeNum(window.getZariItemStats(nameVal, targetKid).bacha);
             } else if (activeCategory === 'sancha' && typeof window.getSanchaItemStats === 'function') {
                 const pNorm = normPerson(personRaw);
@@ -846,6 +934,19 @@
             });
         }
 
+        const godownSel = document.getElementById('stk-godown-select');
+        if (godownSel) {
+            godownSel.addEventListener('change', () => {
+                updateStockExpressLiveStats();
+                if (stkPickerMode === 'preview') {
+                    window.__stkUpdateLivePreview();
+                } else if (stkPickerMode === 'item_purana' || stkPickerMode === 'item_naya' || stkPickerMode === 'sancha_person') {
+                    const el = stockMode === 'naya' ? document.getElementById('stk-new-name') : document.getElementById('stk-item-name');
+                    showStkRightPicker(stkPickerMode, el ? el.value : '');
+                }
+            });
+        }
+
         const catInp = document.getElementById('stk-cat-input');
         const sanchaTypeInp = document.getElementById('stk-sancha-type-input');
         const modeInp = document.getElementById('stk-mode-input');
@@ -867,7 +968,7 @@
                 el.addEventListener('input', () => {
                     stkPickerActiveIdx = 0;
                     showStkRightPicker(modeName, el.value);
-                    if (modeName === 'item_purana') updateStockExpressLiveStats();
+                    updateStockExpressLiveStats();
                 });
             }
             el.addEventListener('keydown', (e) => {
@@ -1058,6 +1159,7 @@
         window.removeEventListener('keydown', handleStockExpressGlobalKeydown, true);
         const modal = document.getElementById('master-stock-express-modal');
         if (modal) modal.remove();
+        isSubmittingStock = false;
     };
 
     /* ========================================================================
@@ -1198,9 +1300,9 @@
         }
 
         let bacha = 0;
-        if (activeCategory === 'bana' && !isNew && typeof window.getBanaItemStats === 'function') {
+        if (activeCategory === 'bana' && typeof window.getBanaItemStats === 'function') {
             bacha = safeNum(window.getBanaItemStats(val, targetKid).bacha);
-        } else if (activeCategory === 'zari' && !isNew && typeof window.getZariItemStats === 'function') {
+        } else if (activeCategory === 'zari' && typeof window.getZariItemStats === 'function') {
             bacha = safeNum(window.getZariItemStats(val, targetKid).bacha);
         } else if (activeCategory === 'sancha' && typeof window.getSanchaItemStats === 'function') {
             const pNorm = normPerson(document.getElementById('stk-sancha-person')?.value);
@@ -1213,214 +1315,247 @@
                 const pNorm = normPerson(document.getElementById('stk-sancha-person')?.value);
                 hint.textContent = pNorm ? `Maker (${pNorm}) ke paas stock` : 'Godown me total stock';
             } else {
-                hint.textContent = isNew ? 'Naya stock item banega' : 'Godown me maujooda stock';
+                hint.textContent = isNew ? (bacha > 0 ? '⚠️ Ye item pehle se maujood hai (Merge hoga)' : 'Naya stock item banega') : 'Godown me maujooda stock';
             }
         }
     };
 
     /* ========================================================================
-       7. ATOMIC SUBMIT (MAKER-WISE SANCHA ISOLATION)
+       7. ATOMIC SUBMIT (LOCK + SNAPSHOT ROLLBACK + MAKER-WISE SANCHA ISOLATION)
        ------------------------------------------------------------------------
     ======================================================================== */
     window.submitMasterStockExpress = () => {
+        if (isSubmittingStock) return;
         showStkAcceptPrompt(false);
 
         const date = document.getElementById('stk-date')?.value || getToday();
         const isNew = (stockMode === 'naya');
 
         const nameInp = isNew ? document.getElementById('stk-new-name') : document.getElementById('stk-item-name');
-        const name = String(nameInp?.value || '').trim();
+        const name = String(nameInp?.value || '').trim().replace(/\s+/g, ' ');
+        const nameKey = normName(name);
         const qty = safeNum(document.getElementById('stk-qty')?.value);
         const note = String(document.getElementById('stk-note')?.value || '').trim();
         const targetKid = getActiveTargetGodown();
 
         if (!name) {
-            alert('Kripya item ka sahi naam likhein!');
+            setStockStatus('⚠️ Kripya item ka sahi naam likhein!', true);
             nameInp?.focus();
             return;
         }
 
         if (qty <= 0) {
-            alert('Kripya sahi wazan (Kg me) bharein!');
+            setStockStatus('⚠️ Kripya sahi wazan (Kg me) bharein!', true);
             document.getElementById('stk-qty')?.focus();
             return;
         }
 
-        const now = Date.now();
-        let savedPerson = '';
+        isSubmittingStock = true;
+        const snapBanaStock = cloneSnap(window.getStore ? window.getStore('bana_stock') : []);
+        const snapBanaHist = cloneSnap(window.getStore ? window.getStore('bana_history') : []);
+        const snapZariStock = cloneSnap(window.getStore ? window.getStore('zari_stock') : []);
+        const snapZariHist = cloneSnap(window.getStore ? window.getStore('zari_history') : []);
+        const snapSanchaItems = cloneSnap(window.getStore ? window.getStore('sancha_items') : []);
+        const snapSanchaHist = cloneSnap(window.getStore ? window.getStore('sancha_history') : []);
 
-        if (activeCategory === 'bana') {
-            const list = toArray(window.getStore ? window.getStore('bana_stock') : []);
-            const item = list.find((x) => {
-                const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-                return x?.name && x.name.toLowerCase() === name.toLowerCase() && matchKid;
-            });
+        try {
+            const now = Date.now();
+            let savedPerson = '';
 
-            if (item) {
-                item.aaya = safeNum((safeNum(item.aaya) + qty).toFixed(2));
-                item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
-                item.date = date;
-            } else {
-                list.push({
-                    id: `bana_${now}`,
-                    date, name, aaya: qty, gaya: 0, bacha: qty,
-                    karkhanaId: targetKid, timestamp: now
-                });
-            }
-            if (typeof window.setStore === 'function') window.setStore('bana_stock', list);
+            if (activeCategory === 'bana') {
+                const list = toArray(window.getStore ? window.getStore('bana_stock') : []);
+                const item = list.find((x) => x?.name && normName(x.name) === nameKey && matchesItemGodown(x.karkhanaId, targetKid));
 
-            const hist = toArray(window.getStore ? window.getStore('bana_history') : []);
-            hist.push({
-                id: `bhist_${now}`,
-                date, name,
-                kariger: note || 'Godown Purchase',
-                type: 'Khareed (Inward)',
-                aaya: qty, gaya: 0,
-                karkhanaId: targetKid,
-                timestamp: now
-            });
-            if (typeof window.setStore === 'function') window.setStore('bana_history', hist);
+                if (item) {
+                    item.aaya = safeNum((safeNum(item.aaya) + qty).toFixed(2));
+                    item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
+                    item.date = date;
+                } else {
+                    list.push({
+                        id: `bana_${uidSuffix()}`,
+                        date, name, aaya: qty, gaya: 0, bacha: qty,
+                        karkhanaId: targetKid, timestamp: now
+                    });
+                }
+                if (typeof window.setStore === 'function') window.setStore('bana_stock', list);
 
-            if (typeof window.renderBanaTable === 'function') window.renderBanaTable();
-
-        } else if (activeCategory === 'zari') {
-            const list = toArray(window.getStore ? window.getStore('zari_stock') : []);
-            const item = list.find((x) => {
-                const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-                return x?.name && x.name.toLowerCase() === name.toLowerCase() && matchKid;
-            });
-
-            if (item) {
-                item.aaya = safeNum((safeNum(item.aaya) + qty).toFixed(2));
-                item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
-                item.date = date;
-            } else {
-                list.push({
-                    id: `zari_${now}`,
-                    date, name, aaya: qty, gaya: 0, bacha: qty,
-                    karkhanaId: targetKid, timestamp: now
-                });
-            }
-            if (typeof window.setStore === 'function') window.setStore('zari_stock', list);
-
-            const hist = toArray(window.getStore ? window.getStore('zari_history') : []);
-            hist.push({
-                id: `zhist_${now}`,
-                date, name,
-                kariger: note || 'Godown Purchase',
-                type: 'Khareed (Inward)',
-                aaya: qty, gaya: 0,
-                karkhanaId: targetKid,
-                timestamp: now
-            });
-            if (typeof window.setStore === 'function') window.setStore('zari_history', hist);
-
-            if (typeof window.renderZariTable === 'function') window.renderZariTable();
-
-        } else if (activeCategory === 'sancha') {
-            const person = normPerson(document.getElementById('stk-sancha-person')?.value);
-            savedPerson = person;
-            const category = sanchaCat;
-            const list = toArray(window.getStore ? window.getStore('sancha_items') : []);
-
-            const item = list.find((x) => {
-                if (!x || !x.name) return false;
-                const cat = x.category || 'tani';
-                const matchK = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-                const xPer = normPerson(x.person).toLowerCase();
-                return x.name.toLowerCase() === name.toLowerCase() &&
-                       cat.toLowerCase() === category.toLowerCase() &&
-                       matchK &&
-                       xPer === person.toLowerCase();
-            });
-
-            if (item) {
-                item.aaya = safeNum((safeNum(item.aaya) + qty).toFixed(2));
-                item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
-                item.person = person || '-';
-                item.date = date;
-            } else {
-                list.push({
-                    id: `sancha_${now}`,
-                    date, name, category,
-                    aaya: qty, gaya: 0, bacha: qty,
-                    person: person || '-',
+                const hist = toArray(window.getStore ? window.getStore('bana_history') : []);
+                hist.push({
+                    id: `bhist_${uidSuffix()}`,
+                    date, name: item ? item.name : name,
+                    kariger: note || 'Godown Purchase',
+                    type: 'Khareed (Inward)',
+                    aaya: qty, gaya: 0,
                     karkhanaId: targetKid,
                     timestamp: now
                 });
+                if (typeof window.setStore === 'function') window.setStore('bana_history', hist);
+
+                if (typeof window.invalidateBanaCalcCache === 'function') window.invalidateBanaCalcCache();
+                if (typeof window.renderBanaTable === 'function') window.renderBanaTable();
+
+            } else if (activeCategory === 'zari') {
+                const list = toArray(window.getStore ? window.getStore('zari_stock') : []);
+                const item = list.find((x) => x?.name && normName(x.name) === nameKey && matchesItemGodown(x.karkhanaId, targetKid));
+
+                if (item) {
+                    item.aaya = safeNum((safeNum(item.aaya) + qty).toFixed(2));
+                    item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
+                    item.date = date;
+                } else {
+                    list.push({
+                        id: `zari_${uidSuffix()}`,
+                        date, name, aaya: qty, gaya: 0, bacha: qty,
+                        karkhanaId: targetKid, timestamp: now
+                    });
+                }
+                if (typeof window.setStore === 'function') window.setStore('zari_stock', list);
+
+                const hist = toArray(window.getStore ? window.getStore('zari_history') : []);
+                hist.push({
+                    id: `zhist_${uidSuffix()}`,
+                    date, name: item ? item.name : name,
+                    kariger: note || 'Godown Purchase',
+                    type: 'Khareed (Inward)',
+                    aaya: qty, gaya: 0,
+                    karkhanaId: targetKid,
+                    timestamp: now
+                });
+                if (typeof window.setStore === 'function') window.setStore('zari_history', hist);
+
+                if (typeof window.invalidateZariCalcCache === 'function') window.invalidateZariCalcCache();
+                if (typeof window.renderZariTable === 'function') window.renderZariTable();
+
+            } else if (activeCategory === 'sancha') {
+                const person = normPerson(document.getElementById('stk-sancha-person')?.value);
+                savedPerson = person;
+                const category = sanchaCat;
+                const list = toArray(window.getStore ? window.getStore('sancha_items') : []);
+
+                const item = list.find((x) => {
+                    if (!x || !x.name) return false;
+                    const cat = x.category || 'tani';
+                    const xPer = normPerson(x.person).toLowerCase();
+                    return normName(x.name) === nameKey &&
+                           cat.toLowerCase() === category.toLowerCase() &&
+                           matchesItemGodown(x.karkhanaId, targetKid) &&
+                           xPer === person.toLowerCase();
+                });
+
+                if (item) {
+                    item.aaya = safeNum((safeNum(item.aaya) + qty).toFixed(2));
+                    item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
+                    item.person = person || '-';
+                    item.date = date;
+                } else {
+                    list.push({
+                        id: `sancha_${uidSuffix()}`,
+                        date, name, category,
+                        aaya: qty, gaya: 0, bacha: qty,
+                        person: person || '-',
+                        karkhanaId: targetKid,
+                        timestamp: now
+                    });
+                }
+                if (typeof window.setStore === 'function') window.setStore('sancha_items', list);
+
+                const hist = toArray(window.getStore ? window.getStore('sancha_history') : []);
+                hist.push({
+                    id: `shist_${uidSuffix()}`,
+                    date, name: item ? item.name : name, category,
+                    person: person || '-',
+                    kariger: person || note || 'Factory Inward',
+                    type: `Khareed / Inward (${category === 'tani' ? 'Tani' : 'Chukka'})`,
+                    aaya: qty, gaya: 0,
+                    karkhanaId: targetKid,
+                    isOpening: false,
+                    timestamp: now
+                });
+                if (typeof window.setStore === 'function') window.setStore('sancha_history', hist);
+
+                if (typeof window.invalidateSanchaCalcCache === 'function') window.invalidateSanchaCalcCache();
+                if (typeof window.renderSanchaTable === 'function') window.renderSanchaTable();
             }
-            if (typeof window.setStore === 'function') window.setStore('sancha_items', list);
 
-            const hist = toArray(window.getStore ? window.getStore('sancha_history') : []);
-            hist.push({
-                id: `shist_${now}`,
-                date, name, category,
-                person: person || '-',
-                kariger: person || note || 'Factory Inward',
-                type: `Khareed / Inward (${category === 'tani' ? 'Tani' : 'Chukka'})`,
-                aaya: qty, gaya: 0,
-                karkhanaId: targetKid,
-                isOpening: false,
-                timestamp: now
-            });
-            if (typeof window.setStore === 'function') window.setStore('sancha_history', hist);
+            lastSavedStockEntry = {
+                category: activeCategory.toUpperCase(),
+                name: name,
+                person: savedPerson,
+                qty: qty,
+                date: date,
+                kGodown: targetKid,
+                note: note || '-'
+            };
 
-            if (typeof window.invalidateSanchaCalcCache === 'function') window.invalidateSanchaCalcCache();
-            if (typeof window.renderSanchaTable === 'function') window.renderSanchaTable();
-        }
+            if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+            if (typeof window.slSyncDashboardCharts === 'function') window.slSyncDashboardCharts();
 
-        lastSavedStockEntry = {
-            category: activeCategory.toUpperCase(),
-            name: name,
-            person: savedPerson,
-            qty: qty,
-            date: date,
-            kGodown: targetKid,
-            note: note || '-'
-        };
+            document.getElementById('stk-qty').value = '';
+            document.getElementById('stk-note').value = '';
+            const pInp = document.getElementById('stk-sancha-person');
+            if (pInp) pInp.value = '';
+            if (nameInp) nameInp.value = '';
+            stkPersonArrowUsed = false;
 
-        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+            const dl = document.getElementById('stk-items-dl');
+            if (dl) {
+                const { banaOpts, zariOpts, sanchaOpts } = getStockExpressDatalists();
+                dl.innerHTML = activeCategory === 'bana' ? banaOpts : (activeCategory === 'zari' ? zariOpts : sanchaOpts);
+            }
 
-        document.getElementById('stk-qty').value = '';
-        document.getElementById('stk-note').value = '';
-        const pInp = document.getElementById('stk-sancha-person');
-        if (pInp) pInp.value = '';
-        if (nameInp) nameInp.value = '';
-        stkPersonArrowUsed = false;
+            const catTitle = activeCategory === 'bana'
+                ? 'Bana'
+                : (activeCategory === 'zari' ? 'Zari' : (sanchaCat === 'chukka' ? 'Sancha (Chukka)' : 'Sancha (Tani)'));
+            setStockStatus(`✅ <strong>${esc(name)}</strong>${savedPerson ? ` (${esc(savedPerson)})` : ''} (+${qty.toFixed(2)} Kg ${catTitle}) stock me jama ho gaya!`);
 
-        const dl = document.getElementById('stk-items-dl');
-        if (dl) {
-            const { banaOpts, zariOpts, sanchaOpts } = getStockExpressDatalists();
-            dl.innerHTML = activeCategory === 'bana' ? banaOpts : (activeCategory === 'zari' ? zariOpts : sanchaOpts);
-        }
+            updateStockExpressLiveStats();
 
-        const catTitle = activeCategory === 'bana'
-            ? 'Bana'
-            : (activeCategory === 'zari' ? 'Zari' : (sanchaCat === 'chukka' ? 'Sancha (Chukka)' : 'Sancha (Tani)'));
-        const statusMsg = document.getElementById('stk-status-msg');
-        if (statusMsg) {
-            statusMsg.innerHTML = `✅ <strong>${esc(name)}</strong>${savedPerson ? ` (${esc(savedPerson)})` : ''} (+${qty.toFixed(2)} Kg ${catTitle}) stock me jama ho gaya!`;
-        }
-
-        updateStockExpressLiveStats();
-
-        if (nameInp) {
-            nameInp.focus();
+            if (nameInp) {
+                nameInp.focus();
+            }
+        } catch (err) {
+            console.error('[StockExpress Save Failed]', err);
+            try {
+                if (typeof window.setStore === 'function') {
+                    window.setStore('bana_stock', snapBanaStock);
+                    window.setStore('bana_history', snapBanaHist);
+                    window.setStore('zari_stock', snapZariStock);
+                    window.setStore('zari_history', snapZariHist);
+                    window.setStore('sancha_items', snapSanchaItems);
+                    window.setStore('sancha_history', snapSanchaHist);
+                }
+                if (typeof window.invalidateBanaCalcCache === 'function') window.invalidateBanaCalcCache();
+                if (typeof window.invalidateZariCalcCache === 'function') window.invalidateZariCalcCache();
+                if (typeof window.invalidateSanchaCalcCache === 'function') window.invalidateSanchaCalcCache();
+            } catch (rbErr) {
+                console.error('[StockExpress Rollback Error]', rbErr);
+            }
+            setStockStatus('❌ Error: Stock save fail hua, data rollback ho gaya!', true);
+        } finally {
+            isSubmittingStock = false;
         }
     };
 
     /* ========================================================================
-       8. A6 THERMAL PRINT SLIP
+       8. A6 THERMAL PRINT SLIP (PWA SAFE)
        ------------------------------------------------------------------------
     ======================================================================== */
     window.printLastSavedStockSlip = () => {
-        if (!lastSavedStockEntry) return alert('Print karne ke liye koi recent entry nahi mili!');
+        if (!lastSavedStockEntry) {
+            console.warn('[StockExpress Print] Print karne ke liye koi recent entry nahi mili.');
+            setStockStatus('⚠️ Print karne ke liye koi recent entry nahi mili!', true);
+            return;
+        }
 
         const t = lastSavedStockEntry;
         const kName = (typeof window.getKarkhanaNameById === 'function') ? window.getKarkhanaNameById(t.kGodown) : 'Main Godown';
 
         const printWindow = window.open('', '', 'width=420,height=550');
-        if (!printWindow) return alert('Popup blocked hai! Kripya browser me popup allow karein.');
+        if (!printWindow) {
+            console.warn('[StockExpress Print] Popup blocked hai! Browser me popup allow karein.');
+            setStockStatus('⚠️ Print Popup blocked hai! Browser me popup allow karein.');
+            return;
+        }
 
         printWindow.document.write(`
             <html>
