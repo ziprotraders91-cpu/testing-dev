@@ -1,10 +1,20 @@
 /* ============================================================================
    SIMPLICITY ERP - UNIFIED CENTRAL MASTER HUB (CREATE / ALTER / DELETE)
    File: core/central-master.js • Supports: Kariger, JobWork, Work Group, Party, Multi-Firm
+   Hardening: Save/Delete Locks • Duplicate Guard • Collision-Free IDs • PWA Safe UI
 ============================================================================ */
 
 (() => {
     'use strict';
+
+    if (window._centralMasterLoaded) {
+        console.warn('[CentralMaster] Already loaded — skip duplicate');
+        return;
+    }
+    window._centralMasterLoaded = true;
+
+    let isSavingTmProfile = false;
+    let isDeletingTmProfile = false;
 
     let tmMode = 'create'; // 'create' | 'alter-list' | 'alter-edit'
     let tmSelectedGroup = 'kariger';
@@ -26,6 +36,8 @@
         const n = parseFloat(String(v).replace(/,/g, '').trim());
         return isNaN(n) || !isFinite(n) ? fb : n;
     };
+
+    const uidSuffix = () => `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 
     const getStore = (k) => {
         try {
@@ -330,7 +342,7 @@
             const refKey = `${karId}_${sh.id}_${cat}`;
             const hist = arr(getStore('sancha_history')).filter((h) => h.refId !== refKey);
             if (itemNew && wazanNew > 0) {
-                hist.push({ id: `shist_${Date.now()}_${cat[0]}`, refId: refKey, date: toIso(getToday()), category: cat, name: itemNew, kariger: kName, type: `Kariger Issue (${label})`, aaya: 0, gaya: wazanNew, karkhanaId: kGodown, timestamp: Date.now() });
+                hist.push({ id: `shist_${uidSuffix()}_${cat[0]}`, refId: refKey, date: toIso(getToday()), category: cat, name: itemNew, kariger: kName, type: `Kariger Issue (${label})`, aaya: 0, gaya: wazanNew, karkhanaId: kGodown, timestamp: Date.now() });
             }
             setStore('sancha_history', hist);
         };
@@ -616,7 +628,7 @@
                             <strong id="tm-accept-title">Accept?</strong>
                             <div style="display:flex; gap:8px; justify-content:center;">
                                 <button type="button" class="tm-btn-yes" id="tm-btn-yes" onclick="tmSaveProfile()">Yes (Y)</button>
-                                <button type="button" class="tm-btn-no" onclick="tmCancelAccept()">No (N)</button>
+                                <button type="button" class="tm-btn-no" id="tm-btn-no" onclick="tmCancelAccept()">No (N)</button>
                             </div>
                         </div>
                     </div>
@@ -644,6 +656,11 @@
                 first.classList.add('selected');
                 tmSelectedGroup = first.dataset.grp;
             }
+        });
+
+        document.getElementById('tm-firm-default')?.addEventListener('focus', () => {
+            const box = document.getElementById('tm-default-picker-box');
+            if (box && tmSelectedGroup === 'dukan_firm') box.style.display = 'block';
         });
 
         document.getElementById('tm-alter-search')?.addEventListener('input', () => { tmAlterActiveIdx = 0; renderAlterList(); });
@@ -855,7 +872,10 @@
     window.tmAskAccept = () => {
         if (tmSheetModalOpen) return window.tmConfirmSheetOverlay();
         const name = (document.getElementById('tm-name')?.value || '').trim();
-        if (!name) { alert('Pehle Name bharein!'); return document.getElementById('tm-name')?.focus(); }
+        if (!name) {
+            setToast('⚠️ Pehle Name bharein!');
+            return document.getElementById('tm-name')?.focus();
+        }
         document.getElementById('tm-accept-title').textContent = tmMode === 'alter-edit' ? 'Update Profile?' : 'Accept & Save?';
         document.getElementById('tm-accept-box').style.display = 'block';
         document.getElementById('tm-btn-yes')?.focus();
@@ -871,104 +891,166 @@
         const address = (document.getElementById('tm-address')?.value || '').trim();
         const gst = (document.getElementById('tm-gst')?.value || '').trim().toUpperCase();
         const dateVal = toIso((document.getElementById('tm-date')?.value || '').trim() || getToday());
-        if (!name) return;
 
-        if (tmSelectedGroup === 'kariger' || editSource === 'kariger_list') {
-            const kId = getSelectedKarkhanaId() || 'k_main';
-            const kName = (typeof window.getKarkhanaNameById === 'function') ? window.getKarkhanaNameById(kId) : (document.getElementById('tm-s-karkhana')?.value || 'Main Godown');
-            const saree = (document.getElementById('tm-s-saree')?.value || '').trim();
-            const list = getKarigers();
-            const targetKarId = editId || `kar_${Date.now()}`;
-            if (editId) {
-                const it = list.find((x) => String(x.id) === String(editId));
-                if (it) Object.assign(it, { name, saree, mobile, mohalla: address, date: dateVal, karkhanaId: kId, karkhanaName: kName });
-            } else list.push({ id: targetKarId, name, saree, mobile, mohalla: address, date: dateVal, karkhanaId: kId, karkhanaName: kName });
-            setStore('kariger_list', list);
-
-            const shs = getSheets(targetKarId);
-            let sh = shs.length ? shs[shs.length - 1] : null;
-            const oldSt = sh ? { taniItem: sh.taniItem, taniWazan: sh.taniWazan, chukkaItem: sh.chukkaItem, chukkaWazan: sh.chukkaWazan } : {};
-            if (!sh) { sh = { id: 'tani_1', title: 'Tani 1', note: '', rows: [] }; shs.push(sh); }
-            Object.assign(sh, {
-                rateBana: numFb(document.getElementById('tm-rate-bana')?.value, 0.311),
-                rateZari: numFb(document.getElementById('tm-rate-zari')?.value, 0.110),
-                rateBani: numFb(document.getElementById('tm-rate-bani')?.value, 240),
-                pichlaBana: numFb(document.getElementById('tm-pichla-bana')?.value, 0),
-                pichlaZari: numFb(document.getElementById('tm-pichla-zari')?.value, 0),
-                pichlaBani: numFb(document.getElementById('tm-pichla-bani')?.value, 0),
-                banaWaste: numFb(document.getElementById('tm-waste-bana')?.value, 0),
-                zariWaste: numFb(document.getElementById('tm-waste-zari')?.value, 0),
-                banaItem: String(document.getElementById('tm-bana-item')?.value || '').trim(),
-                zariItem: String(document.getElementById('tm-zari-item')?.value || '').trim(),
-                taniItem: String(document.getElementById('tm-tani-item')?.value || '').trim(),
-                taniSancha: String(document.getElementById('tm-tani-sancha')?.value || '').trim(),
-                taniWazan: numFb(document.getElementById('tm-tani-wazan')?.value, 0),
-                taniPcs: numFb(document.getElementById('tm-tani-pcs')?.value, 72),
-                chukkaItem: String(document.getElementById('tm-chukka-item')?.value || '').trim(),
-                chukkaSancha: String(document.getElementById('tm-chukka-sancha')?.value || '').trim(),
-                chukkaWazan: numFb(document.getElementById('tm-chukka-wazan')?.value, 0),
-                chukkaPcs: numFb(document.getElementById('tm-chukka-pcs')?.value, 72),
-                colors: [1, 2, 3, 4, 5, 6, 7, 8].map((i) => String(document.getElementById(`tm-color-${i}`)?.value || '').trim()).filter(Boolean),
-                rows: Array.isArray(sh.rows) ? sh.rows : []
-            });
-            syncSanchaStock(targetKarId, name, kId, sh, oldSt);
-            saveSheets(targetKarId, shs);
-        } else if (tmSelectedGroup === 'work_group' || editSource === 'jobwork_groups') {
-            const outst = Boolean(document.getElementById('tm-wg-outstation')?.checked);
-            const groups = getWorkGroups();
-            const key = editId || rawName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-            if (!key || key === 'all' || key === 'kariger') return alert('Yeh naam reserve hai!');
-            if (editId) {
-                const idx = groups.findIndex((g) => g.key === editId);
-                if (idx >= 0) groups[idx] = { ...groups[idx], label: rawName, outstation: outst };
-            } else {
-                if (groups.some((g) => g.key === key)) return alert('Yeh Work Group pehle se maujood hai!');
-                groups.push({ key, label: rawName, outstation: outst });
-            }
-            setStore('jobwork_groups', groups);
-            if (typeof window.invalidateJobWorkCache === 'function') window.invalidateJobWorkCache();
-        } else if (tmSelectedGroup === 'dukan_party' || editSource === 'dukan_parties') {
-            const list = getParties();
-            const obj = { id: editId || `party_${Date.now()}`, name, mob: mobile, gst, address, city: (document.getElementById('tm-city')?.value || '').trim().toUpperCase(), agent: (document.getElementById('tm-agent')?.value || '').trim(), marka: (document.getElementById('tm-marka')?.value || '').trim().toUpperCase(), transport: (document.getElementById('tm-tr')?.value || '').trim(), email: '' };
-            if (editId) { const i = list.findIndex((x) => x.id === editId); if (i >= 0) list[i] = obj; } else list.push(obj);
-            setStore('dukan_parties', list);
-        } else if (tmSelectedGroup === 'dukan_firm' || editSource === 'dukan_firms') {
-            let list = getFirms();
-            const isDef = document.getElementById('tm-firm-default')?.value === 'Yes';
-            if (isDef) list = list.map((f) => ({ ...f, isDefault: false }));
-            const obj = { id: editId || `firm_${Date.now()}`, name, mob: mobile, gst, address, city: (document.getElementById('tm-city')?.value || '').trim().toUpperCase(), agent: (document.getElementById('tm-agent')?.value || '').trim(), email: (document.getElementById('tm-email')?.value || '').trim(), isDefault: isDef };
-            if (editId) { const i = list.findIndex((x) => x.id === editId); if (i >= 0) list[i] = obj; } else list.push(obj);
-            if (list.length && !list.some((f) => f.isDefault)) list[0].isDefault = true;
-            setStore('dukan_firms', list);
-        } else {
-            const jwList = [...getJobWorkers()];
-            const wType = (editId && document.getElementById('tm-jw-grp-select')?.value) || tmSelectedGroup;
-            if (editId) {
-                const it = jwList.find((x) => String(x.id) === String(editId));
-                if (it) Object.assign(it, { name, type: wType, address, mobile, gst, date: dateVal });
-            } else jwList.push({ id: `jw_${Date.now()}`, type: wType, date: dateVal, name, address, mobile, gst });
-            if (typeof window.saveJobWorkers === 'function') window.saveJobWorkers(jwList);
-            else setStore('jobwork_workers', jwList);
-            if (typeof window.invalidateJobWorkCache === 'function') window.invalidateJobWorkCache(editId || null);
-            if (typeof window.updateJobWorkHubBadges === 'function') window.updateJobWorkHubBadges();
+        if (!name) {
+            setToast('⚠️ Pehle Name bharein!');
+            document.getElementById('tm-accept-box').style.display = 'none';
+            document.getElementById('tm-name')?.focus();
+            return;
         }
 
-        if (typeof window.populateKarigersDatalist === 'function') window.populateKarigersDatalist();
-        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-        if (typeof window.slSyncDashboardCharts === 'function') window.slSyncDashboardCharts();
-        updateCountsBar();
-        document.getElementById('tm-accept-box').style.display = 'none';
+        if (isSavingTmProfile) return;
+        isSavingTmProfile = true;
 
-        if (tmMode === 'alter-edit') {
-            window.openTallyAlterModule();
-            setToast(`✅ [${name}] update ho gaya!`);
-        } else {
-            window.openTallyCreateModule(tmSelectedGroup);
-            setToast(`✅ [${name}] save ho gaya! Agli entry karein.`);
+        try {
+            // Duplicate Name Check (sirf naya banate waqt, edit me nahi)
+            if (!editId) {
+                const isKariger = (tmSelectedGroup === 'kariger');
+                const isParty = (tmSelectedGroup === 'dukan_party');
+                const isFirm = (tmSelectedGroup === 'dukan_firm');
+                const isJw = getWorkGroups().some((g) => g.key === tmSelectedGroup);
+
+                if (isKariger && getKarigers().some((k) => String(k.name || '').trim().toUpperCase() === name)) {
+                    document.getElementById('tm-accept-box').style.display = 'none';
+                    setToast('⚠️ Is naam ka Kariger pehle se maujood hai!');
+                    document.getElementById('tm-name')?.focus();
+                    return;
+                }
+                if (isParty && getParties().some((p) => String(p.name || '').trim().toUpperCase() === name)) {
+                    document.getElementById('tm-accept-box').style.display = 'none';
+                    setToast('⚠️ Is naam ka Dukan Party pehle se maujood hai!');
+                    document.getElementById('tm-name')?.focus();
+                    return;
+                }
+                if (isFirm && getFirms().some((f) => String(f.name || '').trim().toUpperCase() === name)) {
+                    document.getElementById('tm-accept-box').style.display = 'none';
+                    setToast('⚠️ Is naam ki Firm pehle se maujood hai!');
+                    document.getElementById('tm-name')?.focus();
+                    return;
+                }
+                if (isJw && getJobWorkers().some((w) => String(w.name || '').trim().toUpperCase() === name)) {
+                    document.getElementById('tm-accept-box').style.display = 'none';
+                    setToast('⚠️ Is naam ka Job Worker pehle se maujood hai!');
+                    document.getElementById('tm-name')?.focus();
+                    return;
+                }
+            }
+
+            if (tmSelectedGroup === 'kariger' || editSource === 'kariger_list') {
+                const kId = getSelectedKarkhanaId() || 'k_main';
+                const kName = (typeof window.getKarkhanaNameById === 'function') ? window.getKarkhanaNameById(kId) : (document.getElementById('tm-s-karkhana')?.value || 'Main Godown');
+                const saree = (document.getElementById('tm-s-saree')?.value || '').trim();
+                const list = getKarigers();
+                const targetKarId = editId || `kar_${uidSuffix()}`;
+                if (editId) {
+                    const it = list.find((x) => String(x.id) === String(editId));
+                    if (it) Object.assign(it, { name, saree, mobile, mohalla: address, date: dateVal, karkhanaId: kId, karkhanaName: kName });
+                } else list.push({ id: targetKarId, name, saree, mobile, mohalla: address, date: dateVal, karkhanaId: kId, karkhanaName: kName });
+                setStore('kariger_list', list);
+
+                const shs = getSheets(targetKarId);
+                let sh = shs.length ? shs[shs.length - 1] : null;
+                const oldSt = sh ? { taniItem: sh.taniItem, taniWazan: sh.taniWazan, chukkaItem: sh.chukkaItem, chukkaWazan: sh.chukkaWazan } : {};
+                if (!sh) { sh = { id: 'tani_1', title: 'Tani 1', note: '', rows: [] }; shs.push(sh); }
+                Object.assign(sh, {
+                    rateBana: numFb(document.getElementById('tm-rate-bana')?.value, 0.311),
+                    rateZari: numFb(document.getElementById('tm-rate-zari')?.value, 0.110),
+                    rateBani: numFb(document.getElementById('tm-rate-bani')?.value, 240),
+                    pichlaBana: numFb(document.getElementById('tm-pichla-bana')?.value, 0),
+                    pichlaZari: numFb(document.getElementById('tm-pichla-zari')?.value, 0),
+                    pichlaBani: numFb(document.getElementById('tm-pichla-bani')?.value, 0),
+                    banaWaste: numFb(document.getElementById('tm-waste-bana')?.value, 0),
+                    zariWaste: numFb(document.getElementById('tm-waste-zari')?.value, 0),
+                    banaItem: String(document.getElementById('tm-bana-item')?.value || '').trim(),
+                    zariItem: String(document.getElementById('tm-zari-item')?.value || '').trim(),
+                    taniItem: String(document.getElementById('tm-tani-item')?.value || '').trim(),
+                    taniSancha: String(document.getElementById('tm-tani-sancha')?.value || '').trim(),
+                    taniWazan: numFb(document.getElementById('tm-tani-wazan')?.value, 0),
+                    taniPcs: numFb(document.getElementById('tm-tani-pcs')?.value, 72),
+                    chukkaItem: String(document.getElementById('tm-chukka-item')?.value || '').trim(),
+                    chukkaSancha: String(document.getElementById('tm-chukka-sancha')?.value || '').trim(),
+                    chukkaWazan: numFb(document.getElementById('tm-chukka-wazan')?.value, 0),
+                    chukkaPcs: numFb(document.getElementById('tm-chukka-pcs')?.value, 72),
+                    colors: [1, 2, 3, 4, 5, 6, 7, 8].map((i) => String(document.getElementById(`tm-color-${i}`)?.value || '').trim()).filter(Boolean),
+                    rows: Array.isArray(sh.rows) ? sh.rows : []
+                });
+                syncSanchaStock(targetKarId, name, kId, sh, oldSt);
+                saveSheets(targetKarId, shs);
+            } else if (tmSelectedGroup === 'work_group' || editSource === 'jobwork_groups') {
+                const outst = Boolean(document.getElementById('tm-wg-outstation')?.checked);
+                const groups = getWorkGroups();
+                const key = editId || rawName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+                if (!key || key === 'all' || key === 'kariger') {
+                    document.getElementById('tm-accept-box').style.display = 'none';
+                    setToast('⚠️ Yeh naam reserve hai!');
+                    document.getElementById('tm-name')?.focus();
+                    return;
+                }
+                if (editId) {
+                    const idx = groups.findIndex((g) => g.key === editId);
+                    if (idx >= 0) groups[idx] = { ...groups[idx], label: rawName, outstation: outst };
+                } else {
+                    if (groups.some((g) => g.key === key)) {
+                        document.getElementById('tm-accept-box').style.display = 'none';
+                        setToast('⚠️ Yeh Work Group pehle se maujood hai!');
+                        document.getElementById('tm-name')?.focus();
+                        return;
+                    }
+                    groups.push({ key, label: rawName, outstation: outst });
+                }
+                setStore('jobwork_groups', groups);
+                if (typeof window.invalidateJobWorkCache === 'function') window.invalidateJobWorkCache();
+            } else if (tmSelectedGroup === 'dukan_party' || editSource === 'dukan_parties') {
+                const list = getParties();
+                const obj = { id: editId || `party_${uidSuffix()}`, name, mob: mobile, gst, address, city: (document.getElementById('tm-city')?.value || '').trim().toUpperCase(), agent: (document.getElementById('tm-agent')?.value || '').trim(), marka: (document.getElementById('tm-marka')?.value || '').trim().toUpperCase(), transport: (document.getElementById('tm-tr')?.value || '').trim(), email: '' };
+                if (editId) { const i = list.findIndex((x) => x.id === editId); if (i >= 0) list[i] = obj; } else list.push(obj);
+                setStore('dukan_parties', list);
+            } else if (tmSelectedGroup === 'dukan_firm' || editSource === 'dukan_firms') {
+                let list = getFirms();
+                const isDef = document.getElementById('tm-firm-default')?.value === 'Yes';
+                if (isDef) list = list.map((f) => ({ ...f, isDefault: false }));
+                const obj = { id: editId || `firm_${uidSuffix()}`, name, mob: mobile, gst, address, city: (document.getElementById('tm-city')?.value || '').trim().toUpperCase(), agent: (document.getElementById('tm-agent')?.value || '').trim(), email: (document.getElementById('tm-email')?.value || '').trim(), isDefault: isDef };
+                if (editId) { const i = list.findIndex((x) => x.id === editId); if (i >= 0) list[i] = obj; } else list.push(obj);
+                if (list.length && !list.some((f) => f.isDefault)) list[0].isDefault = true;
+                setStore('dukan_firms', list);
+            } else {
+                const jwList = [...getJobWorkers()];
+                const wType = (editId && document.getElementById('tm-jw-grp-select')?.value) || tmSelectedGroup;
+                if (editId) {
+                    const it = jwList.find((x) => String(x.id) === String(editId));
+                    if (it) Object.assign(it, { name, type: wType, address, mobile, gst, date: dateVal });
+                } else jwList.push({ id: `jw_${uidSuffix()}`, type: wType, date: dateVal, name, address, mobile, gst });
+                if (typeof window.saveJobWorkers === 'function') window.saveJobWorkers(jwList);
+                else setStore('jobwork_workers', jwList);
+                if (typeof window.invalidateJobWorkCache === 'function') window.invalidateJobWorkCache(editId || null);
+                if (typeof window.updateJobWorkHubBadges === 'function') window.updateJobWorkHubBadges();
+            }
+
+            if (typeof window.populateKarigersDatalist === 'function') window.populateKarigersDatalist();
+            if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+            if (typeof window.slSyncDashboardCharts === 'function') window.slSyncDashboardCharts();
+            updateCountsBar();
+            document.getElementById('tm-accept-box').style.display = 'none';
+
+            if (tmMode === 'alter-edit') {
+                window.openTallyAlterModule();
+                setToast(`✅ [${name}] update ho gaya!`);
+            } else {
+                window.openTallyCreateModule(tmSelectedGroup);
+                setToast(`✅ [${name}] save ho gaya! Agli entry karein.`);
+            }
+        } catch (err) {
+            console.error('[CentralMaster Save Error]', err);
+            document.getElementById('tm-accept-box').style.display = 'none';
+            setToast('❌ Save karne me error aaya!');
+        } finally {
+            isSavingTmProfile = false;
         }
     };
 
     window.tmDeleteProfile = () => {
+        if (isDeletingTmProfile) return;
+
         const id = (document.getElementById('tm-edit-id')?.value || '').trim();
         const src = (document.getElementById('tm-edit-source')?.value || '').trim();
         const nm = (document.getElementById('tm-name')?.value || '').trim();
@@ -976,27 +1058,39 @@
 
         if (src === 'jobwork_workers' && window._JWT?.getSnapshot) {
             const w = window._JWT.getSnapshot().workers.find((x) => x.id === id);
-            if (w && w.pending > 0) return alert(`Is worker ke paas abhi ${w.pending} Pcs pending hai! Pehle wapas lein.`);
+            if (w && w.pending > 0) {
+                setToast(`⚠️ Is worker ke paas abhi ${w.pending} Pcs pending hai! Pehle wapas lein.`);
+                return;
+            }
         }
         if (src === 'jobwork_groups') {
             const wc = getJobWorkers().filter((w) => String(w.type).toLowerCase() === String(id).toLowerCase()).length;
-            if (wc > 0) return alert(`Is group me abhi ${wc} workers hain! Pehle unhe delete/shift karein.`);
+            if (wc > 0) {
+                setToast(`⚠️ Is group me abhi ${wc} workers hain! Pehle unhe delete/shift karein.`);
+                return;
+            }
         }
-        if (!confirm(`Kya aap [${nm}] ko delete karna chahte hain?`)) return;
 
-        if (src === 'kariger_list') setStore('kariger_list', getKarigers().filter((x) => String(x.id) !== id));
-        else if (src === 'jobwork_workers') setStore('jobwork_workers', getJobWorkers().filter((x) => String(x.id) !== id));
-        else if (src === 'jobwork_groups') setStore('jobwork_groups', getWorkGroups().filter((g) => g.key !== id));
-        else if (src === 'dukan_parties') setStore('dukan_parties', getParties().filter((p) => String(p.id) !== id));
-        else if (src === 'dukan_firms') {
-            const next = getFirms().filter((f) => String(f.id) !== id);
-            if (next.length && !next.some((f) => f.isDefault)) next[0].isDefault = true;
-            setStore('dukan_firms', next);
+        isDeletingTmProfile = true;
+        try {
+            if (src === 'kariger_list') setStore('kariger_list', getKarigers().filter((x) => String(x.id) !== id));
+            else if (src === 'jobwork_workers') setStore('jobwork_workers', getJobWorkers().filter((x) => String(x.id) !== id));
+            else if (src === 'jobwork_groups') setStore('jobwork_groups', getWorkGroups().filter((g) => g.key !== id));
+            else if (src === 'dukan_parties') setStore('dukan_parties', getParties().filter((p) => String(p.id) !== id));
+            else if (src === 'dukan_firms') {
+                const next = getFirms().filter((f) => String(f.id) !== id);
+                if (next.length && !next.some((f) => f.isDefault)) next[0].isDefault = true;
+                setStore('dukan_firms', next);
+            }
+            if (typeof window.populateKarigersDatalist === 'function') window.populateKarigersDatalist();
+            if (typeof window.invalidateJobWorkCache === 'function') window.invalidateJobWorkCache(id);
+            if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+            if (typeof window.slSyncDashboardCharts === 'function') window.slSyncDashboardCharts();
+            window.openTallyAlterModule();
+            setToast(`🗑️ [${nm}] delete ho gaya!`);
+        } finally {
+            isDeletingTmProfile = false;
         }
-        if (typeof window.invalidateJobWorkCache === 'function') window.invalidateJobWorkCache(id);
-        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-        window.openTallyAlterModule();
-        setToast(`🗑️ [${nm}] delete ho gaya!`);
     };
 
     window.tmHandleEscKey = () => {
@@ -1012,89 +1106,97 @@
         window.backToDashboard();
     };
 
-    document.addEventListener('keydown', (e) => {
-        const tmSec = document.getElementById('tally-master-section');
-        const active = tmSheetModalOpen || (tmSec && tmSec.style.display !== 'none');
-        if (!active) return;
+    if (!window._tmMasterKeysBound) {
+        window._tmMasterKeysBound = true;
+        document.addEventListener('keydown', (e) => {
+            const tmSec = document.getElementById('tally-master-section');
+            const active = tmSheetModalOpen || (tmSec && tmSec.style.display !== 'none');
+            if (!active) return;
 
-        if (tmSheetModalOpen) {
-            if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); return window.tmCloseSheetOverlay(false); }
-            if (e.ctrlKey && (e.key === 'Enter' || e.key.toLowerCase() === 'a')) { e.preventDefault(); e.stopImmediatePropagation(); return window.tmConfirmSheetOverlay(); }
-            const ovOrder = ['tm-s-karkhana', 'tm-s-saree', 'tm-rate-bana', 'tm-rate-zari', 'tm-rate-bani', 'tm-pichla-bana', 'tm-pichla-zari', 'tm-pichla-bani', 'tm-waste-bana', 'tm-waste-zari', 'tm-bana-item', 'tm-zari-item', 'tm-tani-item', 'tm-tani-sancha', 'tm-tani-wazan', 'tm-tani-pcs', 'tm-chukka-item', 'tm-chukka-sancha', 'tm-chukka-wazan', 'tm-chukka-pcs', 'tm-color-1', 'tm-color-2', 'tm-color-3', 'tm-color-4', 'tm-color-5', 'tm-color-6', 'tm-color-7', 'tm-color-8'];
+            if (tmSheetModalOpen) {
+                if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); return window.tmCloseSheetOverlay(false); }
+                if (e.ctrlKey && (e.key === 'Enter' || e.key.toLowerCase() === 'a')) { e.preventDefault(); e.stopImmediatePropagation(); return window.tmConfirmSheetOverlay(); }
+                const ovOrder = ['tm-s-karkhana', 'tm-s-saree', 'tm-rate-bana', 'tm-rate-zari', 'tm-rate-bani', 'tm-pichla-bana', 'tm-pichla-zari', 'tm-pichla-bani', 'tm-waste-bana', 'tm-waste-zari', 'tm-bana-item', 'tm-zari-item', 'tm-tani-item', 'tm-tani-sancha', 'tm-tani-wazan', 'tm-tani-pcs', 'tm-chukka-item', 'tm-chukka-sancha', 'tm-chukka-wazan', 'tm-chukka-pcs', 'tm-color-1', 'tm-color-2', 'tm-color-3', 'tm-color-4', 'tm-color-5', 'tm-color-6', 'tm-color-7', 'tm-color-8'];
+                const aid = document.activeElement?.id || '';
+                const cIdx = ovOrder.indexOf(aid);
+                const isSide = Boolean(tmActiveSideField && tmActiveSideField === aid && tmSideItems.length > 0);
+                if (isSide && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                    e.preventDefault();
+                    tmSideActiveIdx = e.key === 'ArrowDown' ? (tmSideActiveIdx + 1) % tmSideItems.length : (tmSideActiveIdx <= 0 ? tmSideItems.length - 1 : tmSideActiveIdx - 1);
+                    const opts = Array.from(document.querySelectorAll('#tm-side-list-body .tm-side-opt'));
+                    opts.forEach((o, i) => o.classList.toggle('selected', i === tmSideActiveIdx));
+                    opts[tmSideActiveIdx]?.scrollIntoView({ block: 'nearest' });
+                    return;
+                }
+                if (cIdx >= 0 && e.key === 'Enter') {
+                    e.preventDefault();
+                    if (isSide && tmSideActiveIdx >= 0) return window.tmPickSideItem(tmSideActiveIdx);
+                    const nxt = document.getElementById(ovOrder[e.shiftKey ? cIdx - 1 : cIdx + 1]);
+                    if (nxt) { nxt.focus(); nxt.select?.(); } else if (!e.shiftKey) window.tmConfirmSheetOverlay();
+                }
+                return;
+            }
+
+            if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); return window.tmHandleEscKey(); }
+            if (tmMode === 'alter-list') {
+                const rows = Array.from(document.querySelectorAll('#tm-alter-list .tm-alter-row'));
+                if (!rows.length) return;
+                if (e.key === 'ArrowDown') { e.preventDefault(); rows[tmAlterActiveIdx]?.classList.remove('active'); tmAlterActiveIdx = (tmAlterActiveIdx + 1) % rows.length; rows[tmAlterActiveIdx]?.classList.add('active'); rows[tmAlterActiveIdx]?.scrollIntoView({ block: 'nearest' }); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); rows[tmAlterActiveIdx]?.classList.remove('active'); tmAlterActiveIdx = (tmAlterActiveIdx - 1 + rows.length) % rows.length; rows[tmAlterActiveIdx]?.classList.add('active'); rows[tmAlterActiveIdx]?.scrollIntoView({ block: 'nearest' }); }
+                else if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); rows[tmAlterActiveIdx]?.click(); }
+                return;
+            }
+            if (document.getElementById('tm-accept-box')?.style.display === 'block') {
+                if (e.key === 'Enter' && document.activeElement?.id === 'tm-btn-no') {
+                    e.preventDefault(); e.stopImmediatePropagation(); window.tmCancelAccept();
+                } else if (e.key.toLowerCase() === 'y' || e.key === 'Enter') {
+                    e.preventDefault(); e.stopImmediatePropagation(); window.tmSaveProfile();
+                } else if (e.key.toLowerCase() === 'n') {
+                    e.preventDefault(); e.stopImmediatePropagation(); window.tmCancelAccept();
+                }
+                return;
+            }
+            if (e.key === 'F9' && tmSelectedGroup === 'kariger') { e.preventDefault(); e.stopImmediatePropagation(); return window.tmOpenSheetOverlay(true); }
+            if (e.ctrlKey && (e.key === 'Enter' || e.key.toLowerCase() === 'a')) { e.preventDefault(); e.stopImmediatePropagation(); return window.tmAskAccept(); }
+
             const aid = document.activeElement?.id || '';
-            const cIdx = ovOrder.indexOf(aid);
-            const isSide = Boolean(tmActiveSideField && tmActiveSideField === aid && tmSideItems.length > 0);
-            if (isSide && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+            if (aid === 'tm-group' && tmMode === 'create' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
                 e.preventDefault();
-                tmSideActiveIdx = e.key === 'ArrowDown' ? (tmSideActiveIdx + 1) % tmSideItems.length : (tmSideActiveIdx <= 0 ? tmSideItems.length - 1 : tmSideActiveIdx - 1);
-                const opts = Array.from(document.querySelectorAll('#tm-side-list-body .tm-side-opt'));
-                opts.forEach((o, i) => o.classList.toggle('selected', i === tmSideActiveIdx));
-                opts[tmSideActiveIdx]?.scrollIntoView({ block: 'nearest' });
+                const vis = Array.from(document.querySelectorAll('#tm-group-list .tm-group-opt')).filter((x) => x.style.display !== 'none');
+                if (!vis.length) return;
+                let gi = vis.findIndex((x) => x.classList.contains('selected'));
+                gi = e.key === 'ArrowDown' ? (gi + 1) % vis.length : (gi - 1 + vis.length) % vis.length;
+                vis.forEach((x) => x.classList.remove('selected'));
+                vis[gi].classList.add('selected');
+                tmSelectedGroup = vis[gi].dataset.grp;
+                document.getElementById('tm-group').value = vis[gi].dataset.label;
                 return;
             }
-            if (cIdx >= 0 && e.key === 'Enter') {
-                e.preventDefault();
-                if (isSide && tmSideActiveIdx >= 0) return window.tmPickSideItem(tmSideActiveIdx);
-                const nxt = document.getElementById(ovOrder[e.shiftKey ? cIdx - 1 : cIdx + 1]);
-                if (nxt) { nxt.focus(); nxt.select?.(); } else if (!e.shiftKey) window.tmConfirmSheetOverlay();
+
+            if (aid === 'tm-firm-default') {
+                const box = document.getElementById('tm-default-picker-box'); if (box) box.style.display = 'block';
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    const el = document.getElementById('tm-firm-default');
+                    if (el) el.value = el.value === 'Yes' ? 'No' : 'Yes';
+                    return;
+                }
             }
-            return;
-        }
 
-        if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); return window.tmHandleEscKey(); }
-        if (tmMode === 'alter-list') {
-            const rows = Array.from(document.querySelectorAll('#tm-alter-list .tm-alter-row'));
-            if (!rows.length) return;
-            if (e.key === 'ArrowDown') { e.preventDefault(); rows[tmAlterActiveIdx]?.classList.remove('active'); tmAlterActiveIdx = (tmAlterActiveIdx + 1) % rows.length; rows[tmAlterActiveIdx]?.classList.add('active'); rows[tmAlterActiveIdx]?.scrollIntoView({ block: 'nearest' }); }
-            else if (e.key === 'ArrowUp') { e.preventDefault(); rows[tmAlterActiveIdx]?.classList.remove('active'); tmAlterActiveIdx = (tmAlterActiveIdx - 1 + rows.length) % rows.length; rows[tmAlterActiveIdx]?.classList.add('active'); rows[tmAlterActiveIdx]?.scrollIntoView({ block: 'nearest' }); }
-            else if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); rows[tmAlterActiveIdx]?.click(); }
-            return;
-        }
-        if (document.getElementById('tm-accept-box')?.style.display === 'block') {
-            if (e.key.toLowerCase() === 'y' || e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); window.tmSaveProfile(); }
-            else if (e.key.toLowerCase() === 'n') { e.preventDefault(); e.stopImmediatePropagation(); window.tmCancelAccept(); }
-            return;
-        }
-        if (e.key === 'F9' && tmSelectedGroup === 'kariger') { e.preventDefault(); e.stopImmediatePropagation(); return window.tmOpenSheetOverlay(true); }
-        if (e.ctrlKey && (e.key === 'Enter' || e.key.toLowerCase() === 'a')) { e.preventDefault(); e.stopImmediatePropagation(); return window.tmAskAccept(); }
+            let order = ['tm-name', 'tm-group', 'tm-mobile', 'tm-address', 'tm-date'];
+            if (tmSelectedGroup === 'work_group') order = tmMode === 'create' ? ['tm-name', 'tm-group', 'tm-wg-outstation'] : ['tm-name', 'tm-wg-outstation'];
+            else if (tmSelectedGroup === 'dukan_party') order = tmMode === 'create' ? ['tm-name', 'tm-group', 'tm-mobile', 'tm-address', 'tm-gst', 'tm-city', 'tm-agent', 'tm-marka', 'tm-tr'] : ['tm-name', 'tm-mobile', 'tm-address', 'tm-gst', 'tm-city', 'tm-agent', 'tm-marka', 'tm-tr'];
+            else if (tmSelectedGroup === 'dukan_firm') order = tmMode === 'create' ? ['tm-name', 'tm-group', 'tm-mobile', 'tm-address', 'tm-gst', 'tm-city', 'tm-agent', 'tm-email', 'tm-firm-default'] : ['tm-name', 'tm-mobile', 'tm-address', 'tm-gst', 'tm-city', 'tm-agent', 'tm-email', 'tm-firm-default'];
+            else if (isJwGroup(tmSelectedGroup)) order = tmMode === 'create' ? ['tm-name', 'tm-group', 'tm-mobile', 'tm-address', 'tm-gst', 'tm-date'] : ['tm-name', 'tm-jw-grp-select', 'tm-mobile', 'tm-address', 'tm-gst', 'tm-date'];
+            else if (tmMode === 'alter-edit') order = ['tm-name', 'tm-mobile', 'tm-address', 'tm-date'];
 
-        const aid = document.activeElement?.id || '';
-        if (aid === 'tm-group' && tmMode === 'create' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
-            e.preventDefault();
-            const vis = Array.from(document.querySelectorAll('#tm-group-list .tm-group-opt')).filter((x) => x.style.display !== 'none');
-            if (!vis.length) return;
-            let gi = vis.findIndex((x) => x.classList.contains('selected'));
-            gi = e.key === 'ArrowDown' ? (gi + 1) % vis.length : (gi - 1 + vis.length) % vis.length;
-            vis.forEach((x) => x.classList.remove('selected'));
-            vis[gi].classList.add('selected');
-            tmSelectedGroup = vis[gi].dataset.grp;
-            document.getElementById('tm-group').value = vis[gi].dataset.label;
-            return;
-        }
-
-        if (aid === 'tm-firm-default') {
-            const box = document.getElementById('tm-default-picker-box'); if (box) box.style.display = 'block';
-            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            const ci = order.indexOf(aid);
+            if (ci >= 0 && e.key === 'Enter') {
                 e.preventDefault();
-                const el = document.getElementById('tm-firm-default');
-                if (el) el.value = el.value === 'Yes' ? 'No' : 'Yes';
-                return;
+                if (aid === 'tm-group') return window.tmPickGroup(tmSelectedGroup, true);
+                const nxt = document.getElementById(order[e.shiftKey ? ci - 1 : ci + 1]);
+                if (nxt) { nxt.focus(); nxt.select?.(); } else if (!e.shiftKey) window.tmAskAccept();
             }
-        }
-
-        let order = ['tm-name', 'tm-group', 'tm-mobile', 'tm-address', 'tm-date'];
-        if (tmSelectedGroup === 'work_group') order = tmMode === 'create' ? ['tm-name', 'tm-group', 'tm-wg-outstation'] : ['tm-name', 'tm-wg-outstation'];
-        else if (tmSelectedGroup === 'dukan_party') order = tmMode === 'create' ? ['tm-name', 'tm-group', 'tm-mobile', 'tm-address', 'tm-gst', 'tm-city', 'tm-agent', 'tm-marka', 'tm-tr'] : ['tm-name', 'tm-mobile', 'tm-address', 'tm-gst', 'tm-city', 'tm-agent', 'tm-marka', 'tm-tr'];
-        else if (tmSelectedGroup === 'dukan_firm') order = tmMode === 'create' ? ['tm-name', 'tm-group', 'tm-mobile', 'tm-address', 'tm-gst', 'tm-city', 'tm-agent', 'tm-email', 'tm-firm-default'] : ['tm-name', 'tm-mobile', 'tm-address', 'tm-gst', 'tm-city', 'tm-agent', 'tm-email', 'tm-firm-default'];
-        else if (isJwGroup(tmSelectedGroup)) order = tmMode === 'create' ? ['tm-name', 'tm-group', 'tm-mobile', 'tm-address', 'tm-gst', 'tm-date'] : ['tm-name', 'tm-jw-grp-select', 'tm-mobile', 'tm-address', 'tm-gst', 'tm-date'];
-        else if (tmMode === 'alter-edit') order = ['tm-name', 'tm-mobile', 'tm-address', 'tm-date'];
-
-        const ci = order.indexOf(aid);
-        if (ci >= 0 && e.key === 'Enter') {
-            e.preventDefault();
-            if (aid === 'tm-group') return window.tmPickGroup(tmSelectedGroup, true);
-            const nxt = document.getElementById(order[e.shiftKey ? ci - 1 : ci + 1]);
-            if (nxt) { nxt.focus(); nxt.select?.(); } else if (!e.shiftKey) window.tmAskAccept();
-        }
-    }, true);
+        }, true);
+    }
 })();
