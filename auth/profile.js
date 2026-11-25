@@ -2,9 +2,10 @@
    SIMPLICITY ERP - SECURE USER PROFILE, STORAGE & PER-KARIGER PAYMENT ENGINE
    File: auth/profile.js • Developed by Farhan Jawed
    Features:
-   - Hidden Password + Requires Old Password to set New Password
+   - Hidden Password + Cloud-Verified Old Password to set New Password
    - Live Cloud Storage Usage (KB / MB / GB) via Supabase RPC
    - Auto Per-Kariger Billing Modal (Safe UPI Copy + QR + Bank + WhatsApp)
+   - PWA-Safe UI Errors (Zero alert/prompt) • Double-Click Locks • Cloud-First Save
 ============================================================================ */
 
 (() => {
@@ -23,6 +24,11 @@
         qrImageBase64: '',
         note: 'Upar diye UPI ID ko Copy karke GPay/PhonePe/Paytm se pay karein aur screenshot WhatsApp par bhej dein.'
     });
+
+    // Global Double-Click Locks
+    let isSavingProfile = false;
+    let isOpeningPaymentModal = false;
+    let _profileCloseTimer = null;
 
     /* ========================================================================
        1. INPUT SANITIZATION & HELPERS
@@ -48,6 +54,24 @@
         if (el) {
             el.style.setProperty('display', val, 'important');
         }
+    };
+
+    const setProfileMessage = (msg, isError = true) => {
+        const el = document.getElementById('prof-error-msg');
+        if (!el) {
+            if (msg) console[isError ? 'warn' : 'log']('[Profile]', msg);
+            return;
+        }
+        if (!msg) {
+            el.style.display = 'none';
+            el.textContent = '';
+            return;
+        }
+        el.style.display = 'block';
+        el.style.color = isError ? '#b91c1c' : '#15803d';
+        el.style.background = isError ? '#fef2f2' : '#f0fdf4';
+        el.style.borderColor = isError ? '#fecaca' : '#86efac';
+        el.textContent = msg;
     };
 
     const formatBytes = (bytes) => {
@@ -189,10 +213,31 @@
                 setTimeout(() => { btnEl.textContent = origText; }, 1600);
             }
         };
+        const fallbackCopy = () => {
+            try {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.setAttribute('readonly', '');
+                ta.style.cssText = 'position:fixed; left:-9999px; top:-9999px; opacity:0;';
+                document.body.appendChild(ta);
+                ta.select();
+                ta.setSelectionRange(0, text.length);
+                const ok = document.execCommand('copy');
+                document.body.removeChild(ta);
+                if (ok) {
+                    done();
+                } else {
+                    console.warn('[Profile] Copy text:', text);
+                }
+            } catch (err) {
+                console.warn('[Profile] Copy fallback failed:', text, err);
+            }
+        };
+
         if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text).then(done).catch(() => prompt('Copy karein:', text));
+            navigator.clipboard.writeText(text).then(done).catch(fallbackCopy);
         } else {
-            prompt('Copy karein:', text);
+            fallbackCopy();
         }
     };
 
@@ -251,7 +296,7 @@
                             <label style="font-size:12px; font-weight:700; color:#334155; display:block; margin-bottom:4px;">Email (Optional):</label>
                             <input type="email" id="prof-email" style="width:100%; padding:9px 10px; border:1px solid #cbd5e1; border-radius:7px; font-size:13px; box-sizing:border-box;">
                         </div>
-                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px; margin-bottom:14px;">
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px; margin-bottom:12px;">
                             <div style="font-size:12px; font-weight:800; color:#0f172a; margin-bottom:8px;">🔐 Password Badlein (Optional)</div>
                             <div id="prof-old-pass-wrap" style="margin-bottom:8px;">
                                 <label style="font-size:11.5px; font-weight:700; color:#475569; display:block; margin-bottom:3px;">Purana Password (Sirf badalne ke liye):</label>
@@ -262,6 +307,9 @@
                                 <input type="password" id="prof-pass" autocomplete="new-password" placeholder="Naya password daalein" style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:7px; font-size:13px; box-sizing:border-box;">
                             </div>
                         </div>
+
+                        <div id="prof-error-msg" style="display:none; font-size:12.5px; font-weight:700; padding:9px 11px; border-radius:8px; border:1px solid #fecaca; margin-bottom:12px; line-height:1.4;"></div>
+
                         <div style="display:flex; gap:10px;">
                             <button type="button" id="prof-save-btn" onclick="saveProfileSettings()" style="flex:1; background:#0f766e; color:#fff; border:none; padding:11px; border-radius:8px; font-size:14px; font-weight:800; cursor:pointer;">Settings Save Karein</button>
                             <button type="button" onclick="closeProfileModal()" style="background:#e2e8f0; color:#334155; border:none; padding:11px 16px; border-radius:8px; font-size:13px; font-weight:700; cursor:pointer;">Close</button>
@@ -271,7 +319,32 @@
             </div>`;
             document.body.insertAdjacentHTML('beforeend', modalHtml);
             modal = document.getElementById('profile-modal');
+        } else if (!document.getElementById('prof-error-msg')) {
+            const saveBtn = document.getElementById('prof-save-btn') || modal.querySelector('button[onclick*="saveProfileSettings"]');
+            if (saveBtn && saveBtn.parentElement) {
+                const msgEl = document.createElement('div');
+                msgEl.id = 'prof-error-msg';
+                msgEl.style.cssText = 'display:none; font-size:12.5px; font-weight:700; padding:9px 11px; border-radius:8px; border:1px solid #fecaca; margin-bottom:12px; line-height:1.4;';
+                saveBtn.parentElement.parentElement.insertBefore(msgEl, saveBtn.parentElement);
+            }
         }
+
+        if (!window.__profileEscBound) {
+            window.__profileEscBound = true;
+            document.addEventListener('keydown', (e) => {
+                if (e.key !== 'Escape') return;
+                const payModal = document.getElementById('client-payment-modal');
+                if (payModal) {
+                    closeClientPaymentModal();
+                    return;
+                }
+                const pModal = document.getElementById('profile-modal');
+                if (pModal && pModal.style.display !== 'none') {
+                    closeProfileModal();
+                }
+            });
+        }
+
         return modal;
     };
 
@@ -280,133 +353,143 @@
        ------------------------------------------------------------------------
     ======================================================================== */
     const openClientPaymentModal = async (customUser = null) => {
-        closeClientPaymentModal();
+        if (isOpeningPaymentModal) return;
+        isOpeningPaymentModal = true;
 
-        const activeUid = getActiveUid();
-        const isLoggedInCurrent = Boolean(!customUser && activeUid);
-        const user = customUser || (await getCurrentUserRecord()) || {
-            id: activeUid || 'User',
-            name: 'Karkhana Client',
-            expiryDate: ''
-        };
-        const targetUid = String(user.id || activeUid || '').trim();
+        try {
+            closeClientPaymentModal();
 
-        const loadingHtml = `
-        <div id="client-payment-modal" style="position:fixed; inset:0; background:rgba(15,23,42,0.82); z-index:9999999; display:flex; align-items:center; justify-content:center; padding:12px; box-sizing:border-box;">
-            <div style="background:#fff; padding:24px 30px; border-radius:14px; font-family:sans-serif; font-weight:700; color:#0f172a;">
-                Karigers & Payment Hisab Load Ho Raha Hai... ⏳
-            </div>
-        </div>`;
-        document.body.insertAdjacentHTML('beforeend', loadingHtml);
+            const activeUid = getActiveUid();
+            const isLoggedInCurrent = Boolean(!customUser && activeUid);
+            const user = customUser || (await getCurrentUserRecord()) || {
+                id: activeUid || 'User',
+                name: 'Karkhana Client',
+                expiryDate: ''
+            };
+            const targetUid = String(user.id || activeUid || '').trim();
 
-        const [cfg, karigerCount] = await Promise.all([
-            fetchBillingConfigForClient(),
-            fetchUserMasterKarigerCount(targetUid, isLoggedInCurrent)
-        ]);
-        closeClientPaymentModal();
-
-        const rate = Math.max(0, Number(cfg.perKarigerRate ?? 15) || 0);
-        const minCharge = Math.max(0, Number(cfg.minCharge ?? 0) || 0);
-        const rawBill = karigerCount * rate;
-        const totalAmount = Math.max(minCharge, rawBill);
-
-        const upiId = cfg.upiId || 'farhan275101-2@oksbi';
-        const holder = cfg.accountHolder || 'FARHAN JAWED';
-        const bank = cfg.bankName || 'State Bank of India';
-        const acNo = cfg.accountNumber || '';
-        const ifsc = cfg.ifscCode || '';
-        const waNo = (cfg.whatsappNo || '917065572191').replace(/[^0-9]/g, '');
-
-        // Static UPI QR without &am= so personal UPI IDs don't hit NPCI intent/amount risk block
-        const staticUpiUri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(holder)}&cu=INR`;
-        const qrSrc = cfg.qrImageBase64
-            ? cfg.qrImageBase64
-            : `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(staticUpiUri)}`;
-
-        const waMsg = `Hello Farhan Bhai, maine Simplicity ERP ka payment kar diya hai.\n` +
-            `• User ID: ${targetUid || '-'}\n` +
-            `• Naam: ${user.name || '-'}\n` +
-            `• Master Sheet Karigers: ${karigerCount}\n` +
-            `• Rate: ₹${rate} / Kariger\n` +
-            `• Total Payment: ₹${totalAmount}\n` +
-            `(Screenshot saath bhej raha hoon, kripya validity badha dein)`;
-
-        const html = `
-        <div id="client-payment-modal" style="position:fixed; inset:0; background:rgba(15,23,42,0.82); z-index:9999999; display:flex; align-items:center; justify-content:center; padding:12px; box-sizing:border-box;">
-            <div style="background:#ffffff; width:100%; max-width:420px; border-radius:16px; overflow:hidden; box-shadow:0 25px 50px rgba(0,0,0,0.45); font-family:sans-serif; max-height:95vh; display:flex; flex-direction:column;">
-                <div style="background:#0f172a; color:#ffffff; padding:14px 18px; display:flex; justify-content:space-between; align-items:center;">
-                    <div>
-                        <h3 style="margin:0; font-size:16px; font-weight:800;">💳 Plan Payment (Kariger Hisab)</h3>
-                        <div style="font-size:11.5px; color:#94a3b8;">User ID: ${esc(targetUid || '-')} • Rate: ₹${esc(rate)} / Kariger</div>
-                    </div>
-                    <button type="button" onclick="closeClientPaymentModal()" style="background:transparent; border:none; color:#fff; font-size:24px; cursor:pointer; line-height:1;">&times;</button>
+            const loadingHtml = `
+            <div id="client-payment-modal" style="position:fixed; inset:0; background:rgba(15,23,42,0.82); z-index:9999999; display:flex; align-items:center; justify-content:center; padding:12px; box-sizing:border-box;">
+                <div style="background:#fff; padding:24px 30px; border-radius:14px; font-family:sans-serif; font-weight:700; color:#0f172a;">
+                    Karigers & Payment Hisab Load Ho Raha Hai... ⏳
                 </div>
+            </div>`;
+            document.body.insertAdjacentHTML('beforeend', loadingHtml);
 
-                <div style="padding:16px 18px; overflow-y:auto; flex:1; text-align:center;">
-                    <!-- Per-Kariger Bill Calculation Card -->
-                    <div style="background:#f0fdf4; border:1.5px solid #86efac; border-radius:12px; padding:10px 14px; margin-bottom:12px; text-align:left;">
-                        <div style="display:flex; justify-content:space-between; font-size:12.5px; color:#166534; margin-bottom:4px;">
-                            <span>🧵 Master Sheet Karigers:</span>
-                            <strong>${karigerCount} Kariger</strong>
+            const [cfg, karigerCount] = await Promise.all([
+                fetchBillingConfigForClient(),
+                fetchUserMasterKarigerCount(targetUid, isLoggedInCurrent)
+            ]);
+            closeClientPaymentModal();
+
+            const rate = Math.max(0, Number(cfg.perKarigerRate ?? 15) || 0);
+            const minCharge = Math.max(0, Number(cfg.minCharge ?? 0) || 0);
+            const rawBill = karigerCount * rate;
+            const totalAmount = Math.max(minCharge, rawBill);
+
+            const upiId = cfg.upiId || 'farhan275101-2@oksbi';
+            const holder = cfg.accountHolder || 'FARHAN JAWED';
+            const bank = cfg.bankName || 'State Bank of India';
+            const acNo = cfg.accountNumber || '';
+            const ifsc = cfg.ifscCode || '';
+            const waNo = (cfg.whatsappNo || '917065572191').replace(/[^0-9]/g, '');
+
+            // Static UPI QR without &am= so personal UPI IDs don't hit NPCI intent/amount risk block
+            const staticUpiUri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(holder)}&cu=INR`;
+            const qrSrc = cfg.qrImageBase64
+                ? cfg.qrImageBase64
+                : `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(staticUpiUri)}`;
+
+            const waMsg = `Hello Farhan Bhai, maine Simplicity ERP ka payment kar diya hai.\n` +
+                `• User ID: ${targetUid || '-'}\n` +
+                `• Naam: ${user.name || '-'}\n` +
+                `• Master Sheet Karigers: ${karigerCount}\n` +
+                `• Rate: ₹${rate} / Kariger\n` +
+                `• Total Payment: ₹${totalAmount}\n` +
+                `(Screenshot saath bhej raha hoon, kripya validity badha dein)`;
+
+            const html = `
+            <div id="client-payment-modal" style="position:fixed; inset:0; background:rgba(15,23,42,0.82); z-index:9999999; display:flex; align-items:center; justify-content:center; padding:12px; box-sizing:border-box;">
+                <div style="background:#ffffff; width:100%; max-width:420px; border-radius:16px; overflow:hidden; box-shadow:0 25px 50px rgba(0,0,0,0.45); font-family:sans-serif; max-height:95vh; display:flex; flex-direction:column;">
+                    <div style="background:#0f172a; color:#ffffff; padding:14px 18px; display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <h3 style="margin:0; font-size:16px; font-weight:800;">💳 Plan Payment (Kariger Hisab)</h3>
+                            <div style="font-size:11.5px; color:#94a3b8;">User ID: ${esc(targetUid || '-')} • Rate: ₹${esc(rate)} / Kariger</div>
                         </div>
-                        <div style="display:flex; justify-content:space-between; font-size:12.5px; color:#166534; margin-bottom:6px;">
-                            <span>💵 Rate (1 Kariger):</span>
-                            <strong>₹ ${esc(rate)}</strong>
-                        </div>
-                        <div style="border-top:1px dashed #86efac; padding-top:6px; display:flex; justify-content:space-between; align-items:center;">
-                            <span style="font-size:13px; font-weight:800; color:#0f172a;">Kul Payment (${karigerCount} × ₹${rate}):</span>
-                            <strong style="color:#0f766e; font-size:20px; font-weight:900;">₹ ${totalAmount.toLocaleString('en-IN')}</strong>
-                        </div>
-                        ${minCharge > rawBill ? `<div style="font-size:10.5px; color:#64748b; margin-top:3px;">*(Minimum bill ₹${minCharge} applicable)*</div>` : ''}
+                        <button type="button" onclick="closeClientPaymentModal()" style="background:transparent; border:none; color:#fff; font-size:24px; cursor:pointer; line-height:1;">&times;</button>
                     </div>
 
-                    <!-- Safe Copy UPI + QR Box -->
-                    <div style="background:#f8fafc; border:1.5px solid #cbd5e1; border-radius:12px; padding:14px; margin-bottom:12px;">
-                        <div style="font-size:12px; font-weight:800; color:#0f172a; margin-bottom:8px;">QR Scan Karein Ya UPI ID Copy Karke Pay Karein</div>
-                        <img src="${qrSrc}" alt="Payment QR Code" style="width:180px; height:180px; object-fit:contain; border-radius:10px; border:1px solid #cbd5e1; background:#ffffff; padding:6px;">
-
-                        <div style="margin-top:10px; background:#eff6ff; border:1.5px solid #93c5fd; border-radius:10px; padding:10px;">
-                            <div style="font-size:11px; font-weight:700; color:#1e3a8a; margin-bottom:4px;">UPI ID (Sabse Aasaan — Kabhi Fail Nahi Hoga):</div>
-                            <div style="font-size:14px; font-weight:900; color:#1d4ed8; word-break:break-all; margin-bottom:8px;">${esc(upiId)}</div>
-                            <button type="button" id="cl-copy-upi-btn" style="width:100%; background:#2563eb; color:#fff; border:none; padding:9px; border-radius:7px; font-size:13px; font-weight:800; cursor:pointer;">📋 Copy UPI ID (${esc(upiId)})</button>
+                    <div style="padding:16px 18px; overflow-y:auto; flex:1; text-align:center;">
+                        <!-- Per-Kariger Bill Calculation Card -->
+                        <div style="background:#f0fdf4; border:1.5px solid #86efac; border-radius:12px; padding:10px 14px; margin-bottom:12px; text-align:left;">
+                            <div style="display:flex; justify-content:space-between; font-size:12.5px; color:#166534; margin-bottom:4px;">
+                                <span>🧵 Master Sheet Karigers:</span>
+                                <strong>${karigerCount} Kariger</strong>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; font-size:12.5px; color:#166534; margin-bottom:6px;">
+                                <span>💵 Rate (1 Kariger):</span>
+                                <strong>₹ ${esc(rate)}</strong>
+                            </div>
+                            <div style="border-top:1px dashed #86efac; padding-top:6px; display:flex; justify-content:space-between; align-items:center;">
+                                <span style="font-size:13px; font-weight:800; color:#0f172a;">Kul Payment (${karigerCount} × ₹${rate}):</span>
+                                <strong style="color:#0f766e; font-size:20px; font-weight:900;">₹ ${totalAmount.toLocaleString('en-IN')}</strong>
+                            </div>
+                            ${minCharge > rawBill ? `<div style="font-size:10.5px; color:#64748b; margin-top:3px;">*(Minimum bill ₹${minCharge} applicable)*</div>` : ''}
                         </div>
 
-                        <div style="font-size:11px; color:#475569; margin-top:8px; line-height:1.4; text-align:left; background:#fffbeb; border:1px solid #fde68a; padding:7px 9px; border-radius:7px;">
-                            💡 <strong>Payment Tarika:</strong> Upar <strong>Copy UPI ID</strong> dabayein → GPay / PhonePe / Paytm me <em>"Pay UPI ID"</em> me paste karke <strong>₹${totalAmount.toLocaleString('en-IN')}</strong> bhejein (ya dusre phone se QR scan karein).
+                        <!-- Safe Copy UPI + QR Box -->
+                        <div style="background:#f8fafc; border:1.5px solid #cbd5e1; border-radius:12px; padding:14px; margin-bottom:12px;">
+                            <div style="font-size:12px; font-weight:800; color:#0f172a; margin-bottom:8px;">QR Scan Karein Ya UPI ID Copy Karke Pay Karein</div>
+                            <img src="${qrSrc}" alt="Payment QR Code" style="width:180px; height:180px; object-fit:contain; border-radius:10px; border:1px solid #cbd5e1; background:#ffffff; padding:6px;">
+
+                            <div style="margin-top:10px; background:#eff6ff; border:1.5px solid #93c5fd; border-radius:10px; padding:10px;">
+                                <div style="font-size:11px; font-weight:700; color:#1e3a8a; margin-bottom:4px;">UPI ID (Sabse Aasaan — Kabhi Fail Nahi Hoga):</div>
+                                <div style="font-size:14px; font-weight:900; color:#1d4ed8; word-break:break-all; margin-bottom:8px;">${esc(upiId)}</div>
+                                <button type="button" id="cl-copy-upi-btn" style="width:100%; background:#2563eb; color:#fff; border:none; padding:9px; border-radius:7px; font-size:13px; font-weight:800; cursor:pointer;">📋 Copy UPI ID (${esc(upiId)})</button>
+                            </div>
+
+                            <div style="font-size:11px; color:#475569; margin-top:8px; line-height:1.4; text-align:left; background:#fffbeb; border:1px solid #fde68a; padding:7px 9px; border-radius:7px;">
+                                💡 <strong>Payment Tarika:</strong> Upar <strong>Copy UPI ID</strong> dabayein → GPay / PhonePe / Paytm me <em>"Pay UPI ID"</em> me paste karke <strong>₹${totalAmount.toLocaleString('en-IN')}</strong> bhejein (ya dusre phone se QR scan karein).
+                            </div>
                         </div>
-                    </div>
 
-                    <!-- Bank Details Box -->
-                    <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; text-align:left; font-size:12px; margin-bottom:12px;">
-                        <div style="font-weight:800; color:#0f172a; margin-bottom:6px;">🏦 Bank Account Details:</div>
-                        <div style="margin-bottom:3px;"><strong>Name:</strong> ${esc(holder)}</div>
-                        <div style="margin-bottom:3px;"><strong>Bank:</strong> ${esc(bank)}</div>
-                        ${acNo ? `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px;"><span><strong>A/C No:</strong> ${esc(acNo)}</span><button type="button" id="cl-copy-ac-btn" style="background:#e2e8f0; border:none; border-radius:4px; padding:2px 7px; font-size:11px; font-weight:700; cursor:pointer;">Copy</button></div>` : ''}
-                        ${ifsc ? `<div><strong>IFSC:</strong> ${esc(ifsc)}</div>` : ''}
-                    </div>
+                        <!-- Bank Details Box -->
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; text-align:left; font-size:12px; margin-bottom:12px;">
+                            <div style="font-weight:800; color:#0f172a; margin-bottom:6px;">🏦 Bank Account Details:</div>
+                            <div style="margin-bottom:3px;"><strong>Name:</strong> ${esc(holder)}</div>
+                            <div style="margin-bottom:3px;"><strong>Bank:</strong> ${esc(bank)}</div>
+                            ${acNo ? `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px;"><span><strong>A/C No:</strong> ${esc(acNo)}</span><button type="button" id="cl-copy-ac-btn" style="background:#e2e8f0; border:none; border-radius:4px; padding:2px 7px; font-size:11px; font-weight:700; cursor:pointer;">Copy</button></div>` : ''}
+                            ${ifsc ? `<div><strong>IFSC:</strong> ${esc(ifsc)}</div>` : ''}
+                        </div>
 
-                    <div style="font-size:11.5px; color:#475569; margin-bottom:10px; font-weight:600;">
-                        ${esc(cfg.note || 'Payment karne ke baad screenshot WhatsApp par bhej dein.')}
-                    </div>
+                        <div style="font-size:11.5px; color:#475569; margin-bottom:10px; font-weight:600;">
+                            ${esc(cfg.note || 'Payment karne ke baad screenshot WhatsApp par bhej dein.')}
+                        </div>
 
-                    <a href="https://wa.me/${waNo}?text=${encodeURIComponent(waMsg)}" target="_blank" style="display:block; width:100%; box-sizing:border-box; background:#16a34a; color:#ffffff; padding:11px; border-radius:9px; font-size:13.5px; font-weight:800; text-decoration:none; margin-bottom:8px;">
-                        📲 Payment Screenshot WhatsApp Karein
-                    </a>
-                    <button type="button" onclick="closeClientPaymentModal()" style="width:100%; background:#e2e8f0; color:#334155; border:none; padding:9px; border-radius:8px; font-size:12.5px; font-weight:700; cursor:pointer;">Close</button>
+                        <a href="https://wa.me/${waNo}?text=${encodeURIComponent(waMsg)}" target="_blank" style="display:block; width:100%; box-sizing:border-box; background:#16a34a; color:#ffffff; padding:11px; border-radius:9px; font-size:13.5px; font-weight:800; text-decoration:none; margin-bottom:8px;">
+                            📲 Payment Screenshot WhatsApp Karein
+                        </a>
+                        <button type="button" onclick="closeClientPaymentModal()" style="width:100%; background:#e2e8f0; color:#334155; border:none; padding:9px; border-radius:8px; font-size:12.5px; font-weight:700; cursor:pointer;">Close</button>
+                    </div>
                 </div>
-            </div>
-        </div>`;
+            </div>`;
 
-        document.body.insertAdjacentHTML('beforeend', html);
+            document.body.insertAdjacentHTML('beforeend', html);
 
-        const copyUpiBtn = document.getElementById('cl-copy-upi-btn');
-        if (copyUpiBtn) {
-            const origLabel = copyUpiBtn.textContent;
-            copyUpiBtn.onclick = () => copyTextWithFeedback(upiId, copyUpiBtn, origLabel);
-        }
-        const copyAcBtn = document.getElementById('cl-copy-ac-btn');
-        if (copyAcBtn && acNo) {
-            copyAcBtn.onclick = () => copyTextWithFeedback(acNo, copyAcBtn, 'Copy');
+            const copyUpiBtn = document.getElementById('cl-copy-upi-btn');
+            if (copyUpiBtn) {
+                const origLabel = copyUpiBtn.textContent;
+                copyUpiBtn.onclick = () => copyTextWithFeedback(upiId, copyUpiBtn, origLabel);
+            }
+            const copyAcBtn = document.getElementById('cl-copy-ac-btn');
+            if (copyAcBtn && acNo) {
+                copyAcBtn.onclick = () => copyTextWithFeedback(acNo, copyAcBtn, 'Copy');
+            }
+        } catch (err) {
+            console.error('[ProfileEngine:openClientPaymentModal] Error:', err);
+            closeClientPaymentModal();
+        } finally {
+            isOpeningPaymentModal = false;
         }
     };
 
@@ -420,19 +503,29 @@
        ------------------------------------------------------------------------
     ======================================================================== */
     const openProfileModal = async () => {
+        clearTimeout(_profileCloseTimer);
         try {
             const uid = getActiveUid();
             if (!uid) {
-                alert('Pehle kripya login karein!');
+                console.warn('[Profile] Pehle kripya login karein!');
+                const loginErr = document.getElementById('login-error');
+                if (loginErr) {
+                    loginErr.textContent = 'Pehle kripya login karein!';
+                    loginErr.style.color = '#dc2626';
+                    loginErr.style.display = 'block';
+                }
                 return;
             }
             window.currentUserId = uid;
 
             ensureProfileModalAndFields();
+            setProfileMessage('');
 
             const user = await getCurrentUserRecord();
             if (!user) {
-                alert('User profile fetch nahi ho saki. Kripya login check karein!');
+                console.warn('[Profile] User profile fetch nahi ho saki.');
+                _setDisplay('profile-modal', 'flex');
+                setProfileMessage('⚠️ User profile fetch nahi ho saki. Kripya connection ya login check karein!', true);
                 return;
             }
 
@@ -494,26 +587,35 @@
             _setDisplay('profile-modal', 'flex');
         } catch (err) {
             console.error('[ProfileEngine:openProfileModal] Error:', err);
-            alert('Profile open karne me takneeki khata aayi.');
+            ensureProfileModalAndFields();
+            _setDisplay('profile-modal', 'flex');
+            setProfileMessage('❌ Profile open karne me takneeki khata aayi.', true);
         }
     };
 
     const closeProfileModal = () => {
+        clearTimeout(_profileCloseTimer);
         const oldPassEl = document.getElementById('prof-old-pass');
         const passEl = document.getElementById('prof-pass');
         if (oldPassEl) oldPassEl.value = '';
         if (passEl) passEl.value = '';
+        setProfileMessage('');
         _setDisplay('profile-modal', 'none');
     };
 
     /* ========================================================================
-       5. SAVE PROFILE SETTINGS (WITH OLD PASSWORD CHECK)
+       5. SAVE PROFILE SETTINGS (CLOUD-FIRST + OLD PASSWORD CLOUD VERIFY)
        ------------------------------------------------------------------------
     ======================================================================== */
     const saveProfileSettings = async () => {
+        if (isSavingProfile) return;
+
+        ensureProfileModalAndFields();
+        setProfileMessage('');
+
         const uid = getActiveUid();
         if (!uid) {
-            alert('Aap logged in nahi hain!');
+            setProfileMessage('⚠️ Aap logged in nahi hain!', true);
             return;
         }
 
@@ -533,30 +635,31 @@
         const email = sanitizeText(emailEl?.value).toLowerCase();
 
         if (!name || name.length < 2) {
-            alert('Kripya valid naam darj karein (kam se kam 2 akshar)!');
+            setProfileMessage('⚠️ Kripya valid naam darj karein (kam se kam 2 akshar)!', true);
             if (nameEl) nameEl.focus();
             return;
         }
 
         if (mobile.length !== 10) {
-            alert('Kripya 10-digit ka valid mobile number darj karein!');
+            setProfileMessage('⚠️ Kripya 10-digit ka valid mobile number darj karein!', true);
             if (mobEl) mobEl.focus();
             return;
         }
 
         if (pin.length !== 4) {
-            alert('Security PIN strictly 4-digits ka hona chahiye!');
+            setProfileMessage('⚠️ Security PIN strictly 4-digits ka hona chahiye!', true);
             if (pinEl) pinEl.focus();
             return;
         }
 
         const cleanNameLower = name.toLowerCase().replace(/\s+/g, '');
         if (String(uid).toLowerCase() !== 'farhan' && cleanNameLower.includes('farhan')) {
-            alert('⛔ Farhan naam rakhna strictly block hai!');
+            setProfileMessage('⛔ Farhan naam rakhna strictly block hai!', true);
             if (nameEl) nameEl.focus();
             return;
         }
 
+        isSavingProfile = true;
         if (saveBtn) {
             saveBtn.disabled = true;
             saveBtn.textContent = 'Saving Settings... ⏳';
@@ -565,34 +668,50 @@
         try {
             const currentUser = await getCurrentUserRecord();
             if (!currentUser) {
-                alert('Current user verify nahi ho saka. Dobara login karein!');
+                setProfileMessage('⚠️ Current user verify nahi ho saka. Dobara login karein!', true);
                 return;
             }
 
+            const sb = getSupabase();
             let finalPass = String(currentUser.pass || '').trim();
             let wantsPasswordChange = false;
 
             if (newPassInput.length > 0) {
                 if (newPassInput.length < 4) {
-                    alert('Naya Password kam se kam 4 characters ka hona chahiye!');
+                    setProfileMessage('⚠️ Naya Password kam se kam 4 characters ka hona chahiye!', true);
                     if (passEl) passEl.focus();
                     return;
                 }
                 if (!oldPassInput) {
-                    alert('⛔ Password badalne ke liye pehle apna Purana Password daalein!');
+                    setProfileMessage('⛔ Password badalne ke liye pehle apna Purana Password daalein!', true);
                     if (oldPassEl) oldPassEl.focus();
                     return;
                 }
+
+                // Cloud se fresh user fetch karke purana password verify karein
+                if (sb && !navigator.onLine) {
+                    setProfileMessage('⚠️ Password badalne ke liye internet online hona zaroori hai!', true);
+                    return;
+                }
+                if (window.AuthEngine && typeof window.AuthEngine.fetchUserByIdentifier === 'function') {
+                    const freshUser = await window.AuthEngine.fetchUserByIdentifier(uid);
+                    if (freshUser) {
+                        currentUser.pass = freshUser.pass;
+                        finalPass = String(freshUser.pass || '').trim();
+                    } else if (sb) {
+                        setProfileMessage('⛔ Cloud par user verify nahi hua. Dobara login karein!', true);
+                        return;
+                    }
+                }
+
                 if (oldPassInput !== finalPass) {
-                    alert('⛔ Purana Password galat hai! Sahi purana password daalein.');
+                    setProfileMessage('⛔ Purana Password galat hai! Sahi purana password daalein.', true);
                     if (oldPassEl) oldPassEl.focus();
                     return;
                 }
                 finalPass = newPassInput;
                 wantsPasswordChange = true;
             }
-
-            const sb = getSupabase();
 
             if (sb && navigator.onLine) {
                 const [nameRes, mobRes, emailRes, pinRes] = await Promise.all([
@@ -608,29 +727,59 @@
                 if (pinRes.error) throw pinRes.error;
 
                 if (nameRes.data && nameRes.data.length > 0) {
-                    alert('⚠️ Koi aur name select karein');
+                    setProfileMessage('⚠️ Koi aur name select karein', true);
                     if (nameEl) nameEl.focus();
                     return;
                 }
                 if (mobRes.data && mobRes.data.length > 0) {
-                    alert('⚠️ Koi aur mobile number select karein');
+                    setProfileMessage('⚠️ Koi aur mobile number select karein', true);
                     if (mobEl) mobEl.focus();
                     return;
                 }
                 if (email && emailRes.data && emailRes.data.length > 0) {
-                    alert('⚠️ Koi aur gmail select karein');
+                    setProfileMessage('⚠️ Koi aur gmail select karein', true);
                     if (emailEl) emailEl.focus();
                     return;
                 }
                 if (pinRes.data && pinRes.data.length > 0) {
-                    alert('⚠️ Koi aur secret PIN select karein');
+                    setProfileMessage('⚠️ Koi aur secret PIN select karein', true);
                     if (pinEl) pinEl.focus();
                     return;
                 }
             }
 
+            // 1. Pehle Cloud (Supabase) par update karein taaki fail hone par local data corrupt na ho
+            if (sb) {
+                if (!navigator.onLine) {
+                    setProfileMessage('⚠️ Settings cloud par save karne ke liye internet online hona zaroori hai!', true);
+                    return;
+                }
+                if (typeof window.showSyncStatus === 'function') window.showSyncStatus('syncing');
+
+                const updateFields = {
+                    full_name: name,
+                    mobile: mobile,
+                    email: email || null,
+                    pin: pin
+                };
+                if (wantsPasswordChange) {
+                    updateFields.password = finalPass;
+                }
+
+                const { error: updateErr } = await sb
+                    .from('karkhana_users')
+                    .update(updateFields)
+                    .eq('user_id', uid);
+
+                if (updateErr) throw updateErr;
+
+                if (typeof window.showSyncStatus === 'function') window.showSyncStatus('online');
+            }
+
+            // 2. Cloud update success hone ke baad hi local session & cache update karein
             const updatedProfile = {
                 id: uid,
+                accountUid: currentUser.accountUid || '',
                 name: name,
                 mobile: mobile,
                 email: email || '',
@@ -644,6 +793,7 @@
 
             const activeSessionAuth = {
                 id: uid,
+                accountUid: currentUser.accountUid || '',
                 name: name,
                 mobile: mobile,
                 email: email || '',
@@ -668,29 +818,6 @@
                 window.idbPut(`app_user_${uid}`, updatedProfile);
             }
 
-            if (sb) {
-                if (typeof window.showSyncStatus === 'function') window.showSyncStatus('syncing');
-
-                const updateFields = {
-                    full_name: name,
-                    mobile: mobile,
-                    email: email || null,
-                    pin: pin
-                };
-                if (wantsPasswordChange) {
-                    updateFields.password = finalPass;
-                }
-
-                const { error: updateErr } = await sb
-                    .from('karkhana_users')
-                    .update(updateFields)
-                    .eq('user_id', uid);
-
-                if (updateErr) throw updateErr;
-
-                if (typeof window.showSyncStatus === 'function') window.showSyncStatus('online');
-            }
-
             const welcomeEl = document.getElementById('welcome-text');
             if (welcomeEl) {
                 welcomeEl.textContent = (window.currentUserRole === 'admin')
@@ -698,16 +825,26 @@
                     : `Swagat hai, ${name}!`;
             }
 
-            closeProfileModal();
-            alert(wantsPasswordChange
-                ? '✅ Profile settings aur Naya Password successfully save ho gaye!'
-                : '✅ Profile settings successfully save ho gaye!');
+            if (oldPassEl) oldPassEl.value = '';
+            if (passEl) passEl.value = '';
+
+            setProfileMessage(
+                wantsPasswordChange
+                    ? '✅ Profile settings aur Naya Password successfully save ho gaye!'
+                    : '✅ Profile settings successfully save ho gaye!',
+                false
+            );
+
+            _profileCloseTimer = setTimeout(() => {
+                closeProfileModal();
+            }, 900);
 
         } catch (saveErr) {
             console.error('[ProfileEngine:saveProfileSettings] Save failure:', saveErr);
-            alert('Settings update karte waqt takleef aayi: ' + (saveErr.message || 'Kripya connection check karein!'));
+            setProfileMessage('❌ Settings update karte waqt takleef aayi: ' + (saveErr?.message || 'Kripya connection check karein!'), true);
             if (typeof window.showSyncStatus === 'function') window.showSyncStatus('error');
         } finally {
+            isSavingProfile = false;
             if (saveBtn) {
                 saveBtn.disabled = false;
                 saveBtn.textContent = 'Settings Save Karein';
