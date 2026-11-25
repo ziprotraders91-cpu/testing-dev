@@ -3,10 +3,17 @@
    File: info/info-ledger.js • Developed by Farhan Jawed
    Architecture: Row-by-Row Global Sync + Live Sheet Auto-Sync + 20-Row Paging
    UX: Clean White & Gold Table -> Enter/Click Inline Editor -> F8 Tani Sheet
+   Hardening: Double-Load Guard • 200ms Search Debounce • Save Lock • PWA Safe UI
 ============================================================================ */
 
 (() => {
     'use strict';
+
+    if (window._infoLedgerLoaded) {
+        console.warn('[InfoLedger] Already loaded — skip duplicate');
+        return;
+    }
+    window._infoLedgerLoaded = true;
 
     const PAGE_SIZE = 20;
     const META_ROW_ID = '__columns__';
@@ -23,7 +30,9 @@
     let infoOpenedAt = 0;
 
     let isInternalSyncRunning = false;
+    let isSavingInfoEdit = false;
     let syncTimer = null;
+    let searchDebounceTimer = null;
 
     const esc = (s) => {
         if (typeof window.sanitizeHTML === 'function') return window.sanitizeHTML(s);
@@ -32,12 +41,20 @@
         }[m]));
     };
 
-    const isAnyExpressOverlayOpen = () => Boolean(
-        document.getElementById('kariger-express-modal') ||
-        document.getElementById('master-stock-express-modal') ||
-        document.getElementById('master-jobwork-express-modal') ||
-        document.getElementById('tani-express-modal')
-    );
+    const isAnyOtherOverlayOpen = () => {
+        if (
+            document.getElementById('kariger-express-modal') ||
+            document.getElementById('master-stock-express-modal') ||
+            document.getElementById('master-jobwork-express-modal') ||
+            document.getElementById('tani-express-modal') ||
+            document.getElementById('client-payment-modal') ||
+            document.getElementById('kariger-portal-admin-modal')
+        ) {
+            return true;
+        }
+        return Array.from(document.querySelectorAll('.modal-overlay, #profile-modal'))
+            .some((m) => m.style.display && m.style.display !== 'none');
+    };
 
     const getKarigersSafe = () => {
         if (typeof window.sanitizeKarigerList === 'function') {
@@ -239,6 +256,21 @@
         el.__tTimer = setTimeout(() => {
             el.textContent = el.dataset.origText || orig;
         }, 3800);
+    };
+
+    const setColModalMsg = (msg, isError = true) => {
+        const el = document.getElementById('il-col-modal-msg');
+        if (!el) return;
+        if (!msg) {
+            el.style.display = 'none';
+            el.textContent = '';
+            return;
+        }
+        el.style.display = 'block';
+        el.style.color = isError ? '#b91c1c' : '#15803d';
+        el.style.background = isError ? '#fef2f2' : '#ecfdf5';
+        el.style.borderColor = isError ? '#fecaca' : '#a7f3d0';
+        el.textContent = msg;
     };
 
     /* ========================================================================
@@ -716,7 +748,7 @@
     };
 
     /* ========================================================================
-       KARKHANA TABS, SEARCH & 20-ROW PAGINATION
+       KARKHANA TABS, SEARCH (200ms DEBOUNCED) & 20-ROW PAGINATION
     ======================================================================== */
     const renderInfoKarkhanaTabs = (allRows) => {
         const bar = document.getElementById('info-karkhana-tabs-bar');
@@ -734,7 +766,7 @@
                 String(r.karkhanaId) === String(k.id) || (!r.karkhanaId && (k.isDefault || k.id === 'k_main'))
             ).length;
             const isActive = String(currentKarkhanaFilter) === String(k.id) ? 'active' : '';
-            html += `<button type="button" class="sheet-tab ${isActive}" onclick="switchInfoKarkhanaTab('${esc(k.id)}')">${esc(k.name)} (${count})</button>`;
+            html += `<button type="button" class="sheet-tab ${isActive}" onclick="switchInfoKarkhanaTab(decodeURIComponent('${encodeURIComponent(String(k.id))}'))">${esc(k.name)} (${count})</button>`;
         });
 
         bar.innerHTML = html;
@@ -763,13 +795,25 @@
         listActiveIdx = 0;
         const clearBtn = document.getElementById('info-search-clear-btn');
         if (clearBtn) clearBtn.style.display = currentSearchQuery.trim() ? 'flex' : 'none';
-        renderInfoLedgerTable(false);
+
+        clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = setTimeout(() => {
+            searchDebounceTimer = null;
+            renderInfoLedgerTable(false);
+        }, 200);
     };
 
     const clearInfoLedgerSearch = () => {
+        clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = null;
         const inp = document.getElementById('search-info-ledger-input');
         if (inp) inp.value = '';
-        handleInfoLedgerSearch('');
+        currentSearchQuery = '';
+        currentPage = 1;
+        listActiveIdx = 0;
+        const clearBtn = document.getElementById('info-search-clear-btn');
+        if (clearBtn) clearBtn.style.display = 'none';
+        renderInfoLedgerTable(false);
     };
 
     const nextInfoLedgerPage = () => {
@@ -787,30 +831,54 @@
     };
 
     /* ========================================================================
-       TALLY WHITE & GOLD COLUMN MANAGER MODAL (REPLACES BROWSER PROMPT)
+       TALLY WHITE & GOLD COLUMN MANAGER MODAL (ZERO BROWSER PROMPT / CONFIRM)
     ======================================================================== */
     const closeInfoColumnModal = () => {
         const m = document.getElementById('il-col-modal');
         if (m) m.remove();
     };
 
-    const openInfoColumnModal = () => {
-        if (window.isBackupPreviewMode) return alert('Preview Mode me column edit nahi ho sakta.');
+    const openInfoColumnModal = (inlineRenameId = null, inlineDeleteId = null) => {
+        if (window.isBackupPreviewMode) {
+            showInfoToast('⚠️ Preview Mode me column edit nahi ho sakta.');
+            return;
+        }
         closeInfoColumnModal();
 
         const { metaRow } = buildMergedSnapshot();
         const customCols = Array.isArray(metaRow.customCols) ? metaRow.customCols : [];
 
         const colsListHtml = customCols.length
-            ? customCols.map((c) => `
+            ? customCols.map((c) => {
+                const cid = String(c.id);
+                const encCid = encodeURIComponent(cid);
+                if (inlineRenameId && String(inlineRenameId) === cid) {
+                    return `
+                    <div style="display:flex; gap:6px; align-items:center; padding:7px 10px; border-bottom:1px solid #f3f4f6; background:#fffdf5;">
+                        <input type="text" id="il-rename-col-inp" maxlength="40" value="${esc(c.label)}" style="flex:1; padding:5px 8px; border:1px solid #d9a425; border-radius:4px; font-size:12.5px; font-weight:700;">
+                        <button type="button" onclick="window.__ilConfirmRenameCol(decodeURIComponent('${encCid}'))" style="background:#f2b71d; color:#1f2937; border:1px solid #d9a425; border-radius:4px; padding:4px 9px; font-size:11px; font-weight:800; cursor:pointer;">Save</button>
+                        <button type="button" onclick="window.__ilRefreshColModal()" style="background:#ffffff; color:#374151; border:1px solid #d1d5db; border-radius:4px; padding:4px 8px; font-size:11px; font-weight:700; cursor:pointer;">Cancel</button>
+                    </div>`;
+                }
+                if (inlineDeleteId && String(inlineDeleteId) === cid) {
+                    return `
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:7px 10px; border-bottom:1px solid #f3f4f6; background:#fef2f2;">
+                        <span style="font-size:12px; font-weight:700; color:#b91c1c;">'${esc(c.label)}' sabhi rows se hatayein?</span>
+                        <div style="display:flex; gap:6px;">
+                            <button type="button" onclick="window.__ilConfirmDeleteCol(decodeURIComponent('${encCid}'))" style="background:#dc2626; color:#ffffff; border:none; border-radius:4px; padding:4px 9px; font-size:11px; font-weight:800; cursor:pointer;">Yes, Del</button>
+                            <button type="button" onclick="window.__ilRefreshColModal()" style="background:#ffffff; color:#374151; border:1px solid #d1d5db; border-radius:4px; padding:4px 8px; font-size:11px; font-weight:700; cursor:pointer;">No</button>
+                        </div>
+                    </div>`;
+                }
+                return `
                 <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:7px 10px; border-bottom:1px solid #f3f4f6;">
                     <strong style="font-size:12.5px; color:#1f2937;">${esc(c.label)}</strong>
                     <div style="display:flex; gap:6px;">
-                        <button type="button" onclick="renameInfoLedgerCustomColumn('${esc(c.id)}')" style="background:#ffffff; color:#374151; border:1px solid #d1d5db; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:700; cursor:pointer;">Rename</button>
-                        <button type="button" onclick="deleteInfoLedgerCustomColumn('${esc(c.id)}')" style="background:#ffffff; color:#92400e; border:1px solid #d9b86c; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:700; cursor:pointer;">Del</button>
+                        <button type="button" onclick="renameInfoLedgerCustomColumn(decodeURIComponent('${encCid}'))" style="background:#ffffff; color:#374151; border:1px solid #d1d5db; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:700; cursor:pointer;">Rename</button>
+                        <button type="button" onclick="deleteInfoLedgerCustomColumn(decodeURIComponent('${encCid}'))" style="background:#ffffff; color:#92400e; border:1px solid #d9b86c; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:700; cursor:pointer;">Del</button>
                     </div>
-                </div>
-            `).join('')
+                </div>`;
+            }).join('')
             : '<div style="padding:12px; text-align:center; font-size:12px; color:#6b7280;">Abhi koi extra column nahi bana hai.</div>';
 
         const modalHtml = `
@@ -822,14 +890,16 @@
                     </div>
                     <div style="padding:14px 16px;">
                         <label for="il-new-col-name" style="display:block; font-size:12px; font-weight:700; color:#374151; margin-bottom:5px;">Naya Column Naam (jaise: Loom No, Paai, Border, Note):</label>
-                        <div style="display:flex; gap:8px; margin-bottom:14px;">
+                        <div style="display:flex; gap:8px; margin-bottom:10px;">
                             <input type="text" id="il-new-col-name" maxlength="40" placeholder="Column Name..." style="flex:1; padding:7px 10px; border:1px solid #d1d5db; border-radius:4px; font-size:13px; font-weight:700; outline:none;">
                             <button type="button" onclick="window.__ilSaveNewColumn()" style="background:#f2b71d; color:#1f2937; border:1px solid #d9a425; border-radius:5px; padding:7px 14px; font-size:12px; font-weight:800; cursor:pointer;">Add [Enter]</button>
                         </div>
 
+                        <div id="il-col-modal-msg" style="display:none; font-size:12px; font-weight:700; padding:6px 9px; border-radius:5px; border:1px solid #fecaca; margin-bottom:10px;"></div>
+
                         <div style="border:1px solid #e5d5a7; border-radius:6px; overflow:hidden;">
                             <div style="background:#fdf6e2; padding:7px 10px; font-size:11.5px; font-weight:800; color:#92400e; border-bottom:1px solid #e5d5a7;">Maujooda Custom Columns (${customCols.length})</div>
-                            <div style="max-height:200px; overflow-y:auto;">${colsListHtml}</div>
+                            <div style="max-height:220px; overflow-y:auto;">${colsListHtml}</div>
                         </div>
                     </div>
                 </div>
@@ -837,30 +907,51 @@
         `;
         document.body.insertAdjacentHTML('beforeend', modalHtml);
 
-        const inp = document.getElementById('il-new-col-name');
-        if (inp) {
-            inp.focus();
-            inp.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    window.__ilSaveNewColumn();
-                } else if (e.key === 'Escape') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    closeInfoColumnModal();
-                }
-            });
+        if (inlineRenameId) {
+            const renInp = document.getElementById('il-rename-col-inp');
+            if (renInp) {
+                renInp.focus();
+                renInp.select();
+                renInp.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        window.__ilConfirmRenameCol(inlineRenameId);
+                    } else if (e.key === 'Escape') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        openInfoColumnModal();
+                    }
+                });
+            }
+        } else {
+            const inp = document.getElementById('il-new-col-name');
+            if (inp) {
+                if (!inlineDeleteId) inp.focus();
+                inp.addEventListener('input', () => setColModalMsg(''));
+                inp.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        window.__ilSaveNewColumn();
+                    } else if (e.key === 'Escape') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        closeInfoColumnModal();
+                    }
+                });
+            }
         }
     };
 
     window.__ilCloseColModal = closeInfoColumnModal;
+    window.__ilRefreshColModal = () => openInfoColumnModal();
 
     window.__ilSaveNewColumn = () => {
         const inp = document.getElementById('il-new-col-name');
         const cleanLabel = String(inp?.value || '').trim().slice(0, 40);
         if (!cleanLabel) {
-            alert('Pehle Column ka naam likhein!');
+            setColModalMsg('⚠️ Pehle Column ka naam likhein!', true);
             inp?.focus();
             return;
         }
@@ -870,12 +961,12 @@
             (c) => String(c.label || '').trim().toLowerCase() === cleanLabel.toLowerCase()
         );
         if (duplicate) {
-            alert('Is naam ka column pehle se maujood hai!');
+            setColModalMsg('⚠️ Is naam ka column pehle se maujood hai!', true);
             inp?.focus();
             return;
         }
 
-        metaRow.customCols.push({ id: `col_${Date.now()}`, label: cleanLabel });
+        metaRow.customCols.push({ id: `col_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, label: cleanLabel });
         persistInfoArrayIfChanged(metaRow, mergedRows, rawArr, true);
         closeInfoColumnModal();
         if (infoViewMode === 'edit' && activeEditKarigerId) openInfoRowEditor(activeEditKarigerId);
@@ -887,30 +978,40 @@
         openInfoColumnModal();
     };
 
-    const renameInfoLedgerCustomColumn = (colId) => {
-        if (window.isBackupPreviewMode) return alert('Preview Mode me rename nahi ho sakta.');
+    window.__ilConfirmRenameCol = (colId) => {
+        const renInp = document.getElementById('il-rename-col-inp');
+        const nextLabel = String(renInp?.value || '').trim().slice(0, 40);
+        if (!nextLabel) {
+            setColModalMsg('⚠️ Column ka naya naam likhein!', true);
+            renInp?.focus();
+            return;
+        }
+
         const { metaRow, mergedRows, rawArr } = buildMergedSnapshot();
         const col = (metaRow.customCols || []).find((c) => String(c.id) === String(colId));
         if (!col) return;
 
-        const nextName = prompt('Column ka naya naam likhein:', col.label);
-        if (!nextName || !nextName.trim()) return;
-        col.label = nextName.trim().slice(0, 40);
+        const duplicate = (metaRow.customCols || []).some(
+            (c) => String(c.id) !== String(colId) && String(c.label || '').trim().toLowerCase() === nextLabel.toLowerCase()
+        );
+        if (duplicate) {
+            setColModalMsg('⚠️ Is naam ka column pehle se maujood hai!', true);
+            renInp?.focus();
+            return;
+        }
 
+        col.label = nextLabel;
         persistInfoArrayIfChanged(metaRow, mergedRows, rawArr, true);
-        if (document.getElementById('il-col-modal')) openInfoColumnModal();
+        openInfoColumnModal();
         if (infoViewMode === 'edit' && activeEditKarigerId) openInfoRowEditor(activeEditKarigerId);
         else renderInfoLedgerTable(false);
         showInfoToast(`✅ Column rename ho gaya: ${col.label}`);
     };
 
-    const deleteInfoLedgerCustomColumn = (colId) => {
-        if (window.isBackupPreviewMode) return alert('Preview Mode me delete nahi ho sakta.');
+    window.__ilConfirmDeleteCol = (colId) => {
         const { metaRow, mergedRows, rawArr } = buildMergedSnapshot();
         const col = (metaRow.customCols || []).find((c) => String(c.id) === String(colId));
         if (!col) return;
-
-        if (!confirm(`Kya aap '${col.label}' column aur uska data sabhi rows se hatana chahte hain?`)) return;
 
         metaRow.customCols = (metaRow.customCols || []).filter((c) => String(c.id) !== String(colId));
         mergedRows.forEach((r) => {
@@ -920,10 +1021,26 @@
         });
 
         persistInfoArrayIfChanged(metaRow, mergedRows, rawArr, true);
-        if (document.getElementById('il-col-modal')) openInfoColumnModal();
+        openInfoColumnModal();
         if (infoViewMode === 'edit' && activeEditKarigerId) openInfoRowEditor(activeEditKarigerId);
         else renderInfoLedgerTable(false);
         showInfoToast(`🗑️ Column [${col.label}] delete ho gaya.`);
+    };
+
+    const renameInfoLedgerCustomColumn = (colId) => {
+        if (window.isBackupPreviewMode) {
+            showInfoToast('⚠️ Preview Mode me rename nahi ho sakta.');
+            return;
+        }
+        openInfoColumnModal(colId, null);
+    };
+
+    const deleteInfoLedgerCustomColumn = (colId) => {
+        if (window.isBackupPreviewMode) {
+            showInfoToast('⚠️ Preview Mode me delete nahi ho sakta.');
+            return;
+        }
+        openInfoColumnModal(null, colId);
     };
 
     /* ========================================================================
@@ -1067,51 +1184,56 @@
     };
 
     window.__ilSaveInlineEditor = () => {
-        if (window.isBackupPreviewMode || !activeEditKarigerId) return;
+        if (isSavingInfoEdit || window.isBackupPreviewMode || !activeEditKarigerId) return;
+        isSavingInfoEdit = true;
 
-        const addrVal = String(document.getElementById('il-ed-address')?.value || '').trim();
-        const kadiVal = String(document.getElementById('il-ed-kadi')?.value || '').trim();
-        const baithkaVal = String(document.getElementById('il-ed-baithka')?.value || '').trim();
+        try {
+            const addrVal = String(document.getElementById('il-ed-address')?.value || '').trim();
+            const kadiVal = String(document.getElementById('il-ed-kadi')?.value || '').trim();
+            const baithkaVal = String(document.getElementById('il-ed-baithka')?.value || '').trim();
 
-        // Sync address back to kariger_list if changed
-        const kList = getKarigersSafe();
-        const targetK = kList.find((x) => String(x.id) === String(activeEditKarigerId));
-        if (targetK && String(targetK.mohalla || targetK.address || targetK.pata || '').trim() !== addrVal) {
-            targetK.mohalla = addrVal;
-            if (typeof window.setStore === 'function') {
-                isInternalSyncRunning = true;
-                try {
-                    window.setStore('kariger_list', kList);
-                } finally {
-                    isInternalSyncRunning = false;
+            // Sync address back to kariger_list if changed
+            const kList = getKarigersSafe();
+            const targetK = kList.find((x) => String(x.id) === String(activeEditKarigerId));
+            if (targetK && String(targetK.mohalla || targetK.address || targetK.pata || '').trim() !== addrVal) {
+                targetK.mohalla = addrVal;
+                if (typeof window.setStore === 'function') {
+                    isInternalSyncRunning = true;
+                    try {
+                        window.setStore('kariger_list', kList);
+                    } finally {
+                        isInternalSyncRunning = false;
+                    }
+                }
+                if (typeof window.renderKarigerTable === 'function') {
+                    window.renderKarigerTable();
                 }
             }
-            if (typeof window.renderKarigerTable === 'function') {
-                window.renderKarigerTable();
-            }
+
+            const { metaRow, mergedRows, rawArr } = buildMergedSnapshot();
+            const row = mergedRows.find((r) => String(r.id) === String(activeEditKarigerId));
+            if (!row) return;
+
+            row.address = addrVal;
+            row.kadi = kadiVal;
+            row.baithka = baithkaVal;
+            if (!row.custom || typeof row.custom !== 'object') row.custom = {};
+
+            document.querySelectorAll('#il-edit-view .il-ed-field[data-custom-id]').forEach((inp) => {
+                const cid = inp.dataset.customId;
+                if (cid) row.custom[cid] = String(inp.value || '').trim();
+            });
+
+            persistInfoArrayIfChanged(metaRow, mergedRows, rawArr, true);
+
+            const savedName = row.name;
+            activeEditKarigerId = null;
+            setInfoViewMode('list');
+            renderInfoLedgerTable(false);
+            showInfoToast(`✅ [${savedName}] ki info save & sync ho gayi!`);
+        } finally {
+            isSavingInfoEdit = false;
         }
-
-        const { metaRow, mergedRows, rawArr } = buildMergedSnapshot();
-        const row = mergedRows.find((r) => String(r.id) === String(activeEditKarigerId));
-        if (!row) return;
-
-        row.address = addrVal;
-        row.kadi = kadiVal;
-        row.baithka = baithkaVal;
-        if (!row.custom || typeof row.custom !== 'object') row.custom = {};
-
-        document.querySelectorAll('#il-edit-view .il-ed-field[data-custom-id]').forEach((inp) => {
-            const cid = inp.dataset.customId;
-            if (cid) row.custom[cid] = String(inp.value || '').trim();
-        });
-
-        persistInfoArrayIfChanged(metaRow, mergedRows, rawArr, true);
-
-        const savedName = row.name;
-        activeEditKarigerId = null;
-        setInfoViewMode('list');
-        renderInfoLedgerTable(false);
-        showInfoToast(`✅ [${savedName}] ki info save & sync ho gayi!`);
     };
 
     // Keep legacy cell-save API intact for any external callers
@@ -1274,9 +1396,10 @@
                         const val = r.custom?.[c.id] || '';
                         return `<td>${val ? esc(val) : '<span style="color:#9ca3af;">-</span>'}</td>`;
                     }).join('');
+                    const encRowId = encodeURIComponent(String(r.id));
 
                     return `
-                        <tr class="il-row${activeCls}" data-ilidx="${idx}" onclick="window.__ilSelectAndEdit(${idx}, '${esc(r.id)}')">
+                        <tr class="il-row${activeCls}" data-ilidx="${idx}" onclick="window.__ilSelectAndEdit(${idx}, decodeURIComponent('${encRowId}'))">
                             <td style="text-align:center; color:#6b7280; font-weight:700;">${rowNo}</td>
                             <td style="font-weight:800; white-space:nowrap;">${esc(r.name)}</td>
                             <td style="white-space:nowrap;">${esc(r.saree || '-')}</td>
@@ -1327,9 +1450,13 @@
         const targetId = (infoViewMode === 'edit' && activeEditKarigerId)
             ? activeEditKarigerId
             : currentPageRowsCache[listActiveIdx]?.id;
-        if (!targetId) return alert('Pehle koi Kariger chunein!');
+        if (!targetId) {
+            showInfoToast('⚠️ Pehle koi Kariger chunein!');
+            return;
+        }
         if (typeof window.openKarigerSheet !== 'function') {
-            return alert('Kariger Sheet module load nahi hua hai.');
+            showInfoToast('⚠️ Kariger Sheet module load nahi hua hai.');
+            return;
         }
         const sec = document.getElementById('info-ledger-section');
         if (sec) sec.style.display = 'none';
@@ -1337,11 +1464,15 @@
     };
 
     /* ========================================================================
-       A6 PRINT DIRECTORY
+       A6 PRINT DIRECTORY (PWA SAFE)
     ======================================================================== */
     window.__ilPrintDirectory = () => {
         const rows = currentFilteredRowsCache;
-        if (!rows || !rows.length) return alert('Print karne ke liye koi Kariger record nahi mila!');
+        if (!rows || !rows.length) {
+            console.warn('[InfoLedger Print] Print karne ke liye koi Kariger record nahi mila.');
+            showInfoToast('⚠️ Print karne ke liye koi Kariger record nahi mila!');
+            return;
+        }
 
         const today = new Date().toLocaleDateString('hi-IN');
         const rowsHtml = rows.map((r, i) => `
@@ -1354,7 +1485,11 @@
         `).join('');
 
         const pw = window.open('', '', 'width=450,height=650');
-        if (!pw) return alert('Popup block hai! Kripya popup allow karein.');
+        if (!pw) {
+            console.warn('[InfoLedger Print] Popup block hai! Browser me popup allow karein.');
+            showInfoToast('⚠️ Print Popup block hai! Browser me popup allow karein.');
+            return;
+        }
         pw.document.write(`
             <html>
             <head>
@@ -1398,7 +1533,7 @@
        KEYBOARD ENGINE FOR #info-ledger-section
     ======================================================================== */
     const handleInfoKeydown = (e) => {
-        if (isAnyExpressOverlayOpen()) return;
+        if (isAnyOtherOverlayOpen()) return;
 
         const colModal = document.getElementById('il-col-modal');
         if (colModal) {
