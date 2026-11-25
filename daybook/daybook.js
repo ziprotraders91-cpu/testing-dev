@@ -5,10 +5,19 @@
    - Live Saree Stock: Godam (WIP + Finished + Lott) + JobWork (Workers)
    - Dynamic JobWork Groups (Cutting, Embroidery, Calender, Outstation, etc.)
    - Final Out (Dispatch) DayBook + A6 Print
+   Hardening: Double-Load Guard • Render Error Boundary • 300ms Debounce • PWA Print
 ============================================================================ */
 
 (() => {
     'use strict';
+
+    if (window._daybookEngineLoaded) {
+        console.warn('[Daybook] Already loaded — skip duplicate');
+        return;
+    }
+    window._daybookEngineLoaded = true;
+
+    let _isDaybookLoaded = true;
 
     window.currentDayBookTab = 'bana';
     window.currentDashboardKarkhanaFilter = 'all';
@@ -81,6 +90,18 @@
     const setDisplay = (id, val) => {
         const el = document.getElementById(id);
         if (el) el.style.display = val;
+    };
+
+    const showDaybookInlineNotice = (msg) => {
+        const el = document.getElementById('dash-daybook-print-status');
+        if (!el) return;
+        el.textContent = msg;
+        el.style.display = 'inline-block';
+        clearTimeout(el.__nTimer);
+        el.__nTimer = setTimeout(() => {
+            el.style.display = 'none';
+            el.textContent = '';
+        }, 3800);
     };
 
     const toIsoDate = (val) => {
@@ -270,7 +291,7 @@
         daybookSearchDebounceTimer = setTimeout(() => {
             daybookCurrentPage = 1;
             renderDashboardDayBook();
-        }, 150);
+        }, 300);
     };
 
     /* ========================================================================
@@ -589,7 +610,7 @@
         items.forEach((it, idx) => {
             const isAct = (idx === daybookMenuActiveIdx);
             const bg = isAct ? '#f2b71d' : 'transparent';
-            const fg = isAct ? '#1f2937' : '#1f2937';
+            const fg = '#1f2937';
             const subFg = isAct ? '#1f2937' : '#b47d00';
             const keyFg = isAct ? '#1f2937' : '#b45309';
 
@@ -613,308 +634,328 @@
     };
 
     const renderDashboardDayBook = () => {
-        const dateEl = document.getElementById('dash-day-date');
-        if (dateEl && !dateEl.value) dateEl.value = getToday();
-        const rawD = dateEl?.value || getToday();
-        const d = toIsoDate(rawD) || getToday();
-
-        const thead = document.getElementById('dash-daybook-thead');
-        const tbody = document.getElementById('dash-daybook-tbody');
-        const tfoot = document.getElementById('dash-daybook-tfoot');
-        if (!thead || !tbody || !tfoot) return;
-
-        const targetKid = window.currentDashboardKarkhanaFilter;
-        const data = collectDayBookData(d, targetKid);
-        const tot = data.totals;
-
-        setElementText('sub-day-bana', `In: +${tot.bIn.toFixed(1)} | Out: -${tot.bOut.toFixed(1)}`);
-        setElementText('sub-day-zari', `In: +${tot.zIn.toFixed(1)} | Out: -${tot.zOut.toFixed(1)}`);
-        setElementText('sub-day-saree', `In: +${tot.sIn} | Out: -${tot.sOut}`);
-        setElementText('sub-day-payment', `${tot.pIn > 0 ? `In: +₹${tot.pIn.toFixed(0)} | ` : ''}Diya: ₹${tot.pOut.toFixed(0)}`);
-        setElementText('sub-day-sancha', `In: +${tot.sanchaIn.toFixed(1)} | Out: -${tot.sanchaOut.toFixed(1)}`);
-
-        const shell = ensureDaybookTallyShell();
-        if (!shell) return;
-        const { menuWrap, reportHeader, tableWrap } = shell;
-
-        // MENU VIEWS
-        if (daybookViewMode === 'menu') {
-            menuWrap.style.display = 'block';
-            reportHeader.style.display = 'none';
-            if (tableWrap) tableWrap.style.display = 'none';
-
-            const liveS = getLiveSareeTotals(targetKid);
-            renderTallyMenuCard(menuWrap, `Day-Book List (${d})`, [
-                { key: 'b', labelHtml: '<span class="k">B</span>ana', summary: `In: +${tot.bIn.toFixed(1)} | Out: -${tot.bOut.toFixed(1)} Kg`, onclick: "openDayBookReport('bana')" },
-                { key: 'z', labelHtml: '<span class="k">Z</span>ari', summary: `In: +${tot.zIn.toFixed(1)} | Out: -${tot.zOut.toFixed(1)} Kg`, onclick: "openDayBookReport('zari')" },
-                { key: 's', labelHtml: '<span class="k">S</span>ancha ▸', summary: `Tani & Chukka (In: +${tot.sanchaIn.toFixed(1)} | Out: -${tot.sanchaOut.toFixed(1)})`, onclick: "openDayBookSubMenu('sancha-menu')" },
-                { key: 'e', labelHtml: 'Sare<span class="k">e</span> ▸', summary: `Gdm: ${liveS.raw + liveS.finished + liveS.lott} | JW: ${liveS.pending} Pc`, onclick: "openDayBookSubMenu('saree-menu')" },
-                { key: 'p', labelHtml: '<span class="k">P</span>ayment', summary: `${tot.pIn > 0 ? `In: +₹${tot.pIn.toFixed(0)} | ` : ''}Diya: ₹${tot.pOut.toFixed(0)}`, onclick: "openDayBookReport('payment')" }
-            ], false);
-            return;
-        }
-
-        if (daybookViewMode === 'sancha-menu') {
-            menuWrap.style.display = 'block';
-            reportHeader.style.display = 'none';
-            if (tableWrap) tableWrap.style.display = 'none';
-
-            renderTallyMenuCard(menuWrap, `Sancha Day-Book (${d})`, [
-                { key: 't', labelHtml: '🧵 <span class="k">T</span>ani', summary: `In: +${data.sancha_tani.inTot.toFixed(2)} | Out: -${data.sancha_tani.outTot.toFixed(2)} Kg`, onclick: "openDayBookReport('sancha_tani')" },
-                { key: 'c', labelHtml: '⚙️ <span class="k">C</span>hukka', summary: `In: +${data.sancha_chukka.inTot.toFixed(2)} | Out: -${data.sancha_chukka.outTot.toFixed(2)} Kg`, onclick: "openDayBookReport('sancha_chukka')" }
-            ], true);
-            return;
-        }
-
-        if (daybookViewMode === 'saree-menu') {
-            menuWrap.style.display = 'block';
-            reportHeader.style.display = 'none';
-            if (tableWrap) tableWrap.style.display = 'none';
-
-            const liveS = getLiveSareeTotals(targetKid);
-            const liveStrip = `
-                <div style="display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); background:#fdfcf7; border-bottom:1.5px solid #e5d5a7; text-align:center;">
-                    <div style="padding:7px 4px; border-right:1px solid #f3efe0;"><small style="display:block; font-size:10px; color:#6b7280; font-weight:700;">Godam WIP</small><strong style="font-size:13px; color:#b47d00;">${liveS.raw}</strong></div>
-                    <div style="padding:7px 4px; border-right:1px solid #f3efe0;"><small style="display:block; font-size:10px; color:#6b7280; font-weight:700;">JobWork</small><strong style="font-size:13px; color:#92400e;">${liveS.pending}</strong></div>
-                    <div style="padding:7px 4px; border-right:1px solid #f3efe0;"><small style="display:block; font-size:10px; color:#6b7280; font-weight:700;">Finished</small><strong style="font-size:13px; color:#065f46;">${liveS.finished}</strong></div>
-                    <div style="padding:7px 4px; border-right:1px solid #f3efe0;"><small style="display:block; font-size:10px; color:#6b7280; font-weight:700;">Lott</small><strong style="font-size:13px; color:#b91c1c;">${liveS.lott}</strong></div>
-                    <div style="padding:7px 4px; background:#fdf6e2;"><small style="display:block; font-size:10px; color:#92400e; font-weight:800;">Kul Stock</small><strong style="font-size:13px; color:#1f2937;">${liveS.total} Pc</strong></div>
-                </div>`;
-
-            const usedKeys = new Set(['f', 'd', 'o']);
-            const sareeItems = [
-                { key: 'f', labelHtml: '🟢 <span class="k">F</span>resh / Direct Inward', summary: `In: +${data.saree_fresh.inTot} | Out: -${data.saree_fresh.outTot} Pcs`, onclick: "openDayBookReport('saree_fresh')" }
-            ];
-
-            data.groups.forEach((g) => {
-                const gd = data.saree_groups[g.key] || { gayi: 0, aayi: 0, damage: 0 };
-                let kChar = '';
-                for (const ch of g.label.toLowerCase()) {
-                    if (/[a-z]/.test(ch) && !usedKeys.has(ch)) { kChar = ch; usedKeys.add(ch); break; }
+        try {
+            const dateEl = document.getElementById('dash-day-date');
+            if (dateEl) {
+                if (!dateEl.value) dateEl.value = getToday();
+                if (!dateEl.dataset.dbDateBound) {
+                    dateEl.dataset.dbDateBound = '1';
+                    dateEl.addEventListener('change', () => {
+                        daybookCurrentPage = 1;
+                        renderDashboardDayBook();
+                    });
                 }
-                const icon = g.key === 'cutting' ? '✂️ ' : (g.key === 'embroidery' ? '🪡 ' : (g.key === 'calender' ? '🎛️ ' : '✨ '));
-                const lblHtml = kChar
-                    ? icon + esc(g.label).replace(new RegExp(kChar, 'i'), (m) => `<span class="k">${m}</span>`)
-                    : icon + esc(g.label);
-                const dmgTxt = gd.damage > 0 ? ` | Dmg: ${gd.damage}` : '';
-                sareeItems.push({
-                    key: kChar,
-                    labelHtml: lblHtml,
-                    summary: `Gayi: -${gd.gayi} | Aayi: +${gd.aayi}${dmgTxt} Pcs`,
-                    onclick: `openDayBookReport('saree_jw_${esc(g.key)}')`
+            }
+            const rawD = dateEl?.value || getToday();
+            const d = toIsoDate(rawD) || getToday();
+
+            const thead = document.getElementById('dash-daybook-thead');
+            const tbody = document.getElementById('dash-daybook-tbody');
+            const tfoot = document.getElementById('dash-daybook-tfoot');
+            if (!thead || !tbody || !tfoot) return;
+
+            const targetKid = window.currentDashboardKarkhanaFilter;
+            const data = collectDayBookData(d, targetKid);
+            const tot = data.totals;
+
+            setElementText('sub-day-bana', `In: +${tot.bIn.toFixed(1)} | Out: -${tot.bOut.toFixed(1)}`);
+            setElementText('sub-day-zari', `In: +${tot.zIn.toFixed(1)} | Out: -${tot.zOut.toFixed(1)}`);
+            setElementText('sub-day-saree', `In: +${tot.sIn} | Out: -${tot.sOut}`);
+            setElementText('sub-day-payment', `${tot.pIn > 0 ? `In: +₹${tot.pIn.toFixed(0)} | ` : ''}Diya: ₹${tot.pOut.toFixed(0)}`);
+            setElementText('sub-day-sancha', `In: +${tot.sanchaIn.toFixed(1)} | Out: -${tot.sanchaOut.toFixed(1)}`);
+
+            const shell = ensureDaybookTallyShell();
+            if (!shell) return;
+            const { menuWrap, reportHeader, tableWrap } = shell;
+
+            // MENU VIEWS
+            if (daybookViewMode === 'menu') {
+                menuWrap.style.display = 'block';
+                reportHeader.style.display = 'none';
+                if (tableWrap) tableWrap.style.display = 'none';
+
+                const liveS = getLiveSareeTotals(targetKid);
+                renderTallyMenuCard(menuWrap, `Day-Book List (${d})`, [
+                    { key: 'b', labelHtml: '<span class="k">B</span>ana', summary: `In: +${tot.bIn.toFixed(1)} | Out: -${tot.bOut.toFixed(1)} Kg`, onclick: "openDayBookReport('bana')" },
+                    { key: 'z', labelHtml: '<span class="k">Z</span>ari', summary: `In: +${tot.zIn.toFixed(1)} | Out: -${tot.zOut.toFixed(1)} Kg`, onclick: "openDayBookReport('zari')" },
+                    { key: 's', labelHtml: '<span class="k">S</span>ancha ▸', summary: `Tani & Chukka (In: +${tot.sanchaIn.toFixed(1)} | Out: -${tot.sanchaOut.toFixed(1)})`, onclick: "openDayBookSubMenu('sancha-menu')" },
+                    { key: 'e', labelHtml: 'Sare<span class="k">e</span> ▸', summary: `Gdm: ${liveS.raw + liveS.finished + liveS.lott} | JW: ${liveS.pending} Pc`, onclick: "openDayBookSubMenu('saree-menu')" },
+                    { key: 'p', labelHtml: '<span class="k">P</span>ayment', summary: `${tot.pIn > 0 ? `In: +₹${tot.pIn.toFixed(0)} | ` : ''}Diya: ₹${tot.pOut.toFixed(0)}`, onclick: "openDayBookReport('payment')" }
+                ], false);
+                return;
+            }
+
+            if (daybookViewMode === 'sancha-menu') {
+                menuWrap.style.display = 'block';
+                reportHeader.style.display = 'none';
+                if (tableWrap) tableWrap.style.display = 'none';
+
+                renderTallyMenuCard(menuWrap, `Sancha Day-Book (${d})`, [
+                    { key: 't', labelHtml: '🧵 <span class="k">T</span>ani', summary: `In: +${data.sancha_tani.inTot.toFixed(2)} | Out: -${data.sancha_tani.outTot.toFixed(2)} Kg`, onclick: "openDayBookReport('sancha_tani')" },
+                    { key: 'c', labelHtml: '⚙️ <span class="k">C</span>hukka', summary: `In: +${data.sancha_chukka.inTot.toFixed(2)} | Out: -${data.sancha_chukka.outTot.toFixed(2)} Kg`, onclick: "openDayBookReport('sancha_chukka')" }
+                ], true);
+                return;
+            }
+
+            if (daybookViewMode === 'saree-menu') {
+                menuWrap.style.display = 'block';
+                reportHeader.style.display = 'none';
+                if (tableWrap) tableWrap.style.display = 'none';
+
+                const liveS = getLiveSareeTotals(targetKid);
+                const liveStrip = `
+                    <div style="display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); background:#fdfcf7; border-bottom:1.5px solid #e5d5a7; text-align:center;">
+                        <div style="padding:7px 4px; border-right:1px solid #f3efe0;"><small style="display:block; font-size:10px; color:#6b7280; font-weight:700;">Godam WIP</small><strong style="font-size:13px; color:#b47d00;">${liveS.raw}</strong></div>
+                        <div style="padding:7px 4px; border-right:1px solid #f3efe0;"><small style="display:block; font-size:10px; color:#6b7280; font-weight:700;">JobWork</small><strong style="font-size:13px; color:#92400e;">${liveS.pending}</strong></div>
+                        <div style="padding:7px 4px; border-right:1px solid #f3efe0;"><small style="display:block; font-size:10px; color:#6b7280; font-weight:700;">Finished</small><strong style="font-size:13px; color:#065f46;">${liveS.finished}</strong></div>
+                        <div style="padding:7px 4px; border-right:1px solid #f3efe0;"><small style="display:block; font-size:10px; color:#6b7280; font-weight:700;">Lott</small><strong style="font-size:13px; color:#b91c1c;">${liveS.lott}</strong></div>
+                        <div style="padding:7px 4px; background:#fdf6e2;"><small style="display:block; font-size:10px; color:#92400e; font-weight:800;">Kul Stock</small><strong style="font-size:13px; color:#1f2937;">${liveS.total} Pc</strong></div>
+                    </div>`;
+
+                const usedKeys = new Set(['f', 'd', 'o']);
+                const sareeItems = [
+                    { key: 'f', labelHtml: '🟢 <span class="k">F</span>resh / Direct Inward', summary: `In: +${data.saree_fresh.inTot} | Out: -${data.saree_fresh.outTot} Pcs`, onclick: "openDayBookReport('saree_fresh')" }
+                ];
+
+                data.groups.forEach((g) => {
+                    const gd = data.saree_groups[g.key] || { gayi: 0, aayi: 0, damage: 0 };
+                    let kChar = '';
+                    for (const ch of g.label.toLowerCase()) {
+                        if (/[a-z]/.test(ch) && !usedKeys.has(ch)) { kChar = ch; usedKeys.add(ch); break; }
+                    }
+                    const icon = g.key === 'cutting' ? '✂️ ' : (g.key === 'embroidery' ? '🪡 ' : (g.key === 'calender' ? '🎛️ ' : '✨ '));
+                    const lblHtml = kChar
+                        ? icon + esc(g.label).replace(new RegExp(kChar, 'i'), (m) => `<span class="k">${m}</span>`)
+                        : icon + esc(g.label);
+                    const dmgTxt = gd.damage > 0 ? ` | Dmg: ${gd.damage}` : '';
+                    sareeItems.push({
+                        key: kChar,
+                        labelHtml: lblHtml,
+                        summary: `Gayi: -${gd.gayi} | Aayi: +${gd.aayi}${dmgTxt} Pcs`,
+                        onclick: `openDayBookReport('saree_jw_${esc(g.key)}')`
+                    });
                 });
+
+                sareeItems.push(
+                    { key: 'd', labelHtml: '🚚 Final Out (<span class="k">D</span>ispatch)', summary: `Gaya: -${data.saree_final_out.outTot} Pcs`, onclick: "openDayBookReport('saree_final_out')" },
+                    { key: 'o', labelHtml: '🔴 L<span class="k">o</span>tt / Damage', summary: `In: +${data.saree_lott.inTot} | Out: -${data.saree_lott.outTot} Pcs`, onclick: "openDayBookReport('saree_lott')" }
+                );
+
+                renderTallyMenuCard(menuWrap, `Saree Day-Book (${d})`, sareeItems, true, liveStrip);
+                return;
+            }
+
+            // REPORT VIEW
+            menuWrap.style.display = 'none';
+            reportHeader.style.display = 'flex';
+            if (tableWrap) tableWrap.style.display = 'block';
+
+            const curTab = window.currentDayBookTab || 'bana';
+            const tabBreadcrumbs = {
+                bana: 'Day-Book › Bana',
+                zari: 'Day-Book › Zari',
+                sancha_tani: 'Day-Book › Sancha › Tani',
+                sancha_chukka: 'Day-Book › Sancha › Chukka',
+                saree_fresh: 'Day-Book › Saree › Fresh / Inward',
+                saree_final_out: 'Day-Book › Saree › Final Out (Dispatch)',
+                saree_lott: 'Day-Book › Saree › Lott / Damage',
+                payment: 'Day-Book › Payment'
+            };
+            data.groups.forEach((g) => {
+                tabBreadcrumbs[`saree_jw_${g.key}`] = `Day-Book › Saree › ${g.label}`;
             });
 
-            sareeItems.push(
-                { key: 'd', labelHtml: '🚚 Final Out (<span class="k">D</span>ispatch)', summary: `Gaya: -${data.saree_final_out.outTot} Pcs`, onclick: "openDayBookReport('saree_final_out')" },
-                { key: 'o', labelHtml: '🔴 L<span class="k">o</span>tt / Damage', summary: `In: +${data.saree_lott.inTot} | Out: -${data.saree_lott.outTot} Pcs`, onclick: "openDayBookReport('saree_lott')" }
-            );
-
-            renderTallyMenuCard(menuWrap, `Saree Day-Book (${d})`, sareeItems, true, liveStrip);
-            return;
-        }
-
-        // REPORT VIEW
-        menuWrap.style.display = 'none';
-        reportHeader.style.display = 'flex';
-        if (tableWrap) tableWrap.style.display = 'block';
-
-        const curTab = window.currentDayBookTab || 'bana';
-        const tabBreadcrumbs = {
-            bana: 'Day-Book › Bana',
-            zari: 'Day-Book › Zari',
-            sancha_tani: 'Day-Book › Sancha › Tani',
-            sancha_chukka: 'Day-Book › Sancha › Chukka',
-            saree_fresh: 'Day-Book › Saree › Fresh / Inward',
-            saree_final_out: 'Day-Book › Saree › Final Out (Dispatch)',
-            saree_lott: 'Day-Book › Saree › Lott / Damage',
-            payment: 'Day-Book › Payment'
-        };
-        data.groups.forEach((g) => {
-            tabBreadcrumbs[`saree_jw_${g.key}`] = `Day-Book › Saree › ${g.label}`;
-        });
-
-        reportHeader.style.cssText = 'display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; background:#fdf6e2; border:1px solid #fde68a; border-radius:8px; padding:9px 14px; margin-bottom:10px;';
-        reportHeader.innerHTML = `
-            <div style="display:flex; align-items:center; gap:10px;">
-                <button type="button" onclick="goDayBookBack()" style="background:#ffffff; color:#1f2937; border:1px solid #e5e7eb; padding:5px 11px; border-radius:6px; font-size:12px; font-weight:700; cursor:pointer;">← [Esc] Wapas</button>
-                <strong style="font-size:14px; color:#1f2937;">${esc(tabBreadcrumbs[curTab] || 'Day-Book')}</strong>
-            </div>
-            <span style="font-size:12px; font-weight:700; color:#92400e;">Tarikh: ${esc(d)}</span>
-        `;
-
-        const tableEl = thead.closest('table');
-        if (tableEl && tableEl.parentElement && !document.getElementById('dash-daybook-controls-bar')) {
-            const ctrlBar = document.createElement('div');
-            ctrlBar.id = 'dash-daybook-controls-bar';
-            ctrlBar.style.cssText = 'display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin:6px 0 12px 0;';
-            ctrlBar.innerHTML = `
-                <div style="flex:1; min-width:220px;">
-                    <input type="text" id="dash-daybook-search" class="search-box" placeholder="🔍 Search Kariger, Vivran, Item..." style="width:100%; padding:8px 12px; border:1px solid #e2e8f0; border-radius:6px; font-size:13px; box-sizing:border-box;" oninput="onDaybookSearchInput()">
+            reportHeader.style.cssText = 'display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; background:#fdf6e2; border:1px solid #fde68a; border-radius:8px; padding:9px 14px; margin-bottom:10px;';
+            reportHeader.innerHTML = `
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <button type="button" onclick="goDayBookBack()" style="background:#ffffff; color:#1f2937; border:1px solid #e5e7eb; padding:5px 11px; border-radius:6px; font-size:12px; font-weight:700; cursor:pointer;">← [Esc] Wapas</button>
+                    <strong style="font-size:14px; color:#1f2937;">${esc(tabBreadcrumbs[curTab] || 'Day-Book')}</strong>
                 </div>
-                <div>
-                    <button type="button" id="dash-daybook-print-btn" class="add-btn" onclick="printDaybookReport()">🖨️ A6 Print</button>
-                </div>`;
-            tableEl.parentElement.insertBefore(ctrlBar, tableEl);
-        }
+                <span style="font-size:12px; font-weight:700; color:#92400e;">Tarikh: ${esc(d)}</span>
+            `;
 
-        let pager = document.getElementById('dash-daybook-pagination-controls');
-        if (!pager && tableEl && tableEl.parentElement) {
-            pager = document.createElement('div');
-            pager.id = 'dash-daybook-pagination-controls';
-            pager.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding:8px 4px; border-top:1px solid #eef0f4; flex-wrap:wrap; gap:8px;';
-            tableEl.parentElement.appendChild(pager);
-        }
-
-        const searchInp = document.getElementById('dash-daybook-search') || document.getElementById('search-daybook-input');
-        const searchTxt = searchInp ? searchInp.value.toLowerCase().trim() : '';
-
-        if (curTab === 'bana' || curTab === 'zari') {
-            let rows = [...(curTab === 'bana' ? data.bana.rows : data.zari.rows)];
-            const label = curTab === 'bana' ? 'Bana' : 'Zari';
-            thead.innerHTML = `<tr><th>${label} Ka Naam</th><th>Kariger / Godam Vivran</th><th>📥 Aaya (In)</th><th>📤 Gaya (Out)</th></tr>`;
-
-            if (searchTxt) {
-                rows = rows.filter((r) => `${r.name || ''} ${r.desc || ''} ${r.inQty} ${r.outQty}`.toLowerCase().includes(searchTxt));
+            const tableEl = thead.closest('table');
+            if (tableEl && tableEl.parentElement && !document.getElementById('dash-daybook-controls-bar')) {
+                const ctrlBar = document.createElement('div');
+                ctrlBar.id = 'dash-daybook-controls-bar';
+                ctrlBar.style.cssText = 'display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin:6px 0 12px 0;';
+                ctrlBar.innerHTML = `
+                    <div style="flex:1; min-width:220px;">
+                        <input type="text" id="dash-daybook-search" class="search-box" placeholder="🔍 Search Kariger, Vivran, Item..." style="width:100%; padding:8px 12px; border:1px solid #e2e8f0; border-radius:6px; font-size:13px; box-sizing:border-box;" oninput="onDaybookSearchInput()">
+                    </div>
+                    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                        <span id="dash-daybook-print-status" style="display:none; font-size:12px; font-weight:700; color:#b45309; background:#fef3c7; border:1px solid #fde68a; padding:5px 9px; border-radius:6px;"></span>
+                        <button type="button" id="dash-daybook-print-btn" class="add-btn" onclick="printDaybookReport()">🖨️ A6 Print</button>
+                    </div>`;
+                tableEl.parentElement.insertBefore(ctrlBar, tableEl);
             }
-            currentDaybookFilteredRowsCache = rows;
 
-            renderPaginatedDaybookRows(rows, tbody, pager, (r) => `
-                <tr>
-                    <td><strong>${esc(r.name)}</strong></td>
-                    <td>${esc(r.desc)}</td>
-                    <td style="color:#92400e; font-weight:700;">${r.inQty > 0 ? `+${r.inQty.toFixed(2)} Kg` : '-'}</td>
-                    <td style="color:#1f2937; font-weight:700;">${r.outQty > 0 ? `-${r.outQty.toFixed(2)} Kg` : '-'}</td>
-                </tr>
-            `, `Is tarikh me ${label} ki koi entry nahi hai.`, 4);
-
-            let curIn = 0, curOut = 0;
-            rows.forEach((r) => { curIn += r.inQty; curOut += r.outQty; });
-            tfoot.innerHTML = `<tr><td colspan="2"><strong>Total Rozana ${label}:</strong></td><td><strong>+${curIn.toFixed(2)} Kg</strong></td><td><strong>-${curOut.toFixed(2)} Kg</strong></td></tr>`;
-
-        } else if (curTab === 'sancha_tani' || curTab === 'sancha_chukka') {
-            const isChukka = (curTab === 'sancha_chukka');
-            const label = isChukka ? 'Chukka' : 'Tani';
-            let rows = [...(isChukka ? data.sancha_chukka.rows : data.sancha_tani.rows)];
-            thead.innerHTML = `<tr><th>${label} Item</th><th>Kariger / Vivran</th><th>📥 Aaya (In)</th><th>📤 Gaya (Out)</th></tr>`;
-
-            if (searchTxt) {
-                rows = rows.filter((h) => `${h.name || ''} ${h.kariger || ''} ${h.type || ''}`.toLowerCase().includes(searchTxt));
+            let pager = document.getElementById('dash-daybook-pagination-controls');
+            if (!pager && tableEl && tableEl.parentElement) {
+                pager = document.createElement('div');
+                pager.id = 'dash-daybook-pagination-controls';
+                pager.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding:8px 4px; border-top:1px solid #eef0f4; flex-wrap:wrap; gap:8px;';
+                tableEl.parentElement.appendChild(pager);
             }
-            currentDaybookFilteredRowsCache = rows;
 
-            renderPaginatedDaybookRows(rows, tbody, pager, (h) => {
-                const inQ = safeNum(h.aaya || h.qty);
-                const outQ = safeNum(h.gaya);
-                return `
+            const searchInp = document.getElementById('dash-daybook-search') || document.getElementById('search-daybook-input');
+            const searchTxt = searchInp ? searchInp.value.toLowerCase().trim() : '';
+
+            if (curTab === 'bana' || curTab === 'zari') {
+                let rows = [...(curTab === 'bana' ? data.bana.rows : data.zari.rows)];
+                const label = curTab === 'bana' ? 'Bana' : 'Zari';
+                thead.innerHTML = `<tr><th>${label} Ka Naam</th><th>Kariger / Godam Vivran</th><th>📥 Aaya (In)</th><th>📤 Gaya (Out)</th></tr>`;
+
+                if (searchTxt) {
+                    rows = rows.filter((r) => `${r.name || ''} ${r.desc || ''} ${r.inQty} ${r.outQty}`.toLowerCase().includes(searchTxt));
+                }
+                currentDaybookFilteredRowsCache = rows;
+
+                renderPaginatedDaybookRows(rows, tbody, pager, (r) => `
                     <tr>
-                        <td><strong>${esc(h.name || label)}</strong></td>
-                        <td>${h.kariger ? `👤 ${esc(h.kariger)}` : esc(h.type || 'Godam Purchase')}</td>
-                        <td style="color:#92400e; font-weight:700;">${inQ > 0 ? `+${inQ.toFixed(2)} Kg` : '-'}</td>
-                        <td style="color:#1f2937; font-weight:700;">${outQ > 0 ? `-${outQ.toFixed(2)} Kg` : '-'}</td>
-                    </tr>`;
-            }, `Is tarikh me ${label} ki koi entry nahi hai.`, 4);
+                        <td><strong>${esc(r.name)}</strong></td>
+                        <td>${esc(r.desc)}</td>
+                        <td style="color:#92400e; font-weight:700;">${r.inQty > 0 ? `+${r.inQty.toFixed(2)} Kg` : '-'}</td>
+                        <td style="color:#1f2937; font-weight:700;">${r.outQty > 0 ? `-${r.outQty.toFixed(2)} Kg` : '-'}</td>
+                    </tr>
+                `, `Is tarikh me ${label} ki koi entry nahi hai.`, 4);
 
-            let curIn = 0, curOut = 0;
-            rows.forEach((h) => { curIn += safeNum(h.aaya || h.qty); curOut += safeNum(h.gaya); });
-            tfoot.innerHTML = `<tr><td colspan="2"><strong>Total Rozana ${label}:</strong></td><td><strong>+${curIn.toFixed(2)} Kg</strong></td><td><strong>-${curOut.toFixed(2)} Kg</strong></td></tr>`;
+                let curIn = 0, curOut = 0;
+                rows.forEach((r) => { curIn += r.inQty; curOut += r.outQty; });
+                tfoot.innerHTML = `<tr><td colspan="2"><strong>Total Rozana ${label}:</strong></td><td><strong>+${curIn.toFixed(2)} Kg</strong></td><td><strong>-${curOut.toFixed(2)} Kg</strong></td></tr>`;
 
-        } else if (curTab === 'saree_fresh' || curTab === 'saree_lott') {
-            const isLott = (curTab === 'saree_lott');
-            const label = isLott ? 'Lott Saree' : 'Fresh / Godam Inward';
-            let rows = [...(isLott ? data.saree_lott.rows : data.saree_fresh.rows)];
-            thead.innerHTML = `<tr><th>Saree Ka Naam</th><th>Kariger / Party</th><th>📥 Aayi (In)</th><th>📤 Gayi (Out)</th><th>Detail</th></tr>`;
+            } else if (curTab === 'sancha_tani' || curTab === 'sancha_chukka') {
+                const isChukka = (curTab === 'sancha_chukka');
+                const label = isChukka ? 'Chukka' : 'Tani';
+                let rows = [...(isChukka ? data.sancha_chukka.rows : data.sancha_tani.rows)];
+                thead.innerHTML = `<tr><th>${label} Item</th><th>Kariger / Vivran</th><th>📥 Aaya (In)</th><th>📤 Gaya (Out)</th></tr>`;
 
-            if (searchTxt) {
-                rows = rows.filter((h) => `${h.sareeName || ''} ${h.karigerName || ''} ${h.detail || ''}`.toLowerCase().includes(searchTxt));
-            }
-            currentDaybookFilteredRowsCache = rows;
+                if (searchTxt) {
+                    rows = rows.filter((h) => `${h.name || ''} ${h.kariger || ''} ${h.type || ''}`.toLowerCase().includes(searchTxt));
+                }
+                currentDaybookFilteredRowsCache = rows;
 
-            renderPaginatedDaybookRows(rows, tbody, pager, (h) => {
-                const inQ = safeInt(h.aai);
-                const outQ = safeInt(h.gai);
-                return `
+                renderPaginatedDaybookRows(rows, tbody, pager, (h) => {
+                    const inQ = safeNum(h.aaya || h.qty);
+                    const outQ = safeNum(h.gaya);
+                    return `
+                        <tr>
+                            <td><strong>${esc(h.name || label)}</strong></td>
+                            <td>${h.kariger ? `👤 ${esc(h.kariger)}` : esc(h.type || 'Godam Purchase')}</td>
+                            <td style="color:#92400e; font-weight:700;">${inQ > 0 ? `+${inQ.toFixed(2)} Kg` : '-'}</td>
+                            <td style="color:#1f2937; font-weight:700;">${outQ > 0 ? `-${outQ.toFixed(2)} Kg` : '-'}</td>
+                        </tr>`;
+                }, `Is tarikh me ${label} ki koi entry nahi hai.`, 4);
+
+                let curIn = 0, curOut = 0;
+                rows.forEach((h) => { curIn += safeNum(h.aaya || h.qty); curOut += safeNum(h.gaya); });
+                tfoot.innerHTML = `<tr><td colspan="2"><strong>Total Rozana ${label}:</strong></td><td><strong>+${curIn.toFixed(2)} Kg</strong></td><td><strong>-${curOut.toFixed(2)} Kg</strong></td></tr>`;
+
+            } else if (curTab === 'saree_fresh' || curTab === 'saree_lott') {
+                const isLott = (curTab === 'saree_lott');
+                const label = isLott ? 'Lott Saree' : 'Fresh / Godam Inward';
+                let rows = [...(isLott ? data.saree_lott.rows : data.saree_fresh.rows)];
+                thead.innerHTML = `<tr><th>Saree Ka Naam</th><th>Kariger / Party</th><th>📥 Aayi (In)</th><th>📤 Gayi (Out)</th><th>Detail</th></tr>`;
+
+                if (searchTxt) {
+                    rows = rows.filter((h) => `${h.sareeName || ''} ${h.karigerName || ''} ${h.detail || ''}`.toLowerCase().includes(searchTxt));
+                }
+                currentDaybookFilteredRowsCache = rows;
+
+                renderPaginatedDaybookRows(rows, tbody, pager, (h) => {
+                    const inQ = safeInt(h.aai);
+                    const outQ = safeInt(h.gai);
+                    return `
+                        <tr>
+                            <td><strong>${esc(h.sareeName)}</strong></td>
+                            <td>${esc(h.karigerName)}</td>
+                            <td style="color:#92400e; font-weight:700;">${inQ > 0 ? `+${inQ} Pcs` : '-'}</td>
+                            <td style="color:#1f2937; font-weight:700;">${outQ > 0 ? `-${outQ} Pcs` : '-'}</td>
+                            <td>${esc(h.detail)}</td>
+                        </tr>`;
+                }, `Is tarikh me ${label} ki koi entry nahi hai.`, 5);
+
+                let curIn = 0, curOut = 0;
+                rows.forEach((h) => { curIn += safeInt(h.aai); curOut += safeInt(h.gai); });
+                tfoot.innerHTML = `<tr><td colspan="2"><strong>Total ${label}:</strong></td><td><strong>+${curIn} Pcs</strong></td><td><strong>-${curOut} Pcs</strong></td><td>-</td></tr>`;
+
+            } else if (curTab === 'saree_final_out') {
+                let rows = [...data.saree_final_out.rows];
+                thead.innerHTML = `<tr><th>Saree Ka Naam</th><th>Kariger (Maker)</th><th>Dukan / Party &amp; Stage</th><th>📤 Gaya (Out)</th></tr>`;
+
+                if (searchTxt) {
+                    rows = rows.filter((r) => `${r.sareeName} ${r.karigerName} ${r.note}`.toLowerCase().includes(searchTxt));
+                }
+                currentDaybookFilteredRowsCache = rows;
+
+                renderPaginatedDaybookRows(rows, tbody, pager, (r) => `
                     <tr>
-                        <td><strong>${esc(h.sareeName)}</strong></td>
-                        <td>${esc(h.karigerName)}</td>
-                        <td style="color:#92400e; font-weight:700;">${inQ > 0 ? `+${inQ} Pcs` : '-'}</td>
-                        <td style="color:#1f2937; font-weight:700;">${outQ > 0 ? `-${outQ} Pcs` : '-'}</td>
-                        <td>${esc(h.detail)}</td>
-                    </tr>`;
-            }, `Is tarikh me ${label} ki koi entry nahi hai.`, 5);
+                        <td><strong>${esc(r.sareeName)}</strong></td>
+                        <td>${esc(r.karigerName)}</td>
+                        <td>${esc(r.note)}</td>
+                        <td style="color:#b47d00; font-weight:800;">-${r.pcs} Pcs</td>
+                    </tr>
+                `, 'Is tarikh me Final Out ki koi entry nahi hai.', 4);
 
-            let curIn = 0, curOut = 0;
-            rows.forEach((h) => { curIn += safeInt(h.aai); curOut += safeInt(h.gai); });
-            tfoot.innerHTML = `<tr><td colspan="2"><strong>Total ${label}:</strong></td><td><strong>+${curIn} Pcs</strong></td><td><strong>-${curOut} Pcs</strong></td><td>-</td></tr>`;
+                const curOut = rows.reduce((sum, r) => sum + safeInt(r.pcs), 0);
+                tfoot.innerHTML = `<tr><td colspan="3"><strong>Total Final Out:</strong></td><td><strong>-${curOut} Pcs</strong></td></tr>`;
 
-        } else if (curTab === 'saree_final_out') {
-            let rows = [...data.saree_final_out.rows];
-            thead.innerHTML = `<tr><th>Saree Ka Naam</th><th>Kariger (Maker)</th><th>Dukan / Party &amp; Stage</th><th>📤 Gaya (Out)</th></tr>`;
+            } else if (curTab.startsWith('saree_jw_') || curTab === 'saree_cutting' || curTab === 'saree_embroidery' || curTab === 'saree_calender') {
+                const gKey = curTab.startsWith('saree_jw_') ? curTab.slice('saree_jw_'.length) : curTab.replace('saree_', '');
+                const cfg = data.saree_groups[gKey] || { label: gKey, rows: [] };
+                let rows = [...cfg.rows];
+                thead.innerHTML = `<tr><th>${esc(cfg.label)} Worker</th><th>Sheet / JW No.</th><th>📤 Gayi (Out)</th><th>📥 Wapas Aayi (In)</th><th>⚠️ Lott/Dmg</th><th>Kariger Detail</th></tr>`;
 
-            if (searchTxt) {
-                rows = rows.filter((r) => `${r.sareeName} ${r.karigerName} ${r.note}`.toLowerCase().includes(searchTxt));
+                if (searchTxt) {
+                    rows = rows.filter((r) => `${r.worker || ''} ${r.sheet || ''} ${r.detail || ''}`.toLowerCase().includes(searchTxt));
+                }
+                currentDaybookFilteredRowsCache = rows;
+
+                renderPaginatedDaybookRows(rows, tbody, pager, (r) => `
+                    <tr>
+                        <td><strong>${esc(r.worker)}</strong></td>
+                        <td>${esc(r.sheet)}</td>
+                        <td style="color:#1f2937; font-weight:700;">${r.gayi > 0 ? `-${r.gayi} Pcs` : '-'}</td>
+                        <td style="color:#92400e; font-weight:700;">${r.aayi > 0 ? `+${r.aayi} Pcs` : '-'}</td>
+                        <td>${r.damagePcs > 0 ? `⚠️ ${r.damagePcs} Pcs` : '-'}</td>
+                        <td style="font-size:11.5px; color:#4b5563;">${esc(r.detail)}</td>
+                    </tr>
+                `, `Is tarikh me ${cfg.label} ki koi entry nahi hai.`, 6);
+
+                let curG = 0, curA = 0, curD = 0;
+                rows.forEach((r) => { curG += r.gayi; curA += r.aayi; curD += r.damagePcs; });
+                tfoot.innerHTML = `<tr><td colspan="2"><strong>Total ${esc(cfg.label)}:</strong></td><td><strong>-${curG} Pcs</strong></td><td><strong>+${curA} Pcs</strong></td><td><strong>${curD > 0 ? curD + ' Pcs' : '-'}</strong></td><td>-</td></tr>`;
+
+            } else if (curTab === 'payment') {
+                let rows = [...data.payment.rows];
+                thead.innerHTML = `<tr><th>Party / Kariger</th><th>Vivran / Khata</th><th>📥 Aamad (In)</th><th>📤 Diya (Out)</th></tr>`;
+
+                if (searchTxt) {
+                    rows = rows.filter((dp) => `${dp.party || ''} ${dp.desc || ''} ${dp.inAmt} ${dp.outAmt}`.toLowerCase().includes(searchTxt));
+                }
+                currentDaybookFilteredRowsCache = rows;
+
+                renderPaginatedDaybookRows(rows, tbody, pager, (dp) => `
+                    <tr>
+                        <td><strong>${esc(dp.party)}</strong></td>
+                        <td>${esc(dp.desc)}</td>
+                        <td style="color:#92400e; font-weight:700;">${dp.inAmt > 0 ? `+ ₹ ${dp.inAmt.toFixed(2)}` : '-'}</td>
+                        <td style="color:#1f2937; font-weight:700;">${dp.outAmt > 0 ? `- ₹ ${dp.outAmt.toFixed(2)}` : '-'}</td>
+                    </tr>
+                `, 'Is tarikh me koi payment ya cash transfer nahi mila.', 4);
+
+                let curIn = 0, curOut = 0;
+                rows.forEach((dp) => { curIn += dp.inAmt; curOut += dp.outAmt; });
+                tfoot.innerHTML = `<tr><td colspan="2"><strong>Total Rozana Cash Movement:</strong></td><td><strong>+ ₹ ${curIn.toFixed(2)}</strong></td><td><strong>- ₹ ${curOut.toFixed(2)}</strong></td></tr>`;
             }
-            currentDaybookFilteredRowsCache = rows;
-
-            renderPaginatedDaybookRows(rows, tbody, pager, (r) => `
-                <tr>
-                    <td><strong>${esc(r.sareeName)}</strong></td>
-                    <td>${esc(r.karigerName)}</td>
-                    <td>${esc(r.note)}</td>
-                    <td style="color:#b47d00; font-weight:800;">-${r.pcs} Pcs</td>
-                </tr>
-            `, 'Is tarikh me Final Out ki koi entry nahi hai.', 4);
-
-            const curOut = rows.reduce((sum, r) => sum + safeInt(r.pcs), 0);
-            tfoot.innerHTML = `<tr><td colspan="3"><strong>Total Final Out:</strong></td><td><strong>-${curOut} Pcs</strong></td></tr>`;
-
-        } else if (curTab.startsWith('saree_jw_') || curTab === 'saree_cutting' || curTab === 'saree_embroidery' || curTab === 'saree_calender') {
-            const gKey = curTab.startsWith('saree_jw_') ? curTab.slice('saree_jw_'.length) : curTab.replace('saree_', '');
-            const cfg = data.saree_groups[gKey] || { label: gKey, rows: [] };
-            let rows = [...cfg.rows];
-            thead.innerHTML = `<tr><th>${esc(cfg.label)} Worker</th><th>Sheet / JW No.</th><th>📤 Gayi (Out)</th><th>📥 Wapas Aayi (In)</th><th>⚠️ Lott/Dmg</th><th>Kariger Detail</th></tr>`;
-
-            if (searchTxt) {
-                rows = rows.filter((r) => `${r.worker || ''} ${r.sheet || ''} ${r.detail || ''}`.toLowerCase().includes(searchTxt));
+        } catch (err) {
+            console.error('[Daybook Render Error]', err);
+            const tbody = document.getElementById('dash-daybook-tbody');
+            const tableWrap = document.querySelector('#daybook-section .daybook-container .table-responsive');
+            if (tableWrap) tableWrap.style.display = 'block';
+            if (tbody) {
+                tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#dc2626; padding:15px;">Data load karne me error aaya. Kripya page refresh karein.</td></tr>`;
             }
-            currentDaybookFilteredRowsCache = rows;
-
-            renderPaginatedDaybookRows(rows, tbody, pager, (r) => `
-                <tr>
-                    <td><strong>${esc(r.worker)}</strong></td>
-                    <td>${esc(r.sheet)}</td>
-                    <td style="color:#1f2937; font-weight:700;">${r.gayi > 0 ? `-${r.gayi} Pcs` : '-'}</td>
-                    <td style="color:#92400e; font-weight:700;">${r.aayi > 0 ? `+${r.aayi} Pcs` : '-'}</td>
-                    <td>${r.damagePcs > 0 ? `⚠️ ${r.damagePcs} Pcs` : '-'}</td>
-                    <td style="font-size:11.5px; color:#4b5563;">${esc(r.detail)}</td>
-                </tr>
-            `, `Is tarikh me ${cfg.label} ki koi entry nahi hai.`, 6);
-
-            let curG = 0, curA = 0, curD = 0;
-            rows.forEach((r) => { curG += r.gayi; curA += r.aayi; curD += r.damagePcs; });
-            tfoot.innerHTML = `<tr><td colspan="2"><strong>Total ${esc(cfg.label)}:</strong></td><td><strong>-${curG} Pcs</strong></td><td><strong>+${curA} Pcs</strong></td><td><strong>${curD > 0 ? curD + ' Pcs' : '-'}</strong></td><td>-</td></tr>`;
-
-        } else if (curTab === 'payment') {
-            let rows = [...data.payment.rows];
-            thead.innerHTML = `<tr><th>Party / Kariger</th><th>Vivran / Khata</th><th>📥 Aamad (In)</th><th>📤 Diya (Out)</th></tr>`;
-
-            if (searchTxt) {
-                rows = rows.filter((dp) => `${dp.party || ''} ${dp.desc || ''} ${dp.inAmt} ${dp.outAmt}`.toLowerCase().includes(searchTxt));
-            }
-            currentDaybookFilteredRowsCache = rows;
-
-            renderPaginatedDaybookRows(rows, tbody, pager, (dp) => `
-                <tr>
-                    <td><strong>${esc(dp.party)}</strong></td>
-                    <td>${esc(dp.desc)}</td>
-                    <td style="color:#92400e; font-weight:700;">${dp.inAmt > 0 ? `+ ₹ ${dp.inAmt.toFixed(2)}` : '-'}</td>
-                    <td style="color:#1f2937; font-weight:700;">${dp.outAmt > 0 ? `- ₹ ${dp.outAmt.toFixed(2)}` : '-'}</td>
-                </tr>
-            `, 'Is tarikh me koi payment ya cash transfer nahi mila.', 4);
-
-            let curIn = 0, curOut = 0;
-            rows.forEach((dp) => { curIn += dp.inAmt; curOut += dp.outAmt; });
-            tfoot.innerHTML = `<tr><td colspan="2"><strong>Total Rozana Cash Movement:</strong></td><td><strong>+ ₹ ${curIn.toFixed(2)}</strong></td><td><strong>- ₹ ${curOut.toFixed(2)}</strong></td></tr>`;
         }
     };
 
@@ -961,47 +1002,52 @@
     /* ========================================================================
        4. TALLY KEYBOARD NAVIGATION INSIDE DAY-BOOK (↑ ↓ ENTER ESC + LETTERS)
     ======================================================================== */
-    document.addEventListener('keydown', (e) => {
-        const dbSec = document.getElementById('daybook-section');
-        if (!dbSec || dbSec.style.display === 'none') return;
+    if (!window._dbKeyBound) {
+        window._dbKeyBound = true;
+        document.addEventListener('keydown', (e) => {
+            const dbSec = document.getElementById('daybook-section');
+            if (!dbSec || dbSec.style.display === 'none') return;
 
-        const anyModalOpen = Array.from(document.querySelectorAll('.modal-overlay')).some((m) => m.style.display && m.style.display !== 'none');
-        if (anyModalOpen) return;
+            const anyModalOpen = Array.from(document.querySelectorAll(
+                '.modal-overlay, .kexp-overlay, #profile-modal, #client-payment-modal, #kariger-express-modal, #master-stock-express-modal, #master-jobwork-express-modal, #tani-express-modal'
+            )).some((m) => m.style.display && m.style.display !== 'none');
+            if (anyModalOpen) return;
 
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            goDayBookBack();
-            return;
-        }
-
-        const tag = (document.activeElement && document.activeElement.tagName) || '';
-        if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-
-        if (daybookViewMode === 'menu' || daybookViewMode === 'sancha-menu' || daybookViewMode === 'saree-menu') {
-            const btns = Array.from(document.querySelectorAll('#tally-daybook-menu-wrap .tally-db-menu-item'));
-            if (!btns.length) return;
-
-            if (e.key === 'ArrowDown') {
+            if (e.key === 'Escape') {
                 e.preventDefault();
-                daybookMenuActiveIdx = (daybookMenuActiveIdx + 1) % btns.length;
-                renderDashboardDayBook();
-            } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                daybookMenuActiveIdx = (daybookMenuActiveIdx - 1 + btns.length) % btns.length;
-                renderDashboardDayBook();
-            } else if (e.key === 'Enter') {
-                e.preventDefault();
-                btns[daybookMenuActiveIdx]?.click();
-            } else if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
-                const k = e.key.toLowerCase();
-                const hit = btns.find((b) => b.dataset.key === k);
-                if (hit) {
+                goDayBookBack();
+                return;
+            }
+
+            const tag = (document.activeElement && document.activeElement.tagName) || '';
+            if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+
+            if (daybookViewMode === 'menu' || daybookViewMode === 'sancha-menu' || daybookViewMode === 'saree-menu') {
+                const btns = Array.from(document.querySelectorAll('#tally-daybook-menu-wrap .tally-db-menu-item'));
+                if (!btns.length) return;
+
+                if (e.key === 'ArrowDown') {
                     e.preventDefault();
-                    hit.click();
+                    daybookMenuActiveIdx = (daybookMenuActiveIdx + 1) % btns.length;
+                    renderDashboardDayBook();
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    daybookMenuActiveIdx = (daybookMenuActiveIdx - 1 + btns.length) % btns.length;
+                    renderDashboardDayBook();
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    btns[daybookMenuActiveIdx]?.click();
+                } else if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
+                    const k = e.key.toLowerCase();
+                    const hit = btns.find((b) => b.dataset.key === k);
+                    if (hit) {
+                        e.preventDefault();
+                        hit.click();
+                    }
                 }
             }
-        }
-    });
+        });
+    }
 
     const initDaybookVisibilityObserver = () => {
         const dbSec = document.getElementById('daybook-section');
@@ -1034,7 +1080,9 @@
     const printDaybookReport = () => {
         const rows = currentDaybookFilteredRowsCache;
         if (!rows || !rows.length) {
-            return alert('Print karne ke liye koi record nahi mila!');
+            console.warn('[Daybook Print] Print karne ke liye koi record nahi mila.');
+            showDaybookInlineNotice('⚠️ Print karne ke liye koi record nahi mila!');
+            return;
         }
 
         const tab = window.currentDayBookTab || 'bana';
@@ -1118,7 +1166,11 @@
         }
 
         const printWindow = window.open('', '', 'width=450,height=650');
-        if (!printWindow) return alert('Popup block hai! Kripya browser me popup allow karein.');
+        if (!printWindow) {
+            console.warn('[Daybook Print] Popup block hai! Browser me popup allow karein.');
+            showDaybookInlineNotice('⚠️ Print Popup block hai! Browser me popup allow karein.');
+            return;
+        }
 
         printWindow.document.write(`
             <html>
@@ -1327,10 +1379,13 @@
         const dEl = document.getElementById('dash-day-date');
         if (dEl) {
             dEl.value = getToday();
-            dEl.addEventListener('change', () => {
-                daybookCurrentPage = 1;
-                renderDashboardDayBook();
-            });
+            if (!dEl.dataset.dbDateBound) {
+                dEl.dataset.dbDateBound = '1';
+                dEl.addEventListener('change', () => {
+                    daybookCurrentPage = 1;
+                    renderDashboardDayBook();
+                });
+            }
         }
 
         renderDashboardKarkhanaTabs();
