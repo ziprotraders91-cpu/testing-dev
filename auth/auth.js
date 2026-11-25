@@ -2,6 +2,7 @@
    SIMPLICITY ERP - HIGH-SCALE ENTERPRISE AUTHENTICATION & SECURITY ENGINE
    File: auth/auth.js • Developed by Farhan Jawed
    Architecture: Supabase PostgreSQL Auth + account_uid Reset Protection + Gmail OTP
+   Hardening: Global Submit Locks • Transactional Registration Rollback • PWA Safe UI
 ============================================================================ */
 
 (() => {
@@ -25,6 +26,13 @@
 
     let _activeSessionAuthCache = null;
     let _expiredLoginUser = null;
+
+    // Global Double-Submit Locks
+    let isLoggingIn = false;
+    let isRegistering = false;
+    let isSendingOtp = false;
+    let isVerifyingOtp = false;
+    let isResettingPass = false;
 
     /* ========================================================================
        2. DEFENSIVE UTILITY HELPERS
@@ -132,7 +140,13 @@
         if (typeof window.openClientPaymentModal === 'function') {
             window.openClientPaymentModal(_expiredLoginUser || { id: 'Client', name: 'Karkhana User' });
         } else {
-            alert('Payment QR ke liye Admin se contact karein: +91 70655 72191');
+            console.warn('[Auth] Payment QR ke liye Admin se contact karein: +91 70655 72191');
+            const err = document.getElementById('login-error');
+            if (err) {
+                err.innerHTML = `Payment QR ke liye Admin se contact karein: <a href="tel:+917065572191" style="color:#2563eb; font-weight:800;">+91 70655 72191</a>`;
+                err.style.color = '#dc2626';
+                err.style.display = 'block';
+            }
         }
     };
 
@@ -224,9 +238,11 @@
     };
 
     /* ========================================================================
-       4. BULLETPROOF REGISTRATION (5-POINT CHECK + ADMIN GMAIL ALERT)
+       4. BULLETPROOF REGISTRATION (5-POINT CHECK + ROLLBACK + ADMIN ALERT)
     ======================================================================== */
     const handleRegister = async () => {
+        if (isRegistering) return;
+
         const nameEl = document.getElementById('reg-name');
         const mobEl = document.getElementById('reg-mobile');
         const idEl = document.getElementById('reg-id');
@@ -266,6 +282,7 @@
             return;
         }
 
+        isRegistering = true;
         msg.textContent = 'Details verify ho rahi hain... ⏳';
         msg.className = 'message';
         msg.style.display = 'block';
@@ -273,8 +290,10 @@
         try {
             const sb = getSupabase();
             if (!sb) {
-                alert('⚠️ Supabase connection nahi mila! Page ko Refresh karein.');
-                msg.textContent = 'Connection error! Page refresh karein.';
+                console.warn('[Auth:Register] Supabase connection nahi mila.');
+                msg.textContent = '⚠️ Connection error! Supabase nahi mila, page refresh karein.';
+                msg.className = 'message error';
+                msg.style.display = 'block';
                 return;
             }
 
@@ -344,12 +363,22 @@
 
             if (insertErr) throw insertErr;
 
-            await sb.from('karkhanas').upsert([{
+            const { error: karErr } = await sb.from('karkhanas').upsert([{
                 user_id: id,
                 karkhana_key: 'k_main',
                 karkhana_name: 'Main Godown',
                 is_default: true
             }], { onConflict: 'user_id,karkhana_key' });
+
+            if (karErr) {
+                // ROLLBACK: Agar karkhana setup fail hua, toh newly inserted user ko bhi delete karein
+                try {
+                    await sb.from('karkhana_users').delete().eq('user_id', id);
+                } catch (rbErr) {
+                    console.warn('[Auth:Register] Rollback warning:', rbErr);
+                }
+                throw new Error('Karkhana setup failed, account rollback successful');
+            }
 
             // Agar isi phone par pehle is ID ka purana data tha toh use bhi turant saaf kar dein
             if (typeof window.wipeUserLocalCache === 'function') {
@@ -381,9 +410,11 @@
 
         } catch (err) {
             console.error('[Auth:Register] Error:', err);
-            msg.textContent = 'Registration Error: ' + err.message;
+            msg.textContent = 'Registration Error: ' + (err?.message || 'Try again');
             msg.className = 'message error';
             msg.style.display = 'block';
+        } finally {
+            isRegistering = false;
         }
     };
 
@@ -391,6 +422,8 @@
        5. LOGIN WITH APPROVAL & EXPIRED RENEW GATEKEEPER
     ======================================================================== */
     const handleLogin = async () => {
+        if (isLoggingIn) return;
+
         const idInput = document.getElementById('login-id');
         const passInput = document.getElementById('login-pass');
         const err = document.getElementById('login-error');
@@ -401,10 +434,13 @@
         if (!inputVal || !pass) {
             if (err) {
                 err.textContent = 'Kripya User ID/Mobile/Gmail aur Password dono bharein!';
+                err.style.color = '#dc2626';
                 err.style.display = 'block';
             }
             return;
         }
+
+        isLoggingIn = true;
 
         if (err) {
             err.textContent = 'Checking credentials... ⏳';
@@ -487,6 +523,8 @@
                 err.style.color = '#dc2626';
                 err.style.display = 'block';
             }
+        } finally {
+            isLoggingIn = false;
         }
     };
 
@@ -593,27 +631,46 @@
                             if (typeof window.wipeUserLocalCache === 'function') {
                                 await window.wipeUserLocalCache(savedSession.id);
                             }
-                            alert('⛔ Yeh account delete ya reset ho chuka hai! Kripya dobara login karein.');
                             logout();
+                            const errEl = document.getElementById('login-error');
+                            if (errEl) {
+                                errEl.textContent = '⛔ Yeh account delete ya reset ho chuka hai! Kripya dobara login karein.';
+                                errEl.style.color = '#dc2626';
+                                errEl.style.display = 'block';
+                            }
                             return;
                         }
 
                         const st = String(freshUser.status || '').toLowerCase().trim();
                         if (st === 'blocked' || st === 'pending' || isUserExpired(freshUser)) {
+                            const expired = isUserExpired(freshUser);
                             _expiredLoginUser = {
                                 id: freshUser.id,
                                 name: freshUser.name,
                                 expiryDate: freshUser.expiryDate
                             };
-                            alert('⛔ Aapka account block ya expire ho chuka hai! Renew karne ke liye payment karein ya Admin se contact karein.');
                             logout();
+                            const errEl = document.getElementById('login-error');
+                            if (errEl) {
+                                if (expired) {
+                                    errEl.innerHTML = `⌛ <strong>Account Expired (${_formatDateDisplay(freshUser.expiryDate)})!</strong><br>
+                                        <button type="button" onclick="openExpiredRenewModal()" style="margin-top:8px; background:#0f766e; color:#fff; border:none; padding:9px 14px; border-radius:7px; font-weight:800; font-size:12.5px; cursor:pointer;">💳 QR Dekhein & Renew Karein</button>`;
+                                } else {
+                                    errEl.textContent = '⛔ Aapka account block ya pending hai! Admin se contact karein.';
+                                }
+                                errEl.style.color = '#dc2626';
+                                errEl.style.display = 'block';
+                            }
                         } else {
                             try {
                                 const updated = {
                                     ...savedSession,
                                     accountUid: freshUser.accountUid || savedSession.accountUid || '',
                                     name: freshUser.name,
+                                    mobile: freshUser.mobile || savedSession.mobile || '',
                                     email: freshUser.email || savedSession.email || '',
+                                    pass: freshUser.pass || savedSession.pass || '',
+                                    pin: freshUser.pin || savedSession.pin || '',
                                     role: freshUser.role || savedSession.role,
                                     status: freshUser.status || 'active',
                                     expiryDate: freshUser.expiryDate || ''
@@ -745,24 +802,32 @@
         msg.className = 'message';
         msg.style.display = 'block';
 
-        const user = await fetchUserByIdentifier(q);
+        try {
+            const user = await fetchUserByIdentifier(q);
 
-        if (!user || sanitizePin(user.pin) !== pin) {
-            msg.textContent = 'Galat User details ya PIN!';
+            if (!user || sanitizePin(user.pin) !== pin) {
+                msg.textContent = 'Galat User details ya PIN!';
+                msg.className = 'message error';
+                msg.style.display = 'block';
+                return;
+            }
+
+            window.targetResetUser = user;
+            _setDisplay('forgot-step-1', 'none');
+            _setDisplay('forgot-step-2', 'block');
+            msg.textContent = '✅ PIN Verified! Naya password banayein.';
+            msg.className = 'message success';
+            msg.style.display = 'block';
+        } catch (err) {
+            msg.textContent = 'Verify karne me dikkat aayi. Internet check karein!';
             msg.className = 'message error';
             msg.style.display = 'block';
-            return;
         }
-
-        window.targetResetUser = user;
-        _setDisplay('forgot-step-1', 'none');
-        _setDisplay('forgot-step-2', 'block');
-        msg.textContent = '✅ PIN Verified! Naya password banayein.';
-        msg.className = 'message success';
-        msg.style.display = 'block';
     };
 
     const sendForgotGmailOtp = async () => {
+        if (isSendingOtp) return;
+
         const queryEl = document.getElementById('forgot-query');
         const msg = document.getElementById('forgot-msg');
         const btn = document.getElementById('btn-send-gmail-otp');
@@ -776,51 +841,64 @@
             return;
         }
 
+        isSendingOtp = true;
         if (btn) { btn.disabled = true; btn.textContent = 'OTP Bhej Rahe Hain... ⏳'; }
         msg.textContent = 'Account aur Gmail check ho raha hai... ⏳';
         msg.className = 'message';
         msg.style.display = 'block';
 
-        const user = await fetchUserByIdentifier(q);
-        if (!user) {
-            if (btn) { btn.disabled = false; btn.textContent = '📧 PIN Bhool Gaye? Gmail par OTP Bhejein'; }
-            msg.textContent = 'Is User ID / Mobile / Gmail se koi account nahi mila!';
+        try {
+            const user = await fetchUserByIdentifier(q);
+            if (!user) {
+                if (btn) btn.textContent = '📧 PIN Bhool Gaye? Gmail par OTP Bhejein';
+                msg.textContent = 'Is User ID / Mobile / Gmail se koi account nahi mila!';
+                msg.className = 'message error';
+                msg.style.display = 'block';
+                return;
+            }
+
+            if (!user.email || !user.email.includes('@')) {
+                if (btn) btn.textContent = '📧 PIN Bhool Gaye? Gmail par OTP Bhejein';
+                msg.textContent = 'Is account mein koi Gmail link nahi hai! Kripya 4-Digit PIN se reset karein.';
+                msg.className = 'message error';
+                msg.style.display = 'block';
+                return;
+            }
+
+            const res = await callGmailEngine({
+                type: 'send_otp',
+                toEmail: user.email,
+                name: user.name,
+                userId: user.id
+            });
+
+            if (btn) btn.textContent = '🔄 Dobara Gmail par OTP Bhejein';
+
+            if (res && res.ok) {
+                window.targetResetUser = user;
+                _setDisplay('forgot-otp-entry', 'block');
+                msg.textContent = `✅ 6-Digit OTP aapke Gmail (${maskEmail(user.email)}) par bhej diya gaya hai! (Na dikhe to Spam folder check karein)`;
+                msg.className = 'message success';
+                msg.style.display = 'block';
+            } else {
+                msg.textContent = 'OTP bhejne mein dikkat aayi: ' + (res?.error || 'Internet check karein');
+                msg.className = 'message error';
+                msg.style.display = 'block';
+            }
+        } catch (err) {
+            if (btn) btn.textContent = '📧 PIN Bhool Gaye? Gmail par OTP Bhejein';
+            msg.textContent = 'OTP bhejne mein dikkat aayi. Internet check karein!';
             msg.className = 'message error';
             msg.style.display = 'block';
-            return;
-        }
-
-        if (!user.email || !user.email.includes('@')) {
-            if (btn) { btn.disabled = false; btn.textContent = '📧 PIN Bhool Gaye? Gmail par OTP Bhejein'; }
-            msg.textContent = 'Is account mein koi Gmail link nahi hai! Kripya 4-Digit PIN se reset karein.';
-            msg.className = 'message error';
-            msg.style.display = 'block';
-            return;
-        }
-
-        const res = await callGmailEngine({
-            type: 'send_otp',
-            toEmail: user.email,
-            name: user.name,
-            userId: user.id
-        });
-
-        if (btn) { btn.disabled = false; btn.textContent = '🔄 Dobara Gmail par OTP Bhejein'; }
-
-        if (res && res.ok) {
-            window.targetResetUser = user;
-            _setDisplay('forgot-otp-entry', 'block');
-            msg.textContent = `✅ 6-Digit OTP aapke Gmail (${maskEmail(user.email)}) par bhej diya gaya hai! (Na dikhe to Spam folder check karein)`;
-            msg.className = 'message success';
-            msg.style.display = 'block';
-        } else {
-            msg.textContent = 'OTP bhejne mein dikkat aayi: ' + (res?.error || 'Internet check karein');
-            msg.className = 'message error';
-            msg.style.display = 'block';
+        } finally {
+            isSendingOtp = false;
+            if (btn) btn.disabled = false;
         }
     };
 
     const verifyForgotGmailOtp = async () => {
+        if (isVerifyingOtp) return;
+
         const otpEl = document.getElementById('forgot-otp-input');
         const msg = document.getElementById('forgot-msg');
         const btn = document.getElementById('btn-verify-gmail-otp');
@@ -840,30 +918,40 @@
             return;
         }
 
+        isVerifyingOtp = true;
         if (btn) { btn.disabled = true; btn.textContent = 'Verify Ho Raha Hai... ⏳'; }
 
-        const res = await callGmailEngine({
-            type: 'verify_otp',
-            toEmail: window.targetResetUser.email,
-            otp: otp
-        });
+        try {
+            const res = await callGmailEngine({
+                type: 'verify_otp',
+                toEmail: window.targetResetUser.email,
+                otp: otp
+            });
 
-        if (btn) { btn.disabled = false; btn.textContent = '✅ Verify Gmail OTP'; }
-
-        if (res && res.ok) {
-            _setDisplay('forgot-step-1', 'none');
-            _setDisplay('forgot-step-2', 'block');
-            msg.textContent = '✅ Gmail OTP Verified! Ab naya password banayein.';
-            msg.className = 'message success';
-            msg.style.display = 'block';
-        } else {
-            msg.textContent = res?.error || 'Galat ya Expire ho chuka OTP!';
+            if (res && res.ok) {
+                _setDisplay('forgot-step-1', 'none');
+                _setDisplay('forgot-step-2', 'block');
+                msg.textContent = '✅ Gmail OTP Verified! Ab naya password banayein.';
+                msg.className = 'message success';
+                msg.style.display = 'block';
+            } else {
+                msg.textContent = res?.error || 'Galat ya Expire ho chuka OTP!';
+                msg.className = 'message error';
+                msg.style.display = 'block';
+            }
+        } catch (err) {
+            msg.textContent = 'OTP verify karne me dikkat aayi!';
             msg.className = 'message error';
             msg.style.display = 'block';
+        } finally {
+            isVerifyingOtp = false;
+            if (btn) { btn.disabled = false; btn.textContent = '✅ Verify Gmail OTP'; }
         }
     };
 
     const saveNewPassword = async () => {
+        if (isResettingPass) return;
+
         const p1El = document.getElementById('forgot-new-pass');
         const p2El = document.getElementById('forgot-confirm-pass');
         const msg = document.getElementById('forgot-msg');
@@ -882,18 +970,26 @@
 
         if (!window.targetResetUser) return;
 
+        const sb = getSupabase();
+        if (!sb || !navigator.onLine) {
+            msg.textContent = '⚠️ Internet / Supabase connection nahi hai! Password update nahi ho saka.';
+            msg.className = 'message error';
+            msg.style.display = 'block';
+            return;
+        }
+
+        isResettingPass = true;
+
         try {
+            const { error } = await sb
+                .from('karkhana_users')
+                .update({ password: p1 })
+                .eq('user_id', window.targetResetUser.id);
+
+            if (error) throw error;
+
             window.targetResetUser.pass = p1;
-
-            const sb = getSupabase();
-            if (sb) {
-                const { error } = await sb
-                    .from('karkhana_users')
-                    .update({ password: p1 })
-                    .eq('user_id', window.targetResetUser.id);
-
-                if (error) throw error;
-            }
+            window.targetResetUser = null;
 
             msg.textContent = '✅ Password update ho gaya! Login karein.';
             msg.className = 'message success';
@@ -910,6 +1006,8 @@
             msg.textContent = 'Password save nahi ho paya!';
             msg.className = 'message error';
             msg.style.display = 'block';
+        } finally {
+            isResettingPass = false;
         }
     };
 
