@@ -13,7 +13,7 @@
     ======================================================================== */
     J.openPrintWin = (title, css, bodyHtml, w = 520, h = 680) => {
         const pw = window.open('', '', `width=${w},height=${h}`);
-        if (!pw) return alert('Popup block hai! Kripya browser me allow karein.');
+        if (!pw) return J.toast('⚠️ Popup block hai! Kripya browser me allow karein.', true);
         pw.document.write(`<html><head><title>${J.esc(title)}</title><style>${css}</style></head><body>${bodyHtml}<script>window.onload=function(){window.focus();window.print();setTimeout(()=>window.close(),600);};<\/script></body></html>`);
         pw.document.close();
     };
