@@ -2,14 +2,22 @@
    SIMPLICITY ERP - LIVE ADMIN CONTROL, STORAGE MONITOR & PER-KARIGER BILLING
    File: admin/admin.js • Developed by Farhan Jawed
    Architecture: Supabase Realtime + Accurate Storage RPC + Secured Full User Purge
+   Hardening: Action Locks • XSS-Safe Delegation • 1000+ Pagination • PWA Safe UI
 ============================================================================ */
 
 (() => {
     'use strict';
 
+    if (window._adminEngineLoaded) {
+        console.warn('[Admin] Already loaded — skip duplicate');
+        return;
+    }
+    window._adminEngineLoaded = true;
+
     const GMAIL_ENGINE_URL = 'https://script.google.com/macros/s/AKfycbzuHcuZf6gS4jIP2fS4Y7kGLw6MG2k_h9BDEdO2HOsredwvuJeys3m0Y-zCRlIX060bYQ/exec';
     const GMAIL_ENGINE_SECRET = 'simplicity_erp_mail_2026';
     const BILLING_CONFIG_ID = 'farhan_global_billing_config';
+    const ADMIN_PAGE_SIZE = 50;
 
     const DEFAULT_BILLING_CONFIG = Object.freeze({
         perKarigerRate: '15',
@@ -31,7 +39,13 @@
     let supabaseAdminChannel = null;
     let currentAdminFilter = 'all';
     let currentAdminSearch = '';
+    let currentAdminPage = 1;
     let pendingQrBase64 = null;
+
+    // Concurrency Locks
+    let isFetchingUsers = false;
+    let isSavingBilling = false;
+    const adminBusyUids = new Set();
 
     const getSupabaseAdmin = () => {
         return window.supabaseClient || (window.CloudEngine && window.CloudEngine.supabase) || null;
@@ -47,6 +61,12 @@
         const m = String(now.getMonth() + 1).padStart(2, '0');
         const day = String(now.getDate()).padStart(2, '0');
         return `${y}-${m}-${day}`;
+    };
+
+    const parseLocalIsoDate = (isoStr) => {
+        const m = String(isoStr || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (!m) return null;
+        return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10));
     };
 
     const esc = (s) => {
@@ -70,6 +90,50 @@
         if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
         if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(2)} MB`;
         return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    };
+
+    const setAdminBanner = (msg, type = 'info') => {
+        const el = document.getElementById('adm-status-banner');
+        if (!el) {
+            if (msg) console[type === 'error' ? 'warn' : 'log']('[Admin]', msg);
+            return;
+        }
+        if (!msg) {
+            el.style.display = 'none';
+            el.textContent = '';
+            return;
+        }
+        const palette = {
+            success: { bg: '#ecfdf5', fg: '#065f46', bd: '#a7f3d0' },
+            error: { bg: '#fef2f2', fg: '#b91c1c', bd: '#fecaca' },
+            info: { bg: '#eff6ff', fg: '#1e40af', bd: '#bfdbfe' }
+        };
+        const p = palette[type] || palette.info;
+        el.style.display = 'block';
+        el.style.background = p.bg;
+        el.style.color = p.fg;
+        el.style.borderColor = p.bd;
+        el.textContent = msg;
+
+        clearTimeout(el.__hideTimer);
+        el.__hideTimer = setTimeout(() => {
+            el.style.display = 'none';
+        }, 5500);
+    };
+
+    const setBillingStatusMsg = (msg, isError = true) => {
+        const el = document.getElementById('adm-bill-status');
+        if (!el) return;
+        if (!msg) {
+            el.style.display = 'none';
+            el.textContent = '';
+            return;
+        }
+        el.style.display = 'block';
+        el.style.color = isError ? '#b91c1c' : '#15803d';
+        el.style.background = isError ? '#fef2f2' : '#ecfdf5';
+        el.style.borderColor = isError ? '#fecaca' : '#a7f3d0';
+        el.textContent = msg;
     };
 
     const sendAdminApprovalEmail = async (payload) => {
@@ -110,6 +174,96 @@
         }
         currentBillingCfg = cfg;
         return cfg;
+    };
+
+    const closeAdminActionModal = () => {
+        const m = document.getElementById('adm-action-modal');
+        if (m) m.remove();
+    };
+
+    const openAdminActionModal = ({ title, bodyHtml, confirmLabel, confirmColor = '#0f766e', onConfirm }) => {
+        closeAdminActionModal();
+        const html = `
+        <div id="adm-action-modal" style="position:fixed; inset:0; background:rgba(15,23,42,0.75); z-index:999999; display:flex; align-items:center; justify-content:center; padding:12px; box-sizing:border-box; font-family:sans-serif;">
+            <div style="background:#ffffff; width:100%; max-width:420px; border-radius:14px; overflow:hidden; box-shadow:0 20px 40px rgba(0,0,0,0.4);">
+                <div style="background:#0f172a; color:#ffffff; padding:13px 16px; display:flex; justify-content:space-between; align-items:center;">
+                    <h3 style="margin:0; font-size:15px; font-weight:800;">${esc(title)}</h3>
+                    <button type="button" id="adm-act-close-x" style="background:transparent; border:none; color:#ffffff; font-size:22px; cursor:pointer; line-height:1;">&times;</button>
+                </div>
+                <div style="padding:16px;">
+                    ${bodyHtml}
+                    <div id="adm-act-err" style="display:none; margin-top:10px; font-size:12px; font-weight:700; color:#b91c1c; background:#fef2f2; border:1px solid #fecaca; padding:8px 10px; border-radius:7px;"></div>
+                    <div style="display:flex; gap:8px; margin-top:14px;">
+                        <button type="button" id="adm-act-confirm-btn" style="flex:1; background:${confirmColor}; color:#ffffff; border:none; padding:10px; border-radius:8px; font-size:13.5px; font-weight:800; cursor:pointer;">${esc(confirmLabel)}</button>
+                        <button type="button" id="adm-act-cancel-btn" style="background:#e2e8f0; color:#334155; border:none; padding:10px 14px; border-radius:8px; font-size:13px; font-weight:700; cursor:pointer;">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+
+        document.body.insertAdjacentHTML('beforeend', html);
+
+        const setErr = (m) => {
+            const errEl = document.getElementById('adm-act-err');
+            if (!errEl) return;
+            errEl.style.display = m ? 'block' : 'none';
+            errEl.textContent = m || '';
+        };
+
+        document.getElementById('adm-act-close-x')?.addEventListener('click', closeAdminActionModal);
+        document.getElementById('adm-act-cancel-btn')?.addEventListener('click', closeAdminActionModal);
+        document.getElementById('adm-act-confirm-btn')?.addEventListener('click', async () => {
+            if (typeof onConfirm === 'function') {
+                await onConfirm(setErr, closeAdminActionModal);
+            }
+        });
+    };
+
+    const bindAdminDelegatedEvents = (adminSec) => {
+        if (!adminSec || adminSec.dataset.admEventsBound === '1') return;
+        adminSec.dataset.admEventsBound = '1';
+
+        adminSec.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-adm-act]');
+            if (!btn) return;
+            const act = btn.dataset.admAct;
+            const uid = btn.dataset.uid || '';
+
+            if (act === 'toggle-pass') toggleAdminRowPass(btn);
+            else if (act === 'approve') approveUserByAdmin(uid);
+            else if (act === 'delete') deleteUserByAdmin(uid);
+            else if (act === 'block') toggleUserBlockStatus(uid);
+            else if (act === 'pass') resetUserPasswordByAdmin(uid);
+            else if (act === 'extend') extendValidity(uid, 30);
+            else if (act === 'page-prev') {
+                if (currentAdminPage > 1) {
+                    currentAdminPage--;
+                    renderAdminUsersTable();
+                }
+            } else if (act === 'page-next') {
+                currentAdminPage++;
+                renderAdminUsersTable();
+            }
+        });
+
+        adminSec.addEventListener('change', (e) => {
+            const inp = e.target.closest('input[data-adm-expiry]');
+            if (!inp) return;
+            const uid = inp.dataset.uid || '';
+            if (uid) updateUserExpiryDate(uid, inp.value);
+        });
+
+        if (!window._adminEscBound) {
+            window._adminEscBound = true;
+            document.addEventListener('keydown', (e) => {
+                if (e.key !== 'Escape') return;
+                if (document.getElementById('adm-action-modal')) {
+                    closeAdminActionModal();
+                } else if (document.getElementById('admin-billing-modal')) {
+                    closeAdminBillingModal();
+                }
+            });
+        }
     };
 
     const buildModernAdminShell = () => {
@@ -179,9 +333,11 @@
                     </div>
                     <div class="adm-top-actions">
                         <button type="button" onclick="openAdminBillingModal()" style="background:#2563eb; color:#ffffff; border:none; padding:8px 14px; border-radius:8px; font-size:12.5px; font-weight:800; cursor:pointer;">💳 Payment / QR</button>
-                        <button type="button" id="admin-refresh-users-btn" onclick="refreshAdminUsersList()" style="background:#0f766e; color:#ffffff; border:none; padding:8px 14px; border-radius:8px; font-size:12.5px; font-weight:800; cursor:pointer;">🔄 Refresh List</button>
+                        <button type="button" id="admin-refresh-users-btn" onclick="refreshAdminUsersList(false)" style="background:#0f766e; color:#ffffff; border:none; padding:8px 14px; border-radius:8px; font-size:12.5px; font-weight:800; cursor:pointer;">🔄 Refresh List</button>
                     </div>
                 </div>
+
+                <div id="adm-status-banner" style="display:none; padding:10px 14px; border-radius:10px; border:1.5px solid #bfdbfe; font-size:12.5px; font-weight:700; margin-bottom:12px;"></div>
 
                 <div class="adm-stats">
                     <div class="adm-stat-card">
@@ -241,9 +397,32 @@
                             <tbody id="admin-users-table-body"></tbody>
                         </table>
                     </div>
+                    <div id="adm-pagination-bar" style="display:none; justify-content:space-between; align-items:center; padding:10px 14px; border-top:1px solid #e2e8f0; background:#f8fafc; flex-wrap:wrap; gap:8px; font-size:12px;"></div>
                 </div>
             </div>
         `;
+        bindAdminDelegatedEvents(adminSec);
+    };
+
+    const fetchAllUsersPaginated = async (sb) => {
+        const allRows = [];
+        const pageSize = 1000;
+        let from = 0;
+
+        while (true) {
+            const { data, error } = await sb
+                .from('karkhana_users')
+                .select('*')
+                .order('created_at', { ascending: false })
+                .range(from, from + pageSize - 1);
+
+            if (error) throw error;
+            if (!Array.isArray(data) || data.length === 0) break;
+            allRows.push(...data);
+            if (data.length < pageSize) break;
+            from += pageSize;
+        }
+        return allRows;
     };
 
     const fetchAllUsersStorageMap = async (sb) => {
@@ -296,12 +475,44 @@
         return window.adminKarigerCountMap || {};
     };
 
+    const mapUserRows = (rows) => {
+        const arr = [];
+        let pendingCount = 0;
+        if (Array.isArray(rows)) {
+            rows.forEach((row) => {
+                const st = String(row.status || '').toLowerCase().trim();
+                if (st === 'pending' || st === 'pending_approval' || st === 'waiting') {
+                    pendingCount++;
+                }
+                arr.push({
+                    id: row.user_id,
+                    name: row.full_name || row.user_id,
+                    mobile: row.mobile || '-',
+                    email: row.email || '',
+                    pass: row.password || '-',
+                    pin: row.pin || '',
+                    role: row.role || 'owner',
+                    status: row.status || 'active',
+                    date: row.created_at ? row.created_at.split('T')[0] : '-',
+                    expiryDate: row.validity_date || ''
+                });
+            });
+        }
+        return { arr, pendingCount };
+    };
+
     function openAdminModule() {
         const uid = String(window.currentUserId || localStorage.getItem('app_current_user_id') || '').trim().toLowerCase();
         const role = String(window.currentUserRole || '').trim().toLowerCase();
 
         if (role !== 'admin' && uid !== 'farhan') {
-            return alert('⛔ Sirf Master Admin (Farhan) is panel ko access kar sakte hain!');
+            console.warn('[Admin] Unauthorized access blocked.');
+            const errEl = document.getElementById('login-error');
+            if (errEl) {
+                errEl.textContent = '⛔ Sirf Master Admin (Farhan) is panel ko access kar sakte hain!';
+                errEl.style.display = 'block';
+            }
+            return;
         }
 
         if (typeof window.hideAllSections === 'function') {
@@ -327,34 +538,18 @@
             return;
         }
 
+        if (isFetchingUsers) return;
+        isFetchingUsers = true;
+
         try {
-            const [usersRes] = await Promise.all([
-                sb.from('karkhana_users').select('*').order('created_at', { ascending: false }),
+            const [usersRows] = await Promise.all([
+                fetchAllUsersPaginated(sb),
                 fetchAllUsersStorageMap(sb),
                 fetchAllUsersKarigerCounts(sb),
                 loadBillingConfig()
             ]);
 
-            if (usersRes.error) throw usersRes.error;
-
-            const arr = [];
-            if (usersRes.data && Array.isArray(usersRes.data)) {
-                usersRes.data.forEach((row) => {
-                    arr.push({
-                        id: row.user_id,
-                        name: row.full_name || row.user_id,
-                        mobile: row.mobile || '-',
-                        email: row.email || '',
-                        pass: row.password || '-',
-                        pin: row.pin || '',
-                        role: row.role || 'owner',
-                        status: row.status || 'active',
-                        date: row.created_at ? row.created_at.split('T')[0] : '-',
-                        expiryDate: row.validity_date || ''
-                    });
-                });
-            }
-
+            const { arr } = mapUserRows(usersRows);
             window.adminUsersData = arr;
             renderAdminUsersTable();
             if (typeof callback === 'function') callback(true, arr);
@@ -375,12 +570,16 @@
             }
         } catch (err) {
             console.error('[Admin] Supabase fetch error:', err);
+            setAdminBanner('❌ Users load karne me error: ' + (err?.message || 'Connection check karein'), 'error');
             if (typeof callback === 'function') callback(false, err.message);
+        } finally {
+            isFetchingUsers = false;
         }
     }
 
     function setAdminUsersFilter(tab) {
         currentAdminFilter = tab || 'all';
+        currentAdminPage = 1;
         ['all', 'pending', 'active', 'blocked'].forEach((t) => {
             const btn = document.getElementById(`adm-tab-${t}`);
             if (btn) btn.classList.toggle('active', t === currentAdminFilter);
@@ -390,6 +589,7 @@
 
     function handleAdminUserSearch(val) {
         currentAdminSearch = String(val || '').trim().toLowerCase();
+        currentAdminPage = 1;
         renderAdminUsersTable();
     }
 
@@ -481,11 +681,20 @@
             return true;
         });
 
+        const pagBar = document.getElementById('adm-pagination-bar');
+
         if (!filtered.length) {
             tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding:24px; color:#64748b; font-weight:600;">${users.length ? 'Koi user filter se match nahi hua.' : 'Users load ho rahe hain ya koi user nahi mila...'}</td></tr>`;
+            if (pagBar) pagBar.style.display = 'none';
         } else {
+            const totalPages = Math.ceil(filtered.length / ADMIN_PAGE_SIZE) || 1;
+            if (currentAdminPage > totalPages) currentAdminPage = totalPages;
+            if (currentAdminPage < 1) currentAdminPage = 1;
+            const startIdx = (currentAdminPage - 1) * ADMIN_PAGE_SIZE;
+            const pageItems = filtered.slice(startIdx, startIdx + ADMIN_PAGE_SIZE);
+
             let rowsHtml = '';
-            filtered.forEach((item, idx) => {
+            pageItems.forEach((item, idx) => {
                 const { u, uIdStr, isOwner, isPending, isBlocked, isExpired, usedBytes, kCount, billAmt } = item;
                 const safeIdAttr = esc(uIdStr);
 
@@ -505,14 +714,14 @@
                 let actionBtns = '';
                 if (isPending) {
                     actionBtns = `
-                        <button type="button" onclick="approveUserByAdmin('${safeIdAttr}')" style="background:#0f766e; color:#fff; border:none; font-weight:700; padding:6px 10px; border-radius:6px; font-size:11.5px; cursor:pointer;">✅ Approve</button>
-                        <button type="button" onclick="deleteUserByAdmin('${safeIdAttr}')" style="background:#dc2626; color:#fff; border:none; font-weight:700; padding:6px 10px; border-radius:6px; font-size:11.5px; cursor:pointer;">🗑️ Reject</button>
+                        <button type="button" data-adm-act="approve" data-uid="${safeIdAttr}" style="background:#0f766e; color:#fff; border:none; font-weight:700; padding:6px 10px; border-radius:6px; font-size:11.5px; cursor:pointer;">✅ Approve</button>
+                        <button type="button" data-adm-act="delete" data-uid="${safeIdAttr}" style="background:#dc2626; color:#fff; border:none; font-weight:700; padding:6px 10px; border-radius:6px; font-size:11.5px; cursor:pointer;">🗑️ Reject</button>
                     `;
                 } else if (!isOwner) {
                     actionBtns = `
-                        <button type="button" onclick="toggleUserBlockStatus('${safeIdAttr}')" style="background:${isBlocked ? '#0f766e' : '#f59e0b'}; color:#fff; border:none; font-weight:700; padding:5px 9px; border-radius:6px; font-size:11px; cursor:pointer;">${isBlocked ? 'Unblock' : 'Block'}</button>
-                        <button type="button" onclick="resetUserPasswordByAdmin('${safeIdAttr}')" style="background:#0284c7; color:#fff; border:none; font-weight:700; padding:5px 9px; border-radius:6px; font-size:11px; cursor:pointer;">🔑 Pass</button>
-                        <button type="button" onclick="deleteUserByAdmin('${safeIdAttr}')" style="background:#dc2626; color:#fff; border:none; font-weight:700; padding:5px 8px; border-radius:6px; font-size:11px; cursor:pointer;">🗑️</button>
+                        <button type="button" data-adm-act="block" data-uid="${safeIdAttr}" style="background:${isBlocked ? '#0f766e' : '#f59e0b'}; color:#fff; border:none; font-weight:700; padding:5px 9px; border-radius:6px; font-size:11px; cursor:pointer;">${isBlocked ? 'Unblock' : 'Block'}</button>
+                        <button type="button" data-adm-act="pass" data-uid="${safeIdAttr}" style="background:#0284c7; color:#fff; border:none; font-weight:700; padding:5px 9px; border-radius:6px; font-size:11px; cursor:pointer;">🔑 Pass</button>
+                        <button type="button" data-adm-act="delete" data-uid="${safeIdAttr}" style="background:#dc2626; color:#fff; border:none; font-weight:700; padding:5px 8px; border-radius:6px; font-size:11px; cursor:pointer;">🗑️</button>
                     `;
                 } else {
                     actionBtns = `<span style="color:#0f766e; font-weight:800; font-size:11.5px;">Full Control</span>`;
@@ -527,8 +736,8 @@
                     expiryDisplay = `
                         <div style="font-size:11px; color:#64748b; margin-bottom:3px;">Join: ${esc(formatDate(u.date))}</div>
                         <div style="display:flex; align-items:center; gap:4px; flex-wrap:wrap;">
-                            <input type="date" value="${esc(u.expiryDate || '')}" onchange="updateUserExpiryDate('${safeIdAttr}', this.value)" style="padding:3px 5px; font-size:11px; border-radius:5px; border:1px solid #cbd5e1;">
-                            <button type="button" onclick="extendValidity('${safeIdAttr}', 30)" style="padding:4px 7px; font-size:10.5px; font-weight:700; border-radius:5px; border:none; background:#2563eb; color:#fff; cursor:pointer;">+30D</button>
+                            <input type="date" data-adm-expiry="1" data-uid="${safeIdAttr}" value="${esc(u.expiryDate || '')}" style="padding:3px 5px; font-size:11px; border-radius:5px; border:1px solid #cbd5e1;">
+                            <button type="button" data-adm-act="extend" data-uid="${safeIdAttr}" style="padding:4px 7px; font-size:10.5px; font-weight:700; border-radius:5px; border:none; background:#2563eb; color:#fff; cursor:pointer;">+30D</button>
                         </div>
                     `;
                 }
@@ -542,7 +751,7 @@
 
                 rowsHtml += `
                     <tr>
-                        <td style="text-align:center; font-weight:700; color:#64748b;">${idx + 1}</td>
+                        <td style="text-align:center; font-weight:700; color:#64748b;">${startIdx + idx + 1}</td>
                         <td>
                             <strong style="color:#0f172a; font-size:13px;">${esc(u.name || '-')}</strong>
                             ${u.email ? `<div style="font-size:11px; color:#64748b;">${esc(u.email)}</div>` : ''}
@@ -558,7 +767,7 @@
                         <td>
                             <div style="display:inline-flex; align-items:center; gap:6px; background:#f8fafc; border:1px solid #e2e8f0; padding:3px 8px; border-radius:6px;">
                                 <span class="adm-pass-val" data-raw="${encodedPass}" data-shown="false" style="font-weight:800; color:#1e3a8a; letter-spacing:1px;">••••••</span>
-                                <button type="button" onclick="toggleAdminRowPass(this)" style="background:transparent; border:none; cursor:pointer; font-size:13px; padding:0;" title="Show/Hide Password">👁️</button>
+                                <button type="button" data-adm-act="toggle-pass" style="background:transparent; border:none; cursor:pointer; font-size:13px; padding:0;" title="Show/Hide Password">👁️</button>
                             </div>
                         </td>
                         <td>${expiryDisplay}</td>
@@ -568,6 +777,21 @@
                 `;
             });
             tbody.innerHTML = rowsHtml;
+
+            if (pagBar) {
+                if (totalPages > 1) {
+                    pagBar.style.display = 'flex';
+                    pagBar.innerHTML = `
+                        <span style="color:#475569; font-weight:600;">Showing <strong>${startIdx + 1}</strong> - <strong>${Math.min(startIdx + ADMIN_PAGE_SIZE, filtered.length)}</strong> of <strong>${filtered.length}</strong> Users</span>
+                        <div style="display:flex; gap:6px; align-items:center;">
+                            <button type="button" data-adm-act="page-prev" ${currentAdminPage <= 1 ? 'disabled style="opacity:0.45; cursor:not-allowed;"' : ''} class="adm-tab-btn">◀ Prev</button>
+                            <span style="font-weight:800; color:#0f172a;">${currentAdminPage} / ${totalPages}</span>
+                            <button type="button" data-adm-act="page-next" ${currentAdminPage >= totalPages ? 'disabled style="opacity:0.45; cursor:not-allowed;"' : ''} class="adm-tab-btn">Next ▶</button>
+                        </div>`;
+                } else {
+                    pagBar.style.display = 'none';
+                }
+            }
         }
 
         const pendingBanner = document.getElementById('admin-pending-approval-banner');
@@ -589,8 +813,8 @@
                                 <div style="font-size:11px; color:#64748b; margin-top:2px;">Request Date: ${esc(formatDate(pu.date))}</div>
                             </div>
                             <div style="display:flex; gap:8px;">
-                                <button type="button" onclick="approveUserByAdmin('${pId}')" style="background:#0f766e; color:#fff; border:none; font-weight:800; padding:8px 14px; border-radius:8px; font-size:12px; cursor:pointer;">✅ Approve Karein</button>
-                                <button type="button" onclick="deleteUserByAdmin('${pId}')" style="background:#dc2626; color:#fff; border:none; font-weight:800; padding:8px 12px; border-radius:8px; font-size:12px; cursor:pointer;">🗑️ Reject</button>
+                                <button type="button" data-adm-act="approve" data-uid="${pId}" style="background:#0f766e; color:#fff; border:none; font-weight:800; padding:8px 14px; border-radius:8px; font-size:12px; cursor:pointer;">✅ Approve Karein</button>
+                                <button type="button" data-adm-act="delete" data-uid="${pId}" style="background:#dc2626; color:#fff; border:none; font-weight:800; padding:8px 12px; border-radius:8px; font-size:12px; cursor:pointer;">🗑️ Reject</button>
                             </div>
                         </div>
                     `;
@@ -604,71 +828,61 @@
         }
     }
 
-    async function refreshAdminUsersList() {
+    async function refreshAdminUsersList(silent = false) {
+        if (isFetchingUsers) return;
+        isFetchingUsers = true;
+
         const btn = document.getElementById('admin-refresh-users-btn');
-        if (btn) btn.textContent = '⏳ Syncing...';
+        if (btn) { btn.disabled = true; btn.textContent = '⏳ Syncing...'; }
 
         const sb = getSupabaseAdmin();
         if (!sb) {
-            if (btn) btn.textContent = '🔄 Refresh List';
-            return alert('⚠️ Supabase connect nahi hai!');
+            isFetchingUsers = false;
+            if (btn) { btn.disabled = false; btn.textContent = '🔄 Refresh List'; }
+            if (!silent) setAdminBanner('⚠️ Supabase connect nahi hai!', 'error');
+            return;
         }
 
         try {
-            const [usersRes] = await Promise.all([
-                sb.from('karkhana_users').select('*').order('created_at', { ascending: false }),
+            const [usersRows] = await Promise.all([
+                fetchAllUsersPaginated(sb),
                 fetchAllUsersStorageMap(sb),
                 fetchAllUsersKarigerCounts(sb),
                 loadBillingConfig()
             ]);
 
-            if (usersRes.error) throw usersRes.error;
-
-            const arr = [];
-            let pendingCount = 0;
-
-            if (usersRes.data && Array.isArray(usersRes.data)) {
-                usersRes.data.forEach((row) => {
-                    const st = String(row.status || '').toLowerCase().trim();
-                    if (st === 'pending' || st === 'pending_approval' || st === 'waiting') {
-                        pendingCount++;
-                    }
-                    arr.push({
-                        id: row.user_id,
-                        name: row.full_name || row.user_id,
-                        mobile: row.mobile || '-',
-                        email: row.email || '',
-                        pass: row.password || '-',
-                        pin: row.pin || '',
-                        role: row.role || 'owner',
-                        status: row.status || 'active',
-                        date: row.created_at ? row.created_at.split('T')[0] : '-',
-                        expiryDate: row.validity_date || ''
-                    });
-                });
-            }
-
+            const { arr, pendingCount } = mapUserRows(usersRows);
             window.adminUsersData = arr;
             renderAdminUsersTable();
-            if (btn) btn.textContent = '🔄 Refresh List';
 
-            alert(`✅ Refresh Ho Gaya!\n\n📊 Kul Users: ${arr.length}\n⏳ Approval Pending: ${pendingCount}\n🟢 Active/Others: ${arr.length - pendingCount}`);
+            if (!silent) {
+                setAdminBanner(
+                    `✅ Refresh Ho Gaya! Kul Users: ${arr.length} • Approval Pending: ${pendingCount} • Active/Others: ${arr.length - pendingCount}`,
+                    'success'
+                );
+            }
         } catch (err) {
-            if (btn) btn.textContent = '🔄 Refresh List';
-            alert('❌ Refresh Error: ' + err.message);
+            setAdminBanner('❌ Refresh Error: ' + (err?.message || 'Unknown error'), 'error');
+        } finally {
+            isFetchingUsers = false;
+            if (btn) { btn.disabled = false; btn.textContent = '🔄 Refresh List'; }
         }
     }
 
     async function approveUserByAdmin(uid) {
+        const key = String(uid || '').trim().toLowerCase();
+        if (!key || adminBusyUids.has(key)) return;
+
         const exp = new Date();
         exp.setDate(exp.getDate() + 30);
         const formattedExp = `${exp.getFullYear()}-${String(exp.getMonth() + 1).padStart(2, '0')}-${String(exp.getDate()).padStart(2, '0')}`;
 
         const sb = getSupabaseAdmin();
-        if (!sb) return alert('Supabase connect nahi hai!');
+        if (!sb) return setAdminBanner('⚠️ Supabase connect nahi hai!', 'error');
 
+        adminBusyUids.add(key);
         try {
-            const targetUser = (window.adminUsersData || []).find((x) => String(x.id) === String(uid));
+            const targetUser = (window.adminUsersData || []).find((x) => String(x.id).toLowerCase() === key);
 
             const { error } = await sb
                 .from('karkhana_users')
@@ -691,47 +905,69 @@
                     appUrl: window.location.origin + window.location.pathname
                 });
                 if (mailRes && mailRes.ok) {
-                    mailNote = '\n📧 Client ke Gmail par Welcome Email bhi bhej diya gaya!';
+                    mailNote = ' (Gmail par Welcome Email bhi bhej diya gaya)';
                 }
             }
 
-            alert(`🎉 User '${uid}' APPROVE ho gaya!\nAb wo turant login kar sakta hai.${mailNote}`);
-            refreshAdminUsersList();
+            setAdminBanner(`🎉 User '${uid}' APPROVE ho gaya!${mailNote}`, 'success');
+            await refreshAdminUsersList(true);
         } catch (err) {
-            alert('Approve error: ' + err.message);
+            setAdminBanner('❌ Approve error: ' + (err?.message || err), 'error');
+        } finally {
+            adminBusyUids.delete(key);
         }
     }
 
     async function updateUserExpiryDate(uid, dateVal) {
+        const key = String(uid || '').trim().toLowerCase();
+        if (!key || adminBusyUids.has(key)) return;
+
+        const cleanDate = String(dateVal || '').trim();
+        if (cleanDate && !/^\d{4}-\d{2}-\d{2}$/.test(cleanDate)) {
+            setAdminBanner('⚠️ Sahi date format (YYYY-MM-DD) chunein!', 'error');
+            renderAdminUsersTable();
+            return;
+        }
+
         const sb = getSupabaseAdmin();
         if (!sb) return;
 
+        adminBusyUids.add(key);
         try {
             const { error } = await sb
                 .from('karkhana_users')
-                .update({ validity_date: dateVal })
+                .update({ validity_date: cleanDate || null })
                 .eq('user_id', uid);
             if (error) throw error;
 
-            const target = (window.adminUsersData || []).find((x) => String(x.id) === String(uid));
-            if (target) target.expiryDate = dateVal || '';
+            const target = (window.adminUsersData || []).find((x) => String(x.id).toLowerCase() === key);
+            if (target) target.expiryDate = cleanDate || '';
             renderAdminUsersTable();
+            setAdminBanner(`✅ '${uid}' ki validity date update ho gayi.`, 'success');
         } catch (err) {
             console.error('Expiry update error:', err);
-            alert('Expiry update error: ' + (err.message || err));
+            setAdminBanner('❌ Expiry update error: ' + (err?.message || err), 'error');
             renderAdminUsersTable();
+        } finally {
+            adminBusyUids.delete(key);
         }
     }
 
     async function extendValidity(uid, days) {
-        const u = (window.adminUsersData || []).find((x) => String(x.id) === String(uid));
-        const base = (u && u.expiryDate && new Date(u.expiryDate) > new Date()) ? new Date(u.expiryDate) : new Date();
+        const key = String(uid || '').trim().toLowerCase();
+        if (!key || adminBusyUids.has(key)) return;
+
+        const u = (window.adminUsersData || []).find((x) => String(x.id).toLowerCase() === key);
+        const parsedExp = (u && u.expiryDate) ? parseLocalIsoDate(u.expiryDate) : null;
+        const todayStart = parseLocalIsoDate(getLocalTodayIso()) || new Date();
+        const base = (parsedExp && parsedExp > todayStart) ? parsedExp : new Date();
         base.setDate(base.getDate() + days);
         const formatted = `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}-${String(base.getDate()).padStart(2, '0')}`;
 
         const sb = getSupabaseAdmin();
-        if (!sb) return alert('Supabase connect nahi hai!');
+        if (!sb) return setAdminBanner('⚠️ Supabase connect nahi hai!', 'error');
 
+        adminBusyUids.add(key);
         try {
             const { error } = await sb
                 .from('karkhana_users')
@@ -743,43 +979,71 @@
 
             if (error) throw error;
 
-            alert(`✅ Validity ${days} din badh gayi!`);
-            refreshAdminUsersList();
+            setAdminBanner(`✅ '${uid}' ki validity ${days} din badh gayi (${formatDate(formatted)})!`, 'success');
+            await refreshAdminUsersList(true);
         } catch (err) {
-            alert('Validity update error: ' + err.message);
+            setAdminBanner('❌ Validity update error: ' + (err?.message || err), 'error');
+        } finally {
+            adminBusyUids.delete(key);
         }
     }
 
-    async function resetUserPasswordByAdmin(uid) {
-        const newPass = prompt('Naya password daalein:', Math.floor(100000 + Math.random() * 900000).toString());
-        if (!newPass || !newPass.trim()) return;
+    function resetUserPasswordByAdmin(uid) {
+        const key = String(uid || '').trim().toLowerCase();
+        if (!key || adminBusyUids.has(key)) return;
 
         const sb = getSupabaseAdmin();
-        if (!sb) return alert('Supabase connect nahi hai!');
+        if (!sb) return setAdminBanner('⚠️ Supabase connect nahi hai!', 'error');
 
-        try {
-            const { error } = await sb
-                .from('karkhana_users')
-                .update({ password: newPass.trim() })
-                .eq('user_id', uid);
+        const suggested = Math.floor(100000 + Math.random() * 900000).toString();
+        openAdminActionModal({
+            title: `🔑 Reset Password (${uid})`,
+            bodyHtml: `
+                <div style="font-size:12.5px; color:#334155; margin-bottom:8px;">User <strong>${esc(uid)}</strong> ke liye naya password daalein:</div>
+                <input type="text" id="adm-reset-pass-inp" value="${suggested}" style="width:100%; box-sizing:border-box; padding:9px 10px; border:1.5px solid #0284c7; border-radius:7px; font-size:14px; font-weight:800;">
+            `,
+            confirmLabel: 'Save Password',
+            confirmColor: '#0284c7',
+            onConfirm: async (setErr, closeModal) => {
+                const newPass = String(document.getElementById('adm-reset-pass-inp')?.value || '').trim();
+                if (!newPass || newPass.length < 4) {
+                    setErr('⚠️ Kam se kam 4 akshar ka password daalein!');
+                    return;
+                }
+                if (adminBusyUids.has(key)) return;
+                adminBusyUids.add(key);
+                try {
+                    const { error } = await sb
+                        .from('karkhana_users')
+                        .update({ password: newPass })
+                        .eq('user_id', uid);
 
-            if (error) throw error;
-
-            alert('✅ Password update ho gaya!');
-            refreshAdminUsersList();
-        } catch (err) {
-            alert('Password reset error: ' + err.message);
-        }
+                    if (error) throw error;
+                    closeModal();
+                    setAdminBanner(`✅ '${uid}' ka password update ho gaya!`, 'success');
+                    await refreshAdminUsersList(true);
+                } catch (err) {
+                    setErr('❌ Password reset error: ' + (err?.message || err));
+                } finally {
+                    adminBusyUids.delete(key);
+                }
+            }
+        });
+        setTimeout(() => document.getElementById('adm-reset-pass-inp')?.select(), 40);
     }
 
     async function toggleUserBlockStatus(uid) {
-        if (String(uid).toLowerCase() === 'farhan') return alert('⛔ Master Admin block nahi ho sakta!');
-        const u = (window.adminUsersData || []).find((x) => String(x.id) === String(uid));
+        const key = String(uid || '').trim().toLowerCase();
+        if (key === 'farhan') return setAdminBanner('⛔ Master Admin block nahi ho sakta!', 'error');
+        if (!key || adminBusyUids.has(key)) return;
+
+        const u = (window.adminUsersData || []).find((x) => String(x.id).toLowerCase() === key);
         const nextStatus = (u && u.status === 'blocked') ? 'active' : 'blocked';
 
         const sb = getSupabaseAdmin();
-        if (!sb) return alert('Supabase connect nahi hai!');
+        if (!sb) return setAdminBanner('⚠️ Supabase connect nahi hai!', 'error');
 
+        adminBusyUids.add(key);
         try {
             const { error } = await sb
                 .from('karkhana_users')
@@ -788,61 +1052,88 @@
 
             if (error) throw error;
 
-            refreshAdminUsersList();
+            setAdminBanner(`✅ '${uid}' ab ${nextStatus === 'blocked' ? 'BLOCK' : 'UNBLOCK (Active)'} ho gaya!`, 'success');
+            await refreshAdminUsersList(true);
         } catch (err) {
-            alert('Block/Unblock error: ' + err.message);
+            setAdminBanner('❌ Block/Unblock error: ' + (err?.message || err), 'error');
+        } finally {
+            adminBusyUids.delete(key);
         }
     }
 
-    async function deleteUserByAdmin(uid) {
+    function deleteUserByAdmin(uid) {
         const cleanUid = String(uid || '').trim();
         const uidLower = cleanUid.toLowerCase();
         if (!uidLower || uidLower === 'farhan' || uidLower === 'app' || uidLower === 'admin') {
-            return alert('⛔ Master Admin delete nahi ho sakta!');
+            return setAdminBanner('⛔ Master Admin delete nahi ho sakta!', 'error');
         }
+        if (adminBusyUids.has(uidLower)) return;
+
+        const sb = getSupabaseAdmin();
+        if (!sb) return setAdminBanner('⚠️ Supabase connect nahi hai!', 'error');
 
         const targetUser = (window.adminUsersData || []).find((x) => String(x.id || '').trim().toLowerCase() === uidLower);
         const st = String(targetUser?.status || '').toLowerCase().trim();
         const isPending = (st === 'pending' || st === 'pending_approval' || st === 'waiting');
 
-        if (!confirm(`⚠️ KYA AAP USER '${cleanUid}' KO PERMANENTLY ${isPending ? 'REJECT' : 'DELETE'} KARNA CHAHTE HAIN?\n\nIsse is user ka login aur Supabase par maujood SAARA data (Karigers, Sheets, Stock, Payments, Dukan, JobWork, Portals) hamesha ke liye delete ho jayega!`)) {
-            return;
-        }
+        const bodyHtml = isPending
+            ? `<div style="font-size:13px; color:#7f1d1d; background:#fef2f2; border:1px solid #fecaca; padding:10px; border-radius:8px;">
+                ⚠️ Kya aap user <strong>${esc(cleanUid)}</strong> ki pending request permanently <strong>REJECT &amp; DELETE</strong> karna chahte hain?
+               </div>`
+            : `<div style="font-size:12.5px; color:#7f1d1d; background:#fef2f2; border:1px solid #fecaca; padding:10px; border-radius:8px; margin-bottom:10px;">
+                ⚠️ Isse <strong>${esc(cleanUid)}</strong> ka login aur Supabase par maujood SAARA data (Karigers, Sheets, Stock, Payments, Dukan, JobWork, Portals) hamesha ke liye delete ho jayega!
+               </div>
+               <label style="font-size:12px; font-weight:700; color:#334155; display:block; margin-bottom:4px;">Confirm karne ke liye User ID '<strong>${esc(cleanUid)}</strong>' type karein:</label>
+               <input type="text" id="adm-del-confirm-inp" placeholder="${esc(cleanUid)}" autocomplete="off" style="width:100%; box-sizing:border-box; padding:8px 10px; border:1.5px solid #dc2626; border-radius:7px; font-size:13px; font-weight:800;">`;
 
+        openAdminActionModal({
+            title: isPending ? `🗑️ Reject User (${cleanUid})` : `🗑️ Permanent Delete (${cleanUid})`,
+            bodyHtml,
+            confirmLabel: isPending ? 'Yes, Reject & Delete' : 'Permanently Delete',
+            confirmColor: '#dc2626',
+            onConfirm: async (setErr, closeModal) => {
+                if (!isPending) {
+                    const typed = String(document.getElementById('adm-del-confirm-inp')?.value || '').trim().toLowerCase();
+                    if (typed !== uidLower) {
+                        setErr(`❌ User ID '${cleanUid}' match nahi hua!`);
+                        document.getElementById('adm-del-confirm-inp')?.focus();
+                        return;
+                    }
+                }
+                if (adminBusyUids.has(uidLower)) return;
+                adminBusyUids.add(uidLower);
+
+                try {
+                    let adminAuth = {};
+                    try { adminAuth = JSON.parse(localStorage.getItem('app_active_session_auth') || '{}'); } catch (_) {}
+
+                    const { data: deletedRows, error } = await sb.rpc('delete_user_completely', {
+                        p_user_id: cleanUid,
+                        p_admin_id: adminAuth.id || window.currentUserId || 'farhan',
+                        p_admin_pass: adminAuth.pass || ''
+                    });
+
+                    if (error) throw error;
+
+                    if (typeof window.wipeUserLocalCache === 'function') {
+                        await window.wipeUserLocalCache(cleanUid);
+                    }
+
+                    if (window.adminStorageMap) delete window.adminStorageMap[uidLower];
+                    if (window.adminKarigerCountMap) delete window.adminKarigerCountMap[uidLower];
+
+                    closeModal();
+                    setAdminBanner(`🗑️ User '${cleanUid}' aur uska poora data (${Number(deletedRows) || 0} records) permanently delete ho gaya!`, 'success');
+                    await refreshAdminUsersList(true);
+                } catch (err) {
+                    setErr('❌ Delete error: ' + (err?.message || err));
+                } finally {
+                    adminBusyUids.delete(uidLower);
+                }
+            }
+        });
         if (!isPending) {
-            const typed = prompt(`⚠️ FINAL CONFIRMATION:\nPermanently delete karne ke liye User ID '${cleanUid}' type karein:`);
-            if (!typed || typed.trim().toLowerCase() !== uidLower) {
-                return alert('❌ User ID match nahi hua — Delete cancel kar diya gaya.');
-            }
-        }
-
-        const sb = getSupabaseAdmin();
-        if (!sb) return alert('Supabase connect nahi hai!');
-
-        try {
-            let adminAuth = {};
-            try { adminAuth = JSON.parse(localStorage.getItem('app_active_session_auth') || '{}'); } catch (_) {}
-
-            const { data: deletedRows, error } = await sb.rpc('delete_user_completely', {
-                p_user_id: cleanUid,
-                p_admin_id: adminAuth.id || window.currentUserId || 'farhan',
-                p_admin_pass: adminAuth.pass || ''
-            });
-
-            if (error) throw error;
-
-            // ⭐ Agar isi browser/device par us user ka purana IndexedDB / localStorage cache tha toh turant wipe karein
-            if (typeof window.wipeUserLocalCache === 'function') {
-                await window.wipeUserLocalCache(cleanUid);
-            }
-
-            if (window.adminStorageMap) delete window.adminStorageMap[uidLower];
-            if (window.adminKarigerCountMap) delete window.adminKarigerCountMap[uidLower];
-
-            alert(`🗑️ User '${cleanUid}' aur uska poora Supabase + Local data (${Number(deletedRows) || 0} records) permanently delete ho gaya!\n\nAb agar '${cleanUid}' naam se naya account banega toh 100% fresh khulega.`);
-            refreshAdminUsersList();
-        } catch (err) {
-            alert('Delete error: ' + (err.message || err));
+            setTimeout(() => document.getElementById('adm-del-confirm-inp')?.focus(), 40);
         }
     }
 
@@ -883,11 +1174,11 @@
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
                         <div>
                             <label style="font-size:11.5px; font-weight:700; color:#0f766e; display:block; margin-bottom:3px;">1 Kariger ka Rate (₹):</label>
-                            <input type="number" id="adm-bill-rate" value="${esc(cfg.perKarigerRate ?? '15')}" placeholder="15" style="width:100%; padding:8px; border:1.5px solid #0f766e; border-radius:7px; font-size:14px; box-sizing:border-box; font-weight:900; color:#0f766e;">
+                            <input type="number" min="0" id="adm-bill-rate" value="${esc(cfg.perKarigerRate ?? '15')}" placeholder="15" style="width:100%; padding:8px; border:1.5px solid #0f766e; border-radius:7px; font-size:14px; box-sizing:border-box; font-weight:900; color:#0f766e;">
                         </div>
                         <div>
                             <label style="font-size:11.5px; font-weight:700; color:#334155; display:block; margin-bottom:3px;">Minimum Bill (₹, 0=Off):</label>
-                            <input type="number" id="adm-bill-min" value="${esc(cfg.minCharge ?? '0')}" placeholder="0" style="width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:7px; font-size:13px; box-sizing:border-box; font-weight:700;">
+                            <input type="number" min="0" id="adm-bill-min" value="${esc(cfg.minCharge ?? '0')}" placeholder="0" style="width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:7px; font-size:13px; box-sizing:border-box; font-weight:700;">
                         </div>
                     </div>
                     <div style="margin-bottom:10px;">
@@ -932,10 +1223,12 @@
                         </div>
                     </div>
 
-                    <div style="margin-bottom:14px;">
+                    <div style="margin-bottom:12px;">
                         <label style="font-size:11.5px; font-weight:700; color:#334155; display:block; margin-bottom:3px;">Client ke liye Message:</label>
                         <input type="text" id="adm-bill-note" value="${esc(cfg.note)}" style="width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:7px; font-size:12.5px; box-sizing:border-box;">
                     </div>
+
+                    <div id="adm-bill-status" style="display:none; font-size:12px; font-weight:700; padding:8px 10px; border-radius:7px; border:1px solid #fecaca; margin-bottom:10px;"></div>
 
                     <div style="display:flex; gap:8px;">
                         <button type="button" id="adm-bill-save-btn" onclick="saveAdminBillingSettings()" style="flex:1; background:#0f766e; color:#fff; border:none; padding:11px; border-radius:8px; font-size:14px; font-weight:800; cursor:pointer;">💾 Save Payment Settings</button>
@@ -963,9 +1256,28 @@
     function handleAdminQrFileUpload(event) {
         const file = event?.target?.files?.[0];
         if (!file) return;
+
+        if (!file.type || !file.type.startsWith('image/')) {
+            setBillingStatusMsg('⚠️ Sirf valid Image file (PNG/JPG/WebP) upload karein!', true);
+            if (event.target) event.target.value = '';
+            return;
+        }
+        if (file.size > 5 * 1024 * 1024) {
+            setBillingStatusMsg('⚠️ QR Image 5 MB se chhoti honi chahiye!', true);
+            if (event.target) event.target.value = '';
+            return;
+        }
+
+        setBillingStatusMsg('');
         const reader = new FileReader();
+        reader.onerror = () => {
+            setBillingStatusMsg('❌ Image read karne me error aaya!', true);
+        };
         reader.onload = (e) => {
             const img = new Image();
+            img.onerror = () => {
+                setBillingStatusMsg('❌ Invalid ya corrupt image file!', true);
+            };
             img.onload = () => {
                 const maxSide = 360;
                 let w = img.width;
@@ -996,14 +1308,36 @@
     }
 
     async function saveAdminBillingSettings() {
+        if (isSavingBilling) return;
+        setBillingStatusMsg('');
+
+        const rateNum = Number(document.getElementById('adm-bill-rate')?.value ?? 15);
+        const minNum = Number(document.getElementById('adm-bill-min')?.value ?? 0);
+        const upiVal = String(document.getElementById('adm-bill-upi')?.value || '').trim();
+        const waDigits = String(document.getElementById('adm-bill-wa')?.value || '917065572191').replace(/[^0-9]/g, '');
+
+        if (isNaN(rateNum) || rateNum < 0) {
+            setBillingStatusMsg('⚠️ Sahi Per-Kariger Rate daalein!', true);
+            return;
+        }
+        if (isNaN(minNum) || minNum < 0) {
+            setBillingStatusMsg('⚠️ Minimum Bill 0 ya usse zyada hona chahiye!', true);
+            return;
+        }
+        if (upiVal && !upiVal.includes('@')) {
+            setBillingStatusMsg('⚠️ Sahi UPI ID daalein (e.g. name@bank)!', true);
+            return;
+        }
+
         const btn = document.getElementById('adm-bill-save-btn');
+        isSavingBilling = true;
         if (btn) { btn.disabled = true; btn.textContent = 'Saving... ⏳'; }
 
         const payload = {
-            perKarigerRate: String(document.getElementById('adm-bill-rate')?.value || '15').trim(),
-            minCharge: String(document.getElementById('adm-bill-min')?.value || '0').trim(),
-            whatsappNo: String(document.getElementById('adm-bill-wa')?.value || '917065572191').replace(/[^0-9]/g, ''),
-            upiId: String(document.getElementById('adm-bill-upi')?.value || '').trim(),
+            perKarigerRate: String(rateNum),
+            minCharge: String(minNum),
+            whatsappNo: waDigits || '917065572191',
+            upiId: upiVal,
             accountHolder: String(document.getElementById('adm-bill-holder')?.value || '').trim(),
             bankName: String(document.getElementById('adm-bill-bank')?.value || '').trim(),
             accountNumber: String(document.getElementById('adm-bill-ac')?.value || '').trim(),
@@ -1013,14 +1347,13 @@
             updatedAt: new Date().toISOString()
         };
 
-        currentBillingCfg = payload;
         try {
-            localStorage.setItem('app_global_billing_config', JSON.stringify(payload));
-        } catch (_) {}
-
-        const sb = getSupabaseAdmin();
-        if (sb) {
-            try {
+            const sb = getSupabaseAdmin();
+            if (sb) {
+                if (!navigator.onLine) {
+                    setBillingStatusMsg('⚠️ Billing settings save karne ke liye internet online hona zaroori hai!', true);
+                    return;
+                }
                 const rowObj = {
                     id: BILLING_CONFIG_ID,
                     user_id: 'farhan',
@@ -1032,21 +1365,24 @@
                     updated_at: new Date().toISOString()
                 };
                 const { error } = await sb.from('app_store').upsert(rowObj, { onConflict: 'id' });
-                if (error) {
-                    await sb.from('app_store').delete().eq('id', BILLING_CONFIG_ID);
-                    const insRes = await sb.from('app_store').insert(rowObj);
-                    if (insRes.error) throw insRes.error;
-                }
-            } catch (err) {
-                if (btn) { btn.disabled = false; btn.textContent = '💾 Save Payment Settings'; }
-                return alert('Save error: ' + err.message);
+                if (error) throw error;
             }
-        }
 
-        if (btn) { btn.disabled = false; btn.textContent = '💾 Save Payment Settings'; }
-        closeAdminBillingModal();
-        renderAdminUsersTable();
-        alert(`✅ Settings save ho gayi! Rate: ₹${payload.perKarigerRate} / Kariger`);
+            // Update local cache only after Cloud succeeds
+            currentBillingCfg = payload;
+            try {
+                localStorage.setItem('app_global_billing_config', JSON.stringify(payload));
+            } catch (_) {}
+
+            closeAdminBillingModal();
+            renderAdminUsersTable();
+            setAdminBanner(`✅ Billing Settings save ho gayi! Rate: ₹${payload.perKarigerRate} / Kariger`, 'success');
+        } catch (err) {
+            setBillingStatusMsg('❌ Save error: ' + (err?.message || 'Connection check karein'), true);
+        } finally {
+            isSavingBilling = false;
+            if (btn) { btn.disabled = false; btn.textContent = '💾 Save Payment Settings'; }
+        }
     }
 
     window.openAdminModule = openAdminModule;
