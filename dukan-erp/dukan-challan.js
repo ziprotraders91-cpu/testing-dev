@@ -3,7 +3,7 @@
    - 2-Button Menu: [Challan & Packing Slip] & [Challan Register]
    - Manual Mode (Option 1: Order se auto-add nahi, Side List me Baki items)
    - Dedicated Challan Register with Universal Search + Edit / Delete / A5 Print
-   - Edit / Delete par Finished Stock auto-restore + Order Status auto-update
+   - Enterprise Guards: Save/Delete Locks, Debounce, Transactional Rollback, Order Baki Cap
    File: dukan-erp/dukan-challan.js
 ============================================================================ */
 (() => {
@@ -21,8 +21,8 @@
     let regPage = 1;
     let regNav = 0;
     let isSavingChallan = false;
-    let lastSaveTime = 0;
     let isDeletingChallan = false;
+    let lastSaveTime = 0;
 
     function bindEscHandler() {
         D.onEsc = () => {
@@ -278,7 +278,7 @@
                 const ord = D.get('dukan_orders').find((o) => o.id === linkedOrderId);
                 const itemBaki = getOrderItemBakiForChallan(ord, itemName, editChallanId);
                 if (n + otherInBatch > itemBaki) {
-                    D.toast(`⚠️ Order me sirf ${itemBaki} Pc baki hai!`);
+                    D.toast(`⚠️ Order me sirf ${itemBaki} Pcs baki hai!`);
                     renderChBatchTable();
                     return;
                 }
@@ -298,22 +298,25 @@
         if (!name) { D.toast('⚠️ Item / Design chunein!'); return D.focusField('ch-cur-name'); }
         if (qty <= 0) { D.toast('⚠️ Challan Qty (Pcs) bharein!'); return D.focusField('ch-cur-qty'); }
 
-        const finAvail = getEffectiveFinishedStock(name);
-        const alreadyInBatch = chBatch
+        const currentBatchQty = chBatch
             .filter((b) => String(b.name || '').trim().toUpperCase() === name)
             .reduce((a, b) => a + D.num(b.qty), 0);
-        if (qty + alreadyInBatch > finAvail) {
-            D.toast(`⚠️ Sirf ${finAvail} Pc available (batch me ${alreadyInBatch})!`);
-            return D.focusField('ch-cur-qty');
-        }
 
         if (linkedOrderId) {
             const ord = D.get('dukan_orders').find((o) => o.id === linkedOrderId);
-            const itemBaki = getOrderItemBakiForChallan(ord, name, editChallanId);
-            if (qty + alreadyInBatch > itemBaki) {
-                D.toast(`⚠️ Order me sirf ${itemBaki} Pc baki hai (batch me ${alreadyInBatch})!`);
-                return D.focusField('ch-cur-qty');
+            if (ord) {
+                const bakiQty = getOrderItemBakiForChallan(ord, name, editChallanId);
+                if (qty + currentBatchQty > bakiQty) {
+                    D.toast(`⚠️ Order me sirf ${bakiQty} Pcs baki hai! Aap ${qty} add kar rahe hain.`);
+                    return D.focusField('ch-cur-qty');
+                }
             }
+        }
+
+        const finAvail = getEffectiveFinishedStock(name);
+        if (qty + currentBatchQty > finAvail) {
+            D.toast(`⚠️ Sirf ${finAvail} Pc available (batch me ${currentBatchQty})!`);
+            return D.focusField('ch-cur-qty');
         }
 
         const existing = chBatch.findIndex((b) => String(b.name || '').trim().toUpperCase() === name);
@@ -778,7 +781,7 @@
                 for (const itemName of Object.keys(totalsByDesign)) {
                     const itemBaki = getOrderItemBakiForChallan(ord, itemName, editChallanId);
                     if (totalsByDesign[itemName] > itemBaki) {
-                        D.toast(`❌ ${itemName}: order me sirf ${itemBaki} Pc baki hai, ${totalsByDesign[itemName]} Pc bhej rahe!`);
+                        D.toast(`❌ ${itemName}: order me sirf ${itemBaki} Pcs baki hai, ${totalsByDesign[itemName]} Pc bhej rahe!`);
                         return;
                     }
                 }
@@ -799,18 +802,11 @@
     };
 
     D.saveChallan = () => {
-        // Guard 1: Already saving
-        if (isSavingChallan) {
-            D.toast('⏳ Save chal raha hai...');
-            return;
-        }
-        // Guard 2: 1 second debounce
+        if (isSavingChallan) return D.toast('⏳ Save chal raha hai...');
         const now = Date.now();
-        if (now - lastSaveTime < 1000) {
-            D.toast('⏳ 1 second baad try karein');
-            return;
-        }
-        // Guard 3: Validation
+        if (now - lastSaveTime < 1000) return D.toast('⏳ 1 second baad try karein');
+
+        // Validation
         const partyTxt = (document.getElementById('ch-party')?.value || '').trim().toUpperCase();
         const chNo = (document.getElementById('ch-no')?.value || '').trim();
         const chDate = document.getElementById('ch-date')?.value || D.today();
@@ -818,23 +814,30 @@
         if (!chNo) { D.toast('⚠️ Challan No. bharein!'); return D.focusField('ch-no'); }
         if (!chBatch.length) { D.toast('⚠️ 1 item add karein!'); return D.focusField('ch-cur-name'); }
         if (chBatch.some((r) => D.num(r.qty) <= 0)) {
-            D.toast('⚠️ Har item ki Qty 0 se zyada rakhein!');
-            return;
+            return D.toast('⚠️ Har item ki Qty 0 se zyada rakhein!');
         }
 
         isSavingChallan = true;
         lastSaveTime = now;
+
+        // State Snapshot for Rollback
+        const snapshot = {
+            challans: JSON.parse(JSON.stringify(D.get('dukan_challans'))),
+            sareeHistory: JSON.parse(JSON.stringify(D.get('saree_history'))),
+            orders: JSON.parse(JSON.stringify(D.get('dukan_orders')))
+        };
+        let mutatedStorage = false;
+
         try {
             const challans = D.get('dukan_challans');
             const parties = D.get('dukan_parties');
             const firms = D.get('dukan_firms');
 
-            // Guard 4: Stale editChallanId check
             const prevRec = editChallanId ? challans.find((c) => c.id === editChallanId) : null;
             const isActualEdit = !!prevRec;
             const chId = isActualEdit
                 ? editChallanId
-                : `ch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+                : `ch_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 
             const pById = selPartyId ? parties.find((x) => x.id === selPartyId) : null;
             const pValid = pById && String(pById.name || '').trim().toUpperCase() === partyTxt ? pById : null;
@@ -847,20 +850,17 @@
                 ? selFirmId
                 : (firms.find((x) => String(x.name || '').trim().toUpperCase() === firmTxt)?.id || '');
 
-            // Guard 5: Duplicate check (only new)
+            // Duplicate Check
             if (!isActualEdit) {
                 const dup = challans.find((c) =>
                     c.no === chNo &&
                     c.partyId === finalPartyId &&
                     c.date === chDate
                 );
-                if (dup) {
-                    D.toast(`⚠️ Challan #${chNo} already exists (${D.fmtDate(chDate)})!`);
-                    return;
-                }
+                if (dup) throw new Error(`Challan #${chNo} already exists!`);
             }
 
-            // Guard 6: Order Baki limit check (stock restore se pehle)
+            // Order Baki Check (mutating storage se pehle)
             if (linkedOrderId) {
                 const ord = D.get('dukan_orders').find((o) => o.id === linkedOrderId);
                 if (ord) {
@@ -872,17 +872,15 @@
                     for (const itemName of Object.keys(totalsByDesign)) {
                         const itemBaki = getOrderItemBakiForChallan(ord, itemName, editChallanId);
                         if (totalsByDesign[itemName] > itemBaki) {
-                            D.toast(`❌ ${itemName}: order me sirf ${itemBaki} Pc baki hai, ${totalsByDesign[itemName]} Pc bhej rahe!`);
-                            return;
+                            throw new Error(`${itemName}: order me sirf ${itemBaki} Pcs baki hai!`);
                         }
                     }
                 }
             }
 
-            // Restore old stock only if actual edit
-            if (isActualEdit) {
-                D.restoreFinishedStockByRef(editChallanId);
-            }
+            // Purana stock restore (sirf edit me)
+            mutatedStorage = true;
+            if (isActualEdit) D.restoreFinishedStockByRef(editChallanId);
 
             const rec = {
                 id: chId,
@@ -909,7 +907,7 @@
             }
             D.set('dukan_challans', challans);
 
-            // Stock deduct
+            // Naya stock deduct
             rec.items.forEach((it) => {
                 D.deductFinishedStock(it.name, D.num(it.qty), {
                     date: rec.date,
@@ -920,13 +918,11 @@
                 });
             });
 
-            // Order status
+            // Order Recalc
             if (oldOrderId && oldOrderId !== linkedOrderId) D.recalcOrderStatus(oldOrderId);
             if (linkedOrderId) D.recalcOrderStatus(linkedOrderId);
 
-            D.toast(isActualEdit
-                ? `✅ Challan #${rec.no} update + stock adjust!`
-                : `✅ Challan #${rec.no} save + stock minus!`);
+            D.toast(isActualEdit ? '✅ Challan Update Ho Gaya!' : '✅ Challan Save Ho Gaya!');
 
             // Reset state
             editChallanId = '';
@@ -939,9 +935,17 @@
             viewMode = 'register';
             render();
 
-        } catch (e) {
-            console.error('[saveChallan]', e);
-            D.toast('❌ Save fail: ' + e.message);
+        } catch (error) {
+            // ROLLBACK SYSTEM
+            console.error('[Save Failed]', error);
+            D.toast(`❌ Save Fail: ${error.message}`);
+            if (mutatedStorage) {
+                D.set('dukan_challans', snapshot.challans);
+                D.set('saree_history', snapshot.sareeHistory);
+                D.set('dukan_orders', snapshot.orders);
+                if (typeof window.invalidateSareeCalcCache === 'function') window.invalidateSareeCalcCache();
+                if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+            }
         } finally {
             isSavingChallan = false;
         }
@@ -949,9 +953,8 @@
 
     D.deleteChallan = (chId) => {
         if (!chId || isDeletingChallan) return;
-        const challans = D.get('dukan_challans');
-        const target = challans.find((c) => c.id === chId);
-        if (!target) { D.toast('⚠️ Already deleted!'); return; }
+        const target = D.get('dukan_challans').find((c) => c.id === chId);
+        if (!target) return D.toast('⚠️ Record not found!');
 
         const msgEl = document.getElementById('dk-accept-msg');
         if (msgEl) {
@@ -962,21 +965,38 @@
 
         D.askAccept(() => {
             isDeletingChallan = true;
+            const snapshot = {
+                challans: JSON.parse(JSON.stringify(D.get('dukan_challans'))),
+                sareeHistory: JSON.parse(JSON.stringify(D.get('saree_history'))),
+                orders: JSON.parse(JSON.stringify(D.get('dukan_orders')))
+            };
+            let mutatedStorage = false;
             try {
                 const fresh = D.get('dukan_challans');
-                if (!fresh.find((c) => c.id === chId)) return;
+                const freshTarget = fresh.find((c) => c.id === chId);
+                if (!freshTarget) throw new Error('Record not found!');
 
+                mutatedStorage = true;
                 D.restoreFinishedStockByRef(chId);
                 D.set('dukan_challans', fresh.filter((c) => c.id !== chId));
-                if (target.orderId) D.recalcOrderStatus(target.orderId);
+                if (freshTarget.orderId) D.recalcOrderStatus(freshTarget.orderId);
 
                 if (editChallanId === chId) editChallanId = '';
                 chBatch = [];
-                D.toast(`🗑️ Challan #${target.no} delete + stock restore!`);
-
-                viewMode = 'register';
                 fromRegister = false;
+
+                D.toast('🗑️ Challan Delete Ho Gaya!');
+                viewMode = 'register';
                 render();
+            } catch (e) {
+                if (mutatedStorage) {
+                    D.set('dukan_challans', snapshot.challans);
+                    D.set('saree_history', snapshot.sareeHistory);
+                    D.set('dukan_orders', snapshot.orders);
+                    if (typeof window.invalidateSareeCalcCache === 'function') window.invalidateSareeCalcCache();
+                    if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+                }
+                D.toast('❌ Delete fail: ' + e.message);
             } finally {
                 isDeletingChallan = false;
             }
