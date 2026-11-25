@@ -1,11 +1,17 @@
 /* ============================================================================
    SIMPLICITY ERP - HIGH-PERFORMANCE WEAVER (KARIGER) CALCULATION ENGINE
    File: kariger/kariger-calc.js • Developed by Farhan Jawed
-   (Accurate Wages + Bana/Zari + Zero Duplicate Saree Stock + Auto-Tani Engine)
+   (Accurate Wages + Bana/Zari + Memory Cache + Save Lock + Safe Cleanup)
 ============================================================================ */
 
 (() => {
     'use strict';
+
+    if (window.__karigerCalcLoaded) {
+        console.warn('[kariger-calc] Already loaded — skip');
+        return;
+    }
+    window.__karigerCalcLoaded = true;
 
     // Default rate standards (Varanasi / Mau handloom & powerloom standard)
     const DEFAULT_RATES = Object.freeze({
@@ -13,6 +19,13 @@
         BANA: 0.311,     // Kg per saree weft consumption
         ZARI: 0.110      // Kg per saree zari consumption
     });
+
+    const _calcCache = new Map();
+    let _isSavingSheets = false;
+
+    const clearCalcCache = () => {
+        _calcCache.clear();
+    };
 
     const roundCurrency = (val) => {
         const num = parseFloat(val);
@@ -66,10 +79,11 @@
     };
 
     /**
-     * 2. Kariger ki Tani Sheets save karna
+     * 2. Kariger ki Tani Sheets save karna (with concurrent save lock & cache clear)
      */
     const saveKarigerSheets = (karigerId, sheets) => {
-        if (!karigerId) return;
+        if (!karigerId || _isSavingSheets) return;
+        _isSavingSheets = true;
         try {
             const cleanId = String(karigerId).trim();
             const clean = window.safeArray ? window.safeArray(sheets) : (Array.isArray(sheets) ? sheets : []);
@@ -79,6 +93,7 @@
 
             const storeKey = `kariger_sheets_${cleanId}`;
             setStoreData(storeKey, clean);
+            _calcCache.clear();
 
             // Saree stock cache invalidate karo taaki live totals theek rahein
             if (typeof window.invalidateSareeCalcCache === 'function') {
@@ -86,6 +101,9 @@
             }
         } catch (err) {
             console.error(`[KarigerCalc] Error saving sheets:`, err);
+            throw err;
+        } finally {
+            _isSavingSheets = false;
         }
     };
 
@@ -98,8 +116,10 @@
             let sH = getStoreData('saree_history');
             if (!Array.isArray(sH) || sH.length === 0) return;
 
+            const hasDup = sH.some((item) => item && String(item.refId || '').startsWith('k_sheet_'));
+            if (!hasDup) return;
+
             const initialLen = sH.length;
-            // Sirf k_sheet_ wali duplicate entries hatani hain, asli tani_sheet wali surakshit rahegi
             sH = sH.filter((item) => {
                 if (!item) return false;
                 const rId = String(item.refId || '');
@@ -108,6 +128,7 @@
 
             if (sH.length !== initialLen) {
                 setStoreData('saree_history', sH);
+                _calcCache.clear();
                 if (typeof window.invalidateSareeCalcCache === 'function') {
                     window.invalidateSareeCalcCache();
                 }
@@ -117,7 +138,6 @@
                 if (typeof window.updateDashboardBadgeTotals === 'function') {
                     window.updateDashboardBadgeTotals();
                 }
-                console.log('✅ Duplicate Saree entries cleaned up successfully.');
             }
         } catch (e) {
             console.error('[KarigerCalc] Cleanup duplicates error:', e);
@@ -150,6 +170,9 @@
             retZ  += safeNum(r.retZari);
             taniW += safeNum(r.taniWazan);
         });
+        if (taniW === 0 && safeNum(sh.taniWazan) > 0) {
+            taniW = safeNum(sh.taniWazan);
+        }
 
         // 1. Mazdoori (Bani Wage) Hisab
         const netSaree = Math.max(0, saree - lott);
@@ -215,7 +238,16 @@
         const c = calculateSheetTotals(curSheet);
 
         if (target > 0 && safeNum(c.totSaree) >= target) {
-            const nextNum = sheets.length + 1;
+            let maxNum = sheets.length;
+            sheets.forEach((s) => {
+                if (!s) return;
+                const m1 = String(s.id || '').match(/(\d+)$/);
+                const m2 = String(s.title || '').match(/(\d+)$/);
+                if (m1) maxNum = Math.max(maxNum, parseInt(m1[1], 10) || 0);
+                if (m2) maxNum = Math.max(maxNum, parseInt(m2[1], 10) || 0);
+            });
+            const nextNum = maxNum + 1;
+
             const newSheet = {
                 id: `tani_${nextNum}`,
                 title: `Tani ${nextNum}`,
@@ -242,15 +274,21 @@
 
             sheets.push(newSheet);
             saveKarigerSheets(karigerId, sheets);
+            _calcCache.clear();
             return newSheet;
         }
         return null;
     };
 
     /**
-     * 5. Kisi Kariger ka Total Lifetime Summary
+     * 5. Kisi Kariger ka Total Lifetime Summary (with Memory Cache)
      */
     const getKarigerLifetimeSummary = (karigerId) => {
+        const cacheKey = `summary_${karigerId}`;
+        if (karigerId && _calcCache.has(cacheKey)) {
+            return { ..._calcCache.get(cacheKey) };
+        }
+
         const summary = {
             totalSarees: 0,
             totalLott: 0,
@@ -264,7 +302,10 @@
         if (!karigerId) return summary;
 
         const sheets = getKarigerSheets(karigerId);
-        if (!sheets.length) return summary;
+        if (!sheets.length) {
+            _calcCache.set(cacheKey, summary);
+            return { ...summary };
+        }
 
         sheets.forEach((sh) => {
             const c = calculateSheetTotals(sh);
@@ -283,15 +324,16 @@
         summary.currentBanaBalance = lastCalc.remainingBana;
         summary.currentZariBalance = lastCalc.remainingZari;
 
-        return summary;
+        _calcCache.set(cacheKey, summary);
+        return { ...summary };
     };
 
     /**
      * 6. Karkhana-Wise Production Aggregator
      */
     const getKarkhanaProductionStats = (targetKarkhanaId = 'all') => {
-        const allKarigers = window.safeArray 
-            ? window.safeArray(getStoreData('kariger_list')) 
+        const allKarigers = window.safeArray
+            ? window.safeArray(getStoreData('kariger_list'))
             : (Array.isArray(getStoreData('kariger_list')) ? getStoreData('kariger_list') : []);
 
         const kId = String(targetKarkhanaId || 'all').trim();
@@ -330,6 +372,7 @@
         getKarigerLifetimeSummary,
         getKarkhanaProductionStats,
         cleanupDuplicateSareeHistory,
+        clearCalcCache,
         roundCurrency,
         roundWeight
     };
@@ -337,10 +380,35 @@
     Object.keys(karigerCalcAPI).forEach((fn) => { window[fn] = karigerCalcAPI[fn]; });
     window.KarigerCalcEngine = karigerCalcAPI;
 
-    // Page load hote hi duplicate entry ko turant saaf kar dega
+    // Cloud Sync / Payment invalidation hooks par cache auto-clear
+    if (!window.__karCalcHooksBound) {
+        window.__karCalcHooksBound = true;
+        const origInvPay = window.invalidatePaymentCache;
+        window.invalidatePaymentCache = (kid) => {
+            _calcCache.clear();
+            if (typeof origInvPay === 'function') origInvPay(kid);
+        };
+        const origRefresh = window.triggerActiveSectionRefresh;
+        window.triggerActiveSectionRefresh = () => {
+            _calcCache.clear();
+            if (typeof origRefresh === 'function') origRefresh();
+        };
+    }
+
+    const scheduleSafeCleanup = () => {
+        setTimeout(() => {
+            try {
+                cleanupDuplicateSareeHistory();
+            } catch (e) {
+                console.warn('Cleanup skipped:', e);
+            }
+        }, 1500);
+    };
+
+    // Page load ke 1.5 sec baad safe cleanup chalega taaki UI freeze na ho
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => setTimeout(cleanupDuplicateSareeHistory, 200));
+        document.addEventListener('DOMContentLoaded', scheduleSafeCleanup);
     } else {
-        setTimeout(cleanupDuplicateSareeHistory, 200);
+        scheduleSafeCleanup();
     }
 })();
