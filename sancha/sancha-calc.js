@@ -1,13 +1,14 @@
 /* ============================================================================
    SIMPLICITY ERP - HIGH-PERFORMANCE SANCHA (TANI & CHUKKA) CALCULATION ENGINE
    File: sancha/sancha-calc.js • Developed by Farhan Jawed
-   (Maker-Wise Live Calculation • Zero Over-Deduction • Seamless Kariger Sync)
+   (Maker-Wise Live Calculation • Save Lock & Transactional Rollback)
 ============================================================================ */
 
 (() => {
     'use strict';
 
     window.currentSanchaKarkhanaFilter = 'all';
+    let isTransferringSancha = false;
 
     const roundWeight = (val) => {
         const num = parseFloat(val);
@@ -23,7 +24,9 @@
     const normalizeGodownId = (id) => {
         if (!id || id === 'all') return 'all';
         const clean = String(id).trim();
-        return (!clean || clean === 'k_main') ? 'k_main' : clean;
+        if (!clean || clean === 'k_main') return 'k_main';
+        if (clean.toLowerCase() === 'all') return 'all';
+        return clean;
     };
 
     const normalizeCategory = (cat) => {
@@ -281,112 +284,148 @@
     };
 
     /* ========================================================================
-       3. INTER-GODOWN SANCHA TRANSFER ENGINE (MAKER-AWARE)
+       3. INTER-GODOWN SANCHA TRANSFER ENGINE (MAKER-AWARE, LOCKED & ROLLBACK)
        ======================================================================== */
     const transferSanchaStock = (date, itemName, category, fromKarkhanaId, toKarkhanaId, qty, note = '', targetPerson = null) => {
-        const weight = safeNum(qty);
-        if (weight <= 0) {
-            alert('Kripya sahi wazan (Qty Kg me) darj karein!');
-            return false;
+        if (isTransferringSancha) {
+            return { success: false, message: '⏳ Transfer pehle se chal raha hai!' };
         }
-
-        const sourceKid = normalizeGodownId(fromKarkhanaId);
-        const targetKid = normalizeGodownId(toKarkhanaId);
-
-        if (sourceKid === targetKid) {
-            alert('Bhejne wala aur Paane wala Godam alag-alag hona chahiye!');
-            return false;
-        }
-
-        const cleanName = String(itemName || '').trim();
-        if (!cleanName) {
-            alert('Sancha Item ka naam chunein!');
-            return false;
-        }
-
-        const cat = normalizeCategory(category);
-        const catLabel = cat === 'chukka' ? 'Chukka' : 'Tani';
-        const personNorm = targetPerson !== null && targetPerson !== undefined ? normalizePerson(targetPerson) : null;
-
-        const available = getSanchaAvailableBalance(cleanName, cat, sourceKid, personNorm);
-        if (weight > available) {
-            alert(`Bhejne wale godam me sirf ${available.toFixed(2)} Kg ${catLabel} bacha hai! Aap ${weight.toFixed(2)} Kg transfer nahi kar sakte.`);
-            return false;
-        }
+        isTransferringSancha = true;
 
         try {
-            const cleanDate = date || ((typeof window.getTodayDate === 'function')
-                ? window.getTodayDate()
-                : new Date().toISOString().split('T')[0]);
-
-            const fromName = (typeof window.getKarkhanaNameById === 'function')
-                ? window.getKarkhanaNameById(sourceKid)
-                : sourceKid;
-            const toName = (typeof window.getKarkhanaNameById === 'function')
-                ? window.getKarkhanaNameById(targetKid)
-                : targetKid;
-
-            const transferRef = `tr_sancha_${Date.now()}`;
-            const cleanNote = note ? String(note).trim() : `${catLabel} Transfer: ${fromName} ➔ ${toName}`;
-
-            const hist = window.safeArray
-                ? window.safeArray(window.getStore('sancha_history'))
-                : [];
-
-            const makerLabel = personNorm || '-';
-
-            hist.push({
-                id: `shist_out_${Date.now()}`,
-                date: cleanDate,
-                name: cleanName,
-                category: cat,
-                person: makerLabel,
-                kariger: personNorm ? `${personNorm} (Transfer)` : 'Godown Transfer',
-                type: `Transfer Out ➔ ${toName}${note ? ` (${note})` : ''}`,
-                aaya: 0,
-                gaya: weight,
-                karkhanaId: sourceKid,
-                refId: transferRef,
-                timestamp: Date.now()
-            });
-
-            hist.push({
-                id: `shist_in_${Date.now() + 1}`,
-                date: cleanDate,
-                name: cleanName,
-                category: cat,
-                person: makerLabel,
-                kariger: personNorm ? `${personNorm} (Transfer)` : 'Godown Transfer',
-                type: `Transfer In ⬅ ${fromName}${note ? ` (${note})` : ''}`,
-                aaya: weight,
-                gaya: 0,
-                karkhanaId: targetKid,
-                refId: transferRef,
-                timestamp: Date.now() + 1
-            });
-
-            if (typeof window.setStore === 'function') {
-                window.setStore('sancha_history', hist);
+            const weight = roundWeight(qty);
+            if (weight <= 0) {
+                return { success: false, message: 'Kripya sahi wazan (Qty Kg me) darj karein!' };
             }
 
-            if (typeof window.recordTransferEntry === 'function') {
-                window.recordTransferEntry({
-                    id: transferRef,
+            const sourceKid = normalizeGodownId(fromKarkhanaId);
+            const targetKid = normalizeGodownId(toKarkhanaId);
+
+            if (!fromKarkhanaId || sourceKid === 'all' || !toKarkhanaId || targetKid === 'all') {
+                return { success: false, message: 'Kripya sahi Bhejne wala aur Paane wala Godam chunein!' };
+            }
+
+            if (sourceKid === targetKid) {
+                return { success: false, message: 'Bhejne wala aur Paane wala Godam alag-alag hona chahiye!' };
+            }
+
+            const cleanName = String(itemName || '').trim();
+            if (!cleanName) {
+                return { success: false, message: 'Sancha Item ka naam chunein!' };
+            }
+
+            const cat = normalizeCategory(category);
+            const catLabel = cat === 'chukka' ? 'Chukka' : 'Tani';
+            const personNorm = targetPerson !== null && targetPerson !== undefined ? normalizePerson(targetPerson) : null;
+
+            const available = getSanchaAvailableBalance(cleanName, cat, sourceKid, personNorm);
+            if (weight > available) {
+                return {
+                    success: false,
+                    message: `Bhejne wale godam me sirf ${available.toFixed(2)} Kg ${catLabel} bacha hai! Aap ${weight.toFixed(2)} Kg transfer nahi kar sakte.`
+                };
+            }
+
+            // Snapshot for Rollback
+            const snapHistory = JSON.parse(JSON.stringify(window.safeArray ? window.safeArray(window.getStore('sancha_history')) : []));
+            const hasTransferLog = (typeof window.recordTransferEntry === 'function');
+            const snapKarkhanaTransfers = hasTransferLog
+                ? JSON.parse(JSON.stringify(window.safeArray ? window.safeArray(window.getStore('karkhana_transfers')) : []))
+                : null;
+
+            try {
+                const cleanDate = date || ((typeof window.getTodayDate === 'function')
+                    ? window.getTodayDate()
+                    : new Date().toISOString().split('T')[0]);
+
+                const fromName = (typeof window.getKarkhanaNameById === 'function')
+                    ? window.getKarkhanaNameById(sourceKid)
+                    : sourceKid;
+                const toName = (typeof window.getKarkhanaNameById === 'function')
+                    ? window.getKarkhanaNameById(targetKid)
+                    : targetKid;
+
+                const nowTs = Date.now();
+                const uidSuffix = Math.random().toString(36).slice(2, 6);
+                const transferRef = `tr_sancha_${nowTs}_${uidSuffix}`;
+                const cleanNote = note ? String(note).trim() : `${catLabel} Transfer: ${fromName} ➔ ${toName}`;
+
+                const hist = window.safeArray
+                    ? window.safeArray(window.getStore('sancha_history'))
+                    : [];
+
+                const makerLabel = personNorm || '-';
+
+                hist.push({
+                    id: `shist_out_${nowTs}_${uidSuffix}`,
                     date: cleanDate,
-                    fromKarkhanaId: sourceKid,
-                    toKarkhanaId: targetKid,
-                    type: `sancha_${cat}`,
-                    itemName: cleanName,
-                    quantity: weight,
-                    remarks: cleanNote
+                    name: cleanName,
+                    category: cat,
+                    person: makerLabel,
+                    kariger: personNorm ? `${personNorm} (Transfer)` : 'Godown Transfer',
+                    type: `Transfer Out ➔ ${toName}${note ? ` (${note})` : ''}`,
+                    aaya: 0,
+                    gaya: weight,
+                    karkhanaId: sourceKid,
+                    refId: transferRef,
+                    timestamp: nowTs
                 });
-            }
 
-            return true;
-        } catch (txErr) {
-            console.error('[SanchaCalcEngine] Transfer failure:', txErr);
-            alert('Transfer process me takleef aayi.');
-            return false;
+                hist.push({
+                    id: `shist_in_${nowTs + 1}_${uidSuffix}`,
+                    date: cleanDate,
+                    name: cleanName,
+                    category: cat,
+                    person: makerLabel,
+                    kariger: personNorm ? `${personNorm} (Transfer)` : 'Godown Transfer',
+                    type: `Transfer In ⬅ ${fromName}${note ? ` (${note})` : ''}`,
+                    aaya: weight,
+                    gaya: 0,
+                    karkhanaId: targetKid,
+                    refId: transferRef,
+                    timestamp: nowTs + 1
+                });
+
+                if (typeof window.setStore === 'function') {
+                    window.setStore('sancha_history', hist);
+                }
+
+                if (hasTransferLog) {
+                    window.recordTransferEntry({
+                        id: transferRef,
+                        date: cleanDate,
+                        fromKarkhanaId: sourceKid,
+                        toKarkhanaId: targetKid,
+                        type: `sancha_${cat}`,
+                        itemName: cleanName,
+                        quantity: weight,
+                        remarks: cleanNote
+                    });
+                }
+
+                return { success: true, message: `✅ ${weight.toFixed(2)} Kg ${catLabel} transfer ho gaya!` };
+            } catch (txErr) {
+                console.error('[SanchaCalcEngine] Transfer failure:', txErr);
+
+                // ROLLBACK
+                try {
+                    if (typeof window.setStore === 'function') {
+                        window.setStore('sancha_history', snapHistory);
+                        if (hasTransferLog && snapKarkhanaTransfers !== null) {
+                            window.setStore('karkhana_transfers', snapKarkhanaTransfers);
+                        }
+                    }
+                } catch (rbErr) {
+                    console.error('[SanchaCalcEngine] Rollback failure:', rbErr);
+                }
+
+                return {
+                    success: false,
+                    message: '❌ Transfer fail ho gaya: ' + (txErr?.message || 'Unknown error')
+                };
+            }
+        } finally {
+            isTransferringSancha = false;
         }
     };
 
