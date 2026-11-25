@@ -1,14 +1,26 @@
 /* ============================================================================
    SIMPLICITY ERP - BANA STOCK & PASSBOOK ENGINE (TALLYPRIME WHITE & GOLD)
    File: bana/bana-ui.js • Developed by Farhan Jawed
-   (100% Supabase-Safe | Zero Row Clutter | Inline Drill-Down Passbook + Keys)
+   (100% Supabase-Safe | PWA Confirm Modal | Transactional Locks & Rollback)
 ============================================================================ */
 
 (() => {
     'use strict';
 
+    if (window.__banaUILoaded) {
+        console.warn('[BanaUI] Already loaded — skip duplicate');
+        return;
+    }
+    window.__banaUILoaded = true;
+
     window.currentBanaKarkhanaFilter = 'all';
     window.currentPassbookBanaItem = '';
+
+    // Transactional Save / Action Locks
+    let isSavingBana = false;
+    let isSavingBanaEdit = false;
+    let isTransferringUI = false;
+    let isDeletingBana = false;
 
     // Pagination & Keyboard Cursor State - Passbook
     let passbookCurrentPage = 1;
@@ -23,6 +35,7 @@
     let currentBanaFilteredRowsCache = [];
     let banaListActiveIdx = 0;
     let banaOpenedAt = 0;
+    let searchDebounceTimer = null;
 
     const esc = (s) => {
         if (typeof window.sanitizeHTML === 'function') return window.sanitizeHTML(s);
@@ -34,6 +47,15 @@
     const safeNum = (val, fallback = 0) => {
         const n = parseFloat(val);
         return isNaN(n) || !isFinite(n) ? fallback : n;
+    };
+
+    const safeArr = (val) => (typeof window.safeArray === 'function' ? window.safeArray(val) : (Array.isArray(val) ? val : []));
+
+    const getEntryAaya = (r) => {
+        if (!r) return 0;
+        if (r.aaya !== undefined && r.aaya !== null && r.aaya !== '') return safeNum(r.aaya);
+        if (safeNum(r.gaya) > 0) return 0;
+        return safeNum(r.qty);
     };
 
     const setDisplay = (id, val) => {
@@ -309,6 +331,45 @@
                 background: #fffdf5 !important;
                 box-shadow: 0 0 0 2px rgba(242, 183, 29, 0.22);
             }
+            .bana-modal-btn {
+                background: #ffffff;
+                color: #1f2937;
+                border: 1px solid #d1d5db;
+                border-radius: 5px;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 700;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .bana-modal-btn:hover {
+                border-color: #d9a425;
+                background: #fef9ea;
+            }
+            .bana-modal-btn-gold {
+                background: #f2b71d;
+                color: #1f2937;
+                border: 1px solid #d9a425;
+                border-radius: 5px;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 800;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .bana-modal-btn-gold:hover { background: #e5aa12; }
+            .bana-modal-btn-danger {
+                background: #dc2626;
+                color: #ffffff;
+                border: 1px solid #b91c1c;
+                border-radius: 5px;
+                padding: 6px 14px;
+                font-size: 12px;
+                font-weight: 800;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .bana-modal-btn-danger:hover { background: #b91c1c; }
         `;
         document.head.appendChild(style);
     };
@@ -337,7 +398,7 @@
         if (filterPanel) filterPanel.style.display = showPassbook ? 'none' : 'flex';
         if (addForm && showPassbook) addForm.style.display = 'none';
         if (mainTbl) mainTbl.style.display = listDisp;
-        if (mainPager) mainPager.style.display = showPassbook ? 'none' : 'flex';
+        if (mainPager) mainPager.style.display = showPassbook ? 'none' : (currentBanaFilteredRowsCache.length ? 'flex' : 'none');
         if (mainStatus) mainStatus.style.display = showPassbook ? 'none' : 'flex';
         if (passView) passView.style.display = showPassbook ? 'block' : 'none';
 
@@ -394,7 +455,7 @@
         if (typeof window.getKarkhanasSafe === 'function') {
             karkhanas = window.getKarkhanasSafe();
         } else {
-            karkhanas = window.safeArray ? window.safeArray(window.getStore('karkhana_list')) : [];
+            karkhanas = safeArr(window.getStore?.('karkhana_list'));
         }
         if (!karkhanas.length) {
             karkhanas = [{ id: 'k_main', name: 'Main Godown', isDefault: true }];
@@ -425,7 +486,7 @@
         if (typeof window.getKarkhanasSafe === 'function') {
             karkhanas = window.getKarkhanasSafe();
         } else {
-            karkhanas = window.safeArray ? window.safeArray(window.getStore('karkhana_list')) : [];
+            karkhanas = safeArr(window.getStore?.('karkhana_list'));
         }
         if (!karkhanas.length) karkhanas = [{ id: 'k_main', name: 'Main Godown' }];
 
@@ -436,7 +497,7 @@
     };
 
     /* ========================================================================
-       4. INWARD PURCHASE ENGINE (100% SUPABASE SAFE)
+       4. INWARD PURCHASE ENGINE (100% SUPABASE SAFE + LOCK & ROLLBACK)
        ======================================================================== */
     const toggleBanaForm = () => {
         if (isPassbookViewOpen) setBanaSubViewMode(false);
@@ -449,6 +510,13 @@
             const dInp = document.getElementById('bana-date');
             if (dInp) dInp.value = getToday();
             populateBanaExistingDropdown();
+
+            const sel = document.getElementById('bana-select-existing');
+            const rNew = document.getElementById('bana-type-new');
+            if (sel && sel.options.length === 0 && rNew) {
+                rNew.checked = true;
+            }
+
             toggleBanaItemType();
             setTimeout(() => {
                 const isNew = document.getElementById('bana-type-new')?.checked;
@@ -469,7 +537,7 @@
         const sel = document.getElementById('bana-select-existing');
         if (!sel) return;
         sel.innerHTML = '';
-        const list = window.safeArray ? window.safeArray(window.getStore('bana_stock')) : [];
+        const list = safeArr(window.getStore?.('bana_stock'));
         const unique = [];
 
         list.forEach((b) => {
@@ -485,62 +553,89 @@
     };
 
     const saveNewBana = () => {
-        const typeNewRadio = document.getElementById('bana-type-new');
-        const isNew = typeNewRadio ? typeNewRadio.checked : false;
+        if (isSavingBana) return;
+        isSavingBana = true;
 
-        const nameInp = isNew ? document.getElementById('bana-new-name') : document.getElementById('bana-select-existing');
-        const name = String(nameInp?.value || '').trim();
+        try {
+            const typeNewRadio = document.getElementById('bana-type-new');
+            const isNew = typeNewRadio ? typeNewRadio.checked : false;
 
-        const date = document.getElementById('bana-date')?.value || getToday();
-        const qtyInp = document.getElementById('bana-aaya');
-        const qty = safeNum(qtyInp?.value);
+            const nameInp = isNew ? document.getElementById('bana-new-name') : document.getElementById('bana-select-existing');
+            const name = String(nameInp?.value || '').trim();
 
-        if (!name) return alert('Bana Item ka naam zaroori hai!');
-        if (qty <= 0) return alert('Wazan (Qty) daalein!');
+            const date = document.getElementById('bana-date')?.value || getToday();
+            const qtyInp = document.getElementById('bana-aaya');
+            const qty = safeNum(qtyInp?.value);
 
-        const targetKid = (window.currentBanaKarkhanaFilter !== 'all') ? window.currentBanaKarkhanaFilter : 'k_main';
-        const list = window.safeArray ? window.safeArray(window.getStore('bana_stock')) : [];
+            if (!name) return alert('Bana Item ka naam zaroori hai!');
+            if (qty <= 0) return alert('Wazan (Qty) daalein!');
 
-        const item = list.find((x) => {
-            const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-            return x?.name && x.name.toLowerCase() === name.toLowerCase() && matchKid;
-        });
+            const roundedQty = Number(qty.toFixed(2));
+            const targetKid = (window.currentBanaKarkhanaFilter !== 'all') ? window.currentBanaKarkhanaFilter : 'k_main';
 
-        if (item) {
-            item.aaya = safeNum((safeNum(item.aaya) + qty).toFixed(2));
-            item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
-            item.date = date;
-        } else {
-            list.push({
-                id: `bana_${Date.now()}`,
-                date, name, aaya: qty, gaya: 0, bacha: qty,
-                karkhanaId: targetKid, timestamp: Date.now()
-            });
+            const snapStock = JSON.parse(JSON.stringify(safeArr(window.getStore?.('bana_stock'))));
+            const snapHist = JSON.parse(JSON.stringify(safeArr(window.getStore?.('bana_history'))));
+
+            try {
+                const list = safeArr(window.getStore?.('bana_stock'));
+                const nowTs = Date.now();
+                const uidSuffix = Math.random().toString(36).slice(2, 6);
+
+                const item = list.find((x) => {
+                    const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
+                    return x?.name && x.name.trim().toLowerCase() === name.toLowerCase() && matchKid;
+                });
+
+                if (item) {
+                    item.aaya = safeNum((safeNum(item.aaya) + roundedQty).toFixed(2));
+                    item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
+                    item.date = date;
+                } else {
+                    list.push({
+                        id: `bana_${nowTs}_${uidSuffix}`,
+                        date, name, aaya: roundedQty, gaya: 0, bacha: roundedQty,
+                        karkhanaId: targetKid, timestamp: nowTs
+                    });
+                }
+                if (typeof window.setStore === 'function') window.setStore('bana_stock', list);
+
+                const hist = safeArr(window.getStore?.('bana_history'));
+                hist.push({
+                    id: `bhist_${nowTs}_${uidSuffix}`,
+                    date, name,
+                    kariger: 'Godown Purchase',
+                    type: 'Khareed (Inward)',
+                    aaya: roundedQty, gaya: 0,
+                    karkhanaId: targetKid,
+                    timestamp: nowTs
+                });
+                if (typeof window.setStore === 'function') window.setStore('bana_history', hist);
+
+                const newNameEl = document.getElementById('bana-new-name');
+                if (newNameEl) newNameEl.value = '';
+                if (qtyInp) qtyInp.value = '';
+
+                toggleBanaForm();
+                populateBanaExistingDropdown();
+                renderBanaTable();
+
+                if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+                alert(`✅ ${roundedQty.toFixed(2)} Kg Bana Stock me jama ho gaya!`);
+            } catch (err) {
+                console.error('[BanaSave]', err);
+                try {
+                    if (typeof window.setStore === 'function') {
+                        window.setStore('bana_stock', snapStock);
+                        window.setStore('bana_history', snapHist);
+                    }
+                } catch (rbErr) {
+                    console.error('[BanaSave Rollback]', rbErr);
+                }
+                alert('❌ Save fail ho gaya — purana stock surakshit hai!');
+            }
+        } finally {
+            isSavingBana = false;
         }
-        if (typeof window.setStore === 'function') window.setStore('bana_stock', list);
-
-        const hist = window.safeArray ? window.safeArray(window.getStore('bana_history')) : [];
-        hist.push({
-            id: `bhist_${Date.now()}`,
-            date, name,
-            kariger: 'Godown Purchase',
-            type: 'Khareed (Inward)',
-            aaya: qty, gaya: 0,
-            karkhanaId: targetKid,
-            timestamp: Date.now()
-        });
-        if (typeof window.setStore === 'function') window.setStore('bana_history', hist);
-
-        const newNameEl = document.getElementById('bana-new-name');
-        if (newNameEl) newNameEl.value = '';
-        if (qtyInp) qtyInp.value = '';
-
-        toggleBanaForm();
-        populateBanaExistingDropdown();
-        renderBanaTable();
-
-        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-        alert(`✅ ${qty.toFixed(2)} Kg Bana Stock me jama ho gaya!`);
     };
 
     const bindBanaSearchInput = () => {
@@ -548,13 +643,18 @@
         if (searchInp && !searchInp.dataset.bound) {
             searchInp.dataset.bound = 'true';
             searchInp.addEventListener('input', () => {
-                banaStockCurrentPage = 1;
-                banaListActiveIdx = 0;
-                renderBanaTable();
+                clearTimeout(searchDebounceTimer);
+                searchDebounceTimer = setTimeout(() => {
+                    banaStockCurrentPage = 1;
+                    banaListActiveIdx = 0;
+                    renderBanaTable();
+                }, 100);
             });
             searchInp.addEventListener('keydown', (e) => {
                 if (e.key === 'ArrowDown' || e.key === 'Enter') {
                     e.preventDefault();
+                    clearTimeout(searchDebounceTimer);
+                    renderBanaTable();
                     searchInp.blur();
                     if (e.key === 'Enter' && currentBanaFilteredRowsCache.length > 0) {
                         const pageRows = getBanaCurrentPageRows();
@@ -596,26 +696,30 @@
         if (!tbody) return;
         tbody.innerHTML = '';
 
-        const rawStock = window.safeArray ? window.safeArray(window.getStore('bana_stock')) : [];
-        const uniqueNames = [];
+        let rows = [];
+        if (typeof window.getAllBanaStats === 'function') {
+            rows = window.getAllBanaStats(window.currentBanaKarkhanaFilter);
+        } else {
+            const rawStock = safeArr(window.getStore?.('bana_stock'));
+            const uniqueNames = [];
 
-        rawStock.forEach((b) => {
-            if (!b || !b.name) return;
-            const n = b.name.trim();
-            if (uniqueNames.map(x => x.toLowerCase()).indexOf(n.toLowerCase()) === -1) {
-                uniqueNames.push(n);
-            }
-        });
-
-        const rows = [];
-        uniqueNames.forEach((name) => {
-            if (typeof window.getBanaItemStats === 'function') {
-                const stats = window.getBanaItemStats(name, window.currentBanaKarkhanaFilter);
-                if (stats.aaya > 0 || stats.gaya > 0 || stats.bacha > 0) {
-                    rows.push(stats);
+            rawStock.forEach((b) => {
+                if (!b || !b.name) return;
+                const n = b.name.trim();
+                if (uniqueNames.map(x => x.toLowerCase()).indexOf(n.toLowerCase()) === -1) {
+                    uniqueNames.push(n);
                 }
-            }
-        });
+            });
+
+            uniqueNames.forEach((name) => {
+                if (typeof window.getBanaItemStats === 'function') {
+                    const stats = window.getBanaItemStats(name, window.currentBanaKarkhanaFilter);
+                    if (stats.aaya > 0 || stats.gaya > 0 || stats.bacha > 0) {
+                        rows.push(stats);
+                    }
+                }
+            });
+        }
 
         const searchInp = document.getElementById('search-bana-input');
         const txt = searchInp ? searchInp.value.toLowerCase().trim() : '';
@@ -683,7 +787,10 @@
 
         if (!totalEntries) {
             tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:22px; color:#6b7280;'>Koi Bana Stock nahi mila.</td></tr>";
-            if (pager) pager.innerHTML = '';
+            if (pager) {
+                pager.innerHTML = '';
+                pager.style.display = 'none';
+            }
         } else {
             const totalPages = Math.ceil(totalEntries / BANA_STOCK_PAGE_SIZE) || 1;
             if (banaStockCurrentPage > totalPages) banaStockCurrentPage = totalPages;
@@ -712,6 +819,7 @@
             tbody.innerHTML = html;
 
             if (pager) {
+                pager.style.display = isPassbookViewOpen ? 'none' : 'flex';
                 pager.innerHTML = `
                     <div style="font-size:12px; color:#6b7280; font-weight:600;">
                         Showing <strong>${startIndex + 1}</strong> - <strong>${Math.min(startIndex + BANA_STOCK_PAGE_SIZE, totalEntries)}</strong> of <strong>${totalEntries}</strong> Items
@@ -775,12 +883,10 @@
        ======================================================================== */
     const openBanaTransferModal = (safeName, availableBacha) => {
         const itemName = decodeURIComponent(safeName);
-        const existingModal = document.getElementById('bana-transfer-popup-modal');
-        if (existingModal) existingModal.remove();
 
         let karkhanas = (typeof window.getKarkhanasSafe === 'function')
             ? window.getKarkhanasSafe()
-            : (window.safeArray ? window.safeArray(window.getStore('karkhana_list')) : []);
+            : safeArr(window.getStore?.('karkhana_list'));
 
         const currentKid = (window.currentBanaKarkhanaFilter !== 'all') ? window.currentBanaKarkhanaFilter : 'k_main';
         const currentGodamName = (typeof window.getKarkhanaNameById === 'function')
@@ -794,6 +900,13 @@
             }
         });
 
+        if (!godownOptions) {
+            return alert('Transfer ke liye kam se kam 2 Godam (Karkhana) hone chahiye!');
+        }
+
+        const existingModal = document.getElementById('bana-transfer-popup-modal');
+        if (existingModal) existingModal.remove();
+
         const today = getToday();
 
         const modalHtml = `
@@ -801,7 +914,7 @@
                 <div class="bana-modal-card">
                     <div class="bana-modal-head">
                         <h3>Bana Stock Transfer</h3>
-                        <button type="button" class="bana-tally-btn" onclick="closeBanaTransferModal()">&larr; [Esc] Close</button>
+                        <button type="button" id="bana-tr-close-btn" class="bana-modal-btn">&larr; [Esc] Close</button>
                     </div>
                     <div style="padding:16px;">
                         <div style="background:#fdf6e2; border:1px solid #e5d5a7; border-radius:6px; padding:10px 12px; margin-bottom:12px; font-size:12.5px;">
@@ -828,14 +941,20 @@
                             <input type="text" id="bana-transfer-note" placeholder="e.g. Mau unit ke liye bheja" class="bana-modal-inp">
                         </div>
                         <div style="display:flex; justify-content:flex-end; gap:8px;">
-                            <button type="button" class="bana-tally-btn" onclick="closeBanaTransferModal()">Cancel [Esc]</button>
-                            <button type="button" class="bana-tally-btn-gold" onclick="submitBanaTransferForm('${safeName}', '${currentKid}', ${availableBacha})">Transfer Confirm [Enter]</button>
+                            <button type="button" id="bana-tr-cancel-btn" class="bana-modal-btn">Cancel [Esc]</button>
+                            <button type="button" id="bana-tr-submit-btn" class="bana-modal-btn-gold">Transfer Confirm [Enter]</button>
                         </div>
                     </div>
                 </div>
             </div>`;
 
         document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        document.getElementById('bana-tr-close-btn')?.addEventListener('click', closeBanaTransferModal);
+        document.getElementById('bana-tr-cancel-btn')?.addEventListener('click', closeBanaTransferModal);
+        document.getElementById('bana-tr-submit-btn')?.addEventListener('click', () => {
+            submitBanaTransferForm(safeName, currentKid, availableBacha);
+        });
 
         const order = ['bana-dest-godam', 'bana-transfer-qty', 'bana-transfer-date', 'bana-transfer-note'];
         order.forEach((fid, i) => {
@@ -866,6 +985,8 @@
     };
 
     const submitBanaTransferForm = (safeName, fromKid, maxAvailable) => {
+        if (isTransferringUI) return alert('⏳ Transfer pehle se chal raha hai!');
+
         const itemName = decodeURIComponent(safeName);
         const toKid = document.getElementById('bana-dest-godam')?.value;
         const qty = safeNum(document.getElementById('bana-transfer-qty')?.value);
@@ -876,20 +997,36 @@
         if (qty <= 0) return alert('Kripya sahi wazan (Kg) bharein!');
         if (qty > maxAvailable) return alert(`Aapke paas sirf ${maxAvailable.toFixed(2)} Kg bachi hai!`);
 
-        let success = false;
-        if (typeof window.transferBanaStock === 'function') {
-            success = window.transferBanaStock(d, itemName, fromKid, toKid, qty, note);
-        }
-
-        if (success) {
-            closeBanaTransferModal();
-            if (isPassbookViewOpen) {
-                applyPassbookFilters();
-            } else {
-                renderBanaTable();
+        isTransferringUI = true;
+        try {
+            let result = { success: false, message: 'Function load nahi hua' };
+            if (typeof window.transferBanaStock === 'function') {
+                result = window.transferBanaStock(d, itemName, fromKid, toKid, qty, note);
             }
-            if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-            alert(`✅ ${qty.toFixed(2)} Kg Bana safalta-poorvak transfer ho gaya!`);
+
+            // Handle new object format OR old boolean format for backward compatibility
+            const isSuccess = (typeof result === 'object' && result !== null) ? Boolean(result.success) : Boolean(result);
+            const msg = (typeof result === 'object' && result !== null && result.message)
+                ? result.message
+                : (isSuccess ? '✅ Transfer ho gaya!' : '❌ Transfer fail!');
+
+            if (isSuccess) {
+                closeBanaTransferModal();
+                if (isPassbookViewOpen) {
+                    applyPassbookFilters();
+                } else {
+                    renderBanaTable();
+                }
+                if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+                alert(msg);
+            } else {
+                alert(msg);
+            }
+        } catch (err) {
+            console.error('[BanaTransfer UI]', err);
+            alert('❌ Transfer fail ho gaya: ' + (err?.message || err));
+        } finally {
+            isTransferringUI = false;
         }
     };
 
@@ -970,7 +1107,6 @@
             sec.appendChild(container);
         }
 
-        // Bind Filter Keyboard Flow inside Passbook
         const fInp = document.getElementById('pass-from-date');
         const tInp = document.getElementById('pass-to-date');
         const sInp = document.getElementById('pass-search-input');
@@ -1051,11 +1187,11 @@
 
     const applyPassbookFilters = () => {
         const targetItemLower = window.currentPassbookBanaItem.toLowerCase();
-        const allHist = window.safeArray ? window.safeArray(window.getStore('bana_history')) : [];
+        const allHist = safeArr(window.getStore?.('bana_history'));
 
-        let itemHist = allHist.filter((x) => {
+        const itemHist = allHist.filter((x) => {
             if (!x?.name) return false;
-            if (x.name.toLowerCase() !== targetItemLower) return false;
+            if (x.name.trim().toLowerCase() !== targetItemLower) return false;
 
             if (window.currentBanaKarkhanaFilter !== 'all') {
                 const rowKid = x.karkhanaId || 'k_main';
@@ -1064,17 +1200,16 @@
             return true;
         });
 
-        // Compute Running Closing Balance chronologically (without mutating original store objects)
+        // Compute Running Closing Balance chronologically (Date first, Timestamp tie-breaker)
         const chrono = itemHist.slice().sort((a, b) => {
-            const ta = a.timestamp || 0;
-            const tb = b.timestamp || 0;
-            if (ta !== tb) return ta - tb;
-            return String(a.date || '').localeCompare(String(b.date || ''));
+            const dCmp = String(a.date || '').localeCompare(String(b.date || ''));
+            if (dCmp !== 0) return dCmp;
+            return (a.timestamp || 0) - (b.timestamp || 0);
         });
 
         let runningBal = 0;
         const withRunning = chrono.map((r) => {
-            const aayaQty = safeNum(r.aaya || r.qty);
+            const aayaQty = getEntryAaya(r);
             const gayaQty = safeNum(r.gaya);
             runningBal = safeNum((runningBal + aayaQty - gayaQty).toFixed(2));
             return { ...r, _runningBal: runningBal };
@@ -1090,17 +1225,17 @@
 
         if (sTxt) {
             filtered = filtered.filter((x) => {
-                const rowString = `${x.date || ''} ${x.type || ''} ${x.kariger || ''} ${x.aaya || x.qty || ''} ${x.gaya || ''}`.toLowerCase();
+                const aayaStr = getEntryAaya(x);
+                const rowString = `${x.date || ''} ${x.type || ''} ${x.kariger || ''} ${aayaStr || ''} ${x.gaya || ''}`.toLowerCase();
                 return rowString.includes(sTxt);
             });
         }
 
-        // Display newest first
-        filtered.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        // Display exact reverse chronological order (newest first)
+        filtered.reverse();
 
         filteredPassbookCache = filtered;
 
-        // Update Passbook Header Summary
         const stats = (typeof window.getBanaItemStats === 'function')
             ? window.getBanaItemStats(window.currentPassbookBanaItem, window.currentBanaKarkhanaFilter)
             : { aaya: 0, gaya: 0, bacha: runningBal };
@@ -1146,7 +1281,10 @@
         const totalEntries = filteredPassbookCache.length;
         if (!totalEntries) {
             tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:18px; color:#6b7280;'>Koi passbook entry nahi mili.</td></tr>";
-            if (pager) pager.innerHTML = '';
+            if (pager) {
+                pager.innerHTML = '';
+                pager.style.display = 'none';
+            }
             const statusEl = document.getElementById('passbook-entry-status');
             if (statusEl) statusEl.textContent = '0 Entries';
             return;
@@ -1163,7 +1301,7 @@
 
         let html = '';
         pageRows.forEach((r, idx) => {
-            const aayaQty = safeNum(r.aaya || r.qty);
+            const aayaQty = getEntryAaya(r);
             const gayaQty = safeNum(r.gaya);
             const runBal = safeNum(r._runningBal);
 
@@ -1198,6 +1336,7 @@
         highlightPassbookRow(passbookActiveIdx);
 
         if (pager) {
+            pager.style.display = 'flex';
             pager.innerHTML = `
                 <div style="font-size:12px; color:#6b7280; font-weight:600;">
                     Showing <strong>${startIndex + 1}</strong> - <strong>${Math.min(startIndex + PASSBOOK_PAGE_SIZE, totalEntries)}</strong> of <strong>${totalEntries}</strong> entries
@@ -1227,6 +1366,19 @@
         const sec = document.getElementById('bana-section');
         if (!sec || sec.style.display === 'none') return;
         if (isAnyExpressOverlayOpen()) return;
+
+        // 0. Delete Confirm Modal open
+        const delModal = document.getElementById('bana-delete-confirm-modal');
+        if (delModal) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeBanaDeleteConfirmModal();
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                document.getElementById('bana-del-confirm-btn')?.click();
+            }
+            return;
+        }
 
         // 1. Edit Modal open
         const editModal = document.getElementById('bana-edit-popup-modal');
@@ -1287,6 +1439,9 @@
             return;
         }
 
+        // Never block native browser shortcuts like Ctrl+R, Ctrl+T, Ctrl+F, Cmd+R
+        if (e.ctrlKey || e.metaKey) return;
+
         const tag = (document.activeElement && document.activeElement.tagName) || '';
         const isTyping = (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA');
 
@@ -1303,6 +1458,8 @@
             else printBanaStockReport();
             return;
         }
+
+        if (e.altKey) return;
 
         if (e.key === 'F4') {
             e.preventDefault();
@@ -1414,7 +1571,7 @@
     };
 
     /* ========================================================================
-       9. A6 PAPER & THERMAL PRINTER PRINT ENGINES (UNCHANGED)
+       9. A6 PAPER & THERMAL PRINTER PRINT ENGINES
        ======================================================================== */
     const getKarkhanaPrintName = (kId) => {
         if (!kId || kId === 'all') return 'Sabhi Karkhane (All Units)';
@@ -1542,7 +1699,7 @@
 
         let rowsHtml = '';
         rows.forEach((r) => {
-            const aaya = safeNum(r.aaya || r.qty);
+            const aaya = getEntryAaya(r);
             const gaya = safeNum(r.gaya);
 
             totalAaya += aaya;
@@ -1631,13 +1788,13 @@
     };
 
     const printSingleBanaPassbookEntry = (id) => {
-        const hist = window.safeArray ? window.safeArray(window.getStore('bana_history')) : [];
+        const hist = safeArr(window.getStore?.('bana_history'));
         const entry = hist.find(x => x && String(x.id) === String(id));
         if (!entry) return alert('Entry nahi mili!');
 
         const itemName = entry.name || window.currentPassbookBanaItem || 'Bana Item';
         const kName = getKarkhanaPrintName(entry.karkhanaId || window.currentBanaKarkhanaFilter);
-        const aaya = safeNum(entry.aaya || entry.qty);
+        const aaya = getEntryAaya(entry);
         const gaya = safeNum(entry.gaya);
         const isAaya = aaya > 0;
         const wazanDisplay = isAaya ? `+${aaya.toFixed(2)} Kg` : `-${gaya.toFixed(2)} Kg`;
@@ -1695,62 +1852,164 @@
     };
 
     /* ========================================================================
-       10. DELETE & EDIT ENGINES (100% SUPABASE-SAFE & TALLY WHITE & GOLD)
+       10. DELETE (PWA IN-APP MODAL) & EDIT ENGINES (LOCKED & ROLLBACK SAFE)
        ======================================================================== */
-    const deleteBanaHistoryEntry = (histId) => {
-        if (!confirm('Kya aap sach me ye entry DELETE karna chahte hain?\nStock balance wapas sahi settle ho jayega.')) return;
+    const closeBanaDeleteConfirmModal = () => {
+        const modal = document.getElementById('bana-delete-confirm-modal');
+        if (modal) modal.remove();
+    };
 
-        let hist = window.safeArray ? window.safeArray(window.getStore('bana_history')) : [];
+    const executeDeleteBanaHistoryEntry = (histId) => {
+        if (isDeletingBana) return;
+        isDeletingBana = true;
+
+        const snapHist = JSON.parse(JSON.stringify(safeArr(window.getStore?.('bana_history'))));
+        const snapStock = JSON.parse(JSON.stringify(safeArr(window.getStore?.('bana_stock'))));
+        const snapTransfers = JSON.parse(JSON.stringify(safeArr(window.getStore?.('material_transfers'))));
+        const snapKarkhanaTransfers = JSON.parse(JSON.stringify(safeArr(window.getStore?.('karkhana_transfers'))));
+
+        try {
+            let hist = safeArr(window.getStore?.('bana_history'));
+            const entry = hist.find(x => x && String(x.id) === String(histId));
+            if (!entry) {
+                closeBanaDeleteConfirmModal();
+                return alert('Entry nahi mili!');
+            }
+
+            const isTransfer = (entry.refId && String(entry.refId).includes('tr_bana')) ||
+                               (entry.type && entry.type.toLowerCase().includes('transfer'));
+            const isPurchase = !isTransfer && (entry.type && (entry.type.toLowerCase().includes('khareed') || entry.type.toLowerCase().includes('inward')));
+
+            if (isTransfer && entry.refId) {
+                hist = hist.filter(x => x && x.refId !== entry.refId);
+                const transfers = safeArr(window.getStore?.('material_transfers')).filter(t => t && t.id !== entry.refId);
+                if (typeof window.setStore === 'function') window.setStore('material_transfers', transfers);
+
+                const kTransfers = safeArr(window.getStore?.('karkhana_transfers')).filter(t => t && t.id !== entry.refId);
+                if (typeof window.setStore === 'function') window.setStore('karkhana_transfers', kTransfers);
+            } else {
+                hist = hist.filter(x => x && String(x.id) !== String(histId));
+            }
+
+            if (typeof window.setStore === 'function') window.setStore('bana_history', hist);
+
+            if (isPurchase) {
+                let remainingToSub = getEntryAaya(entry);
+                const list = safeArr(window.getStore?.('bana_stock'));
+                const targetKid = entry.karkhanaId || 'k_main';
+                const entryNameLower = String(entry.name || '').trim().toLowerCase();
+
+                let changed = false;
+                for (let i = 0; i < list.length && remainingToSub > 0; i++) {
+                    const x = list[i];
+                    if (!x || !x.name) continue;
+                    const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
+                    if (x.name.trim().toLowerCase() === entryNameLower && matchKid) {
+                        const curAaya = safeNum(x.aaya);
+                        if (curAaya > 0) {
+                            const deduct = Math.min(curAaya, remainingToSub);
+                            x.aaya = safeNum((curAaya - deduct).toFixed(2));
+                            x.bacha = safeNum((safeNum(x.aaya) - safeNum(x.gaya)).toFixed(2));
+                            remainingToSub = safeNum((remainingToSub - deduct).toFixed(2));
+                            changed = true;
+                        }
+                    }
+                }
+                if (changed && typeof window.setStore === 'function') {
+                    window.setStore('bana_stock', list);
+                }
+            }
+
+            closeBanaDeleteConfirmModal();
+            applyPassbookFilters();
+            renderBanaTable();
+            if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+            alert('🗑️ Entry safalta-poorvak delete ho gayi!');
+        } catch (err) {
+            console.error('[BanaDelete]', err);
+            try {
+                if (typeof window.setStore === 'function') {
+                    window.setStore('bana_history', snapHist);
+                    window.setStore('bana_stock', snapStock);
+                    window.setStore('material_transfers', snapTransfers);
+                    window.setStore('karkhana_transfers', snapKarkhanaTransfers);
+                }
+            } catch (rbErr) {
+                console.error('[BanaDelete Rollback]', rbErr);
+            }
+            closeBanaDeleteConfirmModal();
+            alert('❌ Delete fail ho gaya — Data wapas restore ho gaya!');
+        } finally {
+            isDeletingBana = false;
+        }
+    };
+
+    const deleteBanaHistoryEntry = (histId) => {
+        if (isDeletingBana) return;
+        const hist = safeArr(window.getStore?.('bana_history'));
         const entry = hist.find(x => x && String(x.id) === String(histId));
         if (!entry) return alert('Entry nahi mili!');
 
+        closeBanaDeleteConfirmModal();
+
+        const aaya = getEntryAaya(entry);
+        const gaya = safeNum(entry.gaya);
+        const wazanTxt = aaya > 0 ? `+${aaya.toFixed(2)} Kg (Aaya)` : `-${gaya.toFixed(2)} Kg (Gaya)`;
         const isTransfer = (entry.refId && String(entry.refId).includes('tr_bana')) ||
                            (entry.type && entry.type.toLowerCase().includes('transfer'));
-        const isPurchase = !isTransfer && (entry.type && (entry.type.toLowerCase().includes('khareed') || entry.type.toLowerCase().includes('inward')));
 
-        if (isTransfer && entry.refId) {
-            hist = hist.filter(x => x.refId !== entry.refId);
-            const transfers = (window.safeArray ? window.safeArray(window.getStore('material_transfers')) : []).filter(t => t.id !== entry.refId);
-            if (typeof window.setStore === 'function') window.setStore('material_transfers', transfers);
-        } else {
-            hist = hist.filter(x => String(x.id) !== String(histId));
-        }
+        const modalHtml = `
+            <div id="bana-delete-confirm-modal" class="bana-modal-overlay">
+                <div class="bana-modal-card" style="max-width:400px;">
+                    <div class="bana-modal-head">
+                        <h3>Entry Delete Karein?</h3>
+                        <button type="button" id="bana-del-close-btn" class="bana-modal-btn">&larr; [Esc] Close</button>
+                    </div>
+                    <div style="padding:16px;">
+                        <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:6px; padding:10px 12px; margin-bottom:12px; font-size:12.5px; color:#7f1d1d;">
+                            <div><strong>Item:</strong> ${esc(entry.name || '-')}</div>
+                            <div><strong>Tarikh:</strong> ${esc(entry.date || '-')}</div>
+                            <div><strong>Type:</strong> ${esc(entry.type || '-')}</div>
+                            <div style="font-weight:800; margin-top:4px;">Wazan: ${esc(wazanTxt)}</div>
+                        </div>
+                        <p style="margin:0 0 14px 0; font-size:12.5px; color:#4b5563; line-height:1.45;">
+                            ${isTransfer
+                                ? 'Ye Godown Transfer entry hai — dono godam aur transfer register se delete hogi. Stock balance settle ho jayega.'
+                                : 'Kya aap sach me ye entry delete karna chahte hain? Stock balance wapas settle ho jayega.'}
+                        </p>
+                        <div style="display:flex; justify-content:flex-end; gap:8px;">
+                            <button type="button" id="bana-del-cancel-btn" class="bana-modal-btn">Cancel [Esc]</button>
+                            <button type="button" id="bana-del-confirm-btn" class="bana-modal-btn-danger">Haan, Delete Karein [Enter]</button>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
 
-        if (typeof window.setStore === 'function') window.setStore('bana_history', hist);
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
 
-        if (isPurchase) {
-            const qty = safeNum(entry.aaya || entry.qty);
-            const list = window.safeArray ? window.safeArray(window.getStore('bana_stock')) : [];
-            const targetKid = entry.karkhanaId || 'k_main';
+        document.getElementById('bana-del-close-btn')?.addEventListener('click', closeBanaDeleteConfirmModal);
+        document.getElementById('bana-del-cancel-btn')?.addEventListener('click', closeBanaDeleteConfirmModal);
+        document.getElementById('bana-del-confirm-btn')?.addEventListener('click', () => {
+            executeDeleteBanaHistoryEntry(histId);
+        });
 
-            const item = list.find((x) => {
-                const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-                return x?.name && x.name.toLowerCase() === entry.name.toLowerCase() && matchKid;
-            });
-
-            if (item) {
-                item.aaya = Math.max(0, safeNum((safeNum(item.aaya) - qty).toFixed(2)));
-                item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
-                if (typeof window.setStore === 'function') window.setStore('bana_stock', list);
-            }
-        }
-
-        applyPassbookFilters();
-        renderBanaTable();
-        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-        alert('🗑️ Entry safalta-poorvak delete ho gayi!');
+        setTimeout(() => {
+            document.getElementById('bana-del-confirm-btn')?.focus();
+        }, 40);
     };
 
     const openBanaEditModal = (id) => {
-        const hist = window.safeArray ? window.safeArray(window.getStore('bana_history')) : [];
+        const hist = safeArr(window.getStore?.('bana_history'));
         const entry = hist.find(x => x && String(x.id) === String(id));
         if (!entry) return alert('Entry nahi mili!');
 
         const existingModal = document.getElementById('bana-edit-popup-modal');
         if (existingModal) existingModal.remove();
 
-        const currentQty = safeNum(entry.aaya || entry.gaya || entry.qty);
-        const isAaya = safeNum(entry.aaya) > 0;
+        const aayaVal = getEntryAaya(entry);
+        const gayaVal = safeNum(entry.gaya);
+        const isAaya = aayaVal > 0;
+        const currentQty = isAaya ? aayaVal : gayaVal;
         const typeLabel = isAaya ? 'Aaya (Inward)' : 'Gaya (Outward)';
 
         const modalHtml = `
@@ -1758,7 +2017,7 @@
                 <div class="bana-modal-card" style="max-width:420px;">
                     <div class="bana-modal-head">
                         <h3>Edit Bana Entry</h3>
-                        <button type="button" class="bana-tally-btn" onclick="closeBanaEditModal()">&larr; [Esc] Close</button>
+                        <button type="button" id="bana-edit-close-btn" class="bana-modal-btn">&larr; [Esc] Close</button>
                     </div>
                     <div style="padding:16px;">
                         <div style="background:#fdf6e2; border:1px solid #e5d5a7; padding:8px 12px; border-radius:6px; margin-bottom:12px; font-size:12.5px;">
@@ -1767,7 +2026,7 @@
                         </div>
                         <div style="margin-bottom:10px;">
                             <label style="font-size:12px; font-weight:700; color:#374151; display:block; margin-bottom:4px;">Tarikh (Date) :</label>
-                            <input type="date" id="bana-edit-date" value="${entry.date || ''}" class="bana-modal-inp">
+                            <input type="date" id="bana-edit-date" value="${esc(entry.date || '')}" class="bana-modal-inp">
                         </div>
                         <div style="margin-bottom:10px;">
                             <label style="font-size:12px; font-weight:700; color:#374151; display:block; margin-bottom:4px;">Party / Source / Note :</label>
@@ -1778,14 +2037,20 @@
                             <input type="number" step="0.01" id="bana-edit-qty" value="${currentQty.toFixed(2)}" class="bana-modal-inp">
                         </div>
                         <div style="display:flex; justify-content:flex-end; gap:8px;">
-                            <button type="button" class="bana-tally-btn" onclick="closeBanaEditModal()">Cancel [Esc]</button>
-                            <button type="button" class="bana-tally-btn-gold" onclick="saveBanaHistoryEdit('${esc(id)}')">Update [Enter]</button>
+                            <button type="button" id="bana-edit-cancel-btn" class="bana-modal-btn">Cancel [Esc]</button>
+                            <button type="button" id="bana-edit-save-btn" class="bana-modal-btn-gold">Update [Enter]</button>
                         </div>
                     </div>
                 </div>
             </div>`;
 
         document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        document.getElementById('bana-edit-close-btn')?.addEventListener('click', closeBanaEditModal);
+        document.getElementById('bana-edit-cancel-btn')?.addEventListener('click', closeBanaEditModal);
+        document.getElementById('bana-edit-save-btn')?.addEventListener('click', () => {
+            saveBanaHistoryEdit(id);
+        });
 
         const order = ['bana-edit-date', 'bana-edit-kariger', 'bana-edit-qty'];
         order.forEach((fid, i) => {
@@ -1816,74 +2081,130 @@
     };
 
     const saveBanaHistoryEdit = (id) => {
-        const hist = window.safeArray ? window.safeArray(window.getStore('bana_history')) : [];
-        const entry = hist.find(x => x && String(x.id) === String(id));
-        if (!entry) return alert('Entry nahi mili!');
+        if (isSavingBanaEdit) return;
+        isSavingBanaEdit = true;
 
-        const newDate = document.getElementById('bana-edit-date')?.value;
-        const newKariger = String(document.getElementById('bana-edit-kariger')?.value || '').trim();
-        const newQty = safeNum(document.getElementById('bana-edit-qty')?.value);
+        const snapHist = JSON.parse(JSON.stringify(safeArr(window.getStore?.('bana_history'))));
+        const snapStock = JSON.parse(JSON.stringify(safeArr(window.getStore?.('bana_stock'))));
+        const snapTransfers = JSON.parse(JSON.stringify(safeArr(window.getStore?.('material_transfers'))));
+        const snapKarkhanaTransfers = JSON.parse(JSON.stringify(safeArr(window.getStore?.('karkhana_transfers'))));
 
-        if (newQty <= 0) return alert('Kripya sahi wazan (Kg) darj karein!');
+        try {
+            const hist = safeArr(window.getStore?.('bana_history'));
+            const entry = hist.find(x => x && String(x.id) === String(id));
+            if (!entry) return alert('Entry nahi mili!');
 
-        const oldAaya = safeNum(entry.aaya);
-        const isTransfer = (entry.refId && String(entry.refId).includes('tr_bana')) ||
-                           (entry.type && entry.type.toLowerCase().includes('transfer'));
-        const isPurchase = !isTransfer && (entry.type && (entry.type.toLowerCase().includes('khareed') || entry.type.toLowerCase().includes('inward')));
+            const newDate = document.getElementById('bana-edit-date')?.value;
+            const newKariger = String(document.getElementById('bana-edit-kariger')?.value || '').trim();
+            const rawNewQty = safeNum(document.getElementById('bana-edit-qty')?.value);
 
-        entry.date = newDate;
-        entry.kariger = newKariger || 'Godown Purchase';
+            if (!newDate) return alert('Kripya Tarikh (Date) chunein!');
+            if (rawNewQty <= 0) return alert('Kripya sahi wazan (Kg) darj karein!');
+            const newQty = Number(rawNewQty.toFixed(2));
 
-        if (oldAaya > 0) {
-            const aayaDiff = newQty - oldAaya;
-            entry.aaya = newQty;
+            const oldAaya = getEntryAaya(entry);
+            const oldGaya = safeNum(entry.gaya);
+            const oldQty = oldAaya > 0 ? oldAaya : oldGaya;
 
-            if (isPurchase) {
-                const list = window.safeArray ? window.safeArray(window.getStore('bana_stock')) : [];
-                const targetKid = entry.karkhanaId || 'k_main';
+            const isTransfer = (entry.refId && String(entry.refId).includes('tr_bana')) ||
+                               (entry.type && entry.type.toLowerCase().includes('transfer'));
+            const isPurchase = !isTransfer && (entry.type && (entry.type.toLowerCase().includes('khareed') || entry.type.toLowerCase().includes('inward')));
 
-                const item = list.find((x) => {
-                    const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-                    return x?.name && x.name.toLowerCase() === entry.name.toLowerCase() && matchKid;
-                });
-
-                if (item) {
-                    item.aaya = safeNum((safeNum(item.aaya) + aayaDiff).toFixed(2));
-                    item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
-                    if (typeof window.setStore === 'function') window.setStore('bana_stock', list);
+            // Transfer qty badhane par source godown stock limit check karein
+            if (isTransfer && entry.refId && newQty > oldQty) {
+                const transfers = safeArr(window.getStore?.('material_transfers'));
+                const tr = transfers.find(t => t && t.id === entry.refId);
+                if (tr && typeof window.getBanaAvailableBalance === 'function') {
+                    const sourceKid = tr.fromKarkhanaId || 'k_main';
+                    const avail = window.getBanaAvailableBalance(tr.itemName || entry.name, sourceKid);
+                    const maxAllowed = Number((avail + oldQty).toFixed(2));
+                    if (newQty > maxAllowed) {
+                        return alert(`Bhejne wale godam me kul ${maxAllowed.toFixed(2)} Kg tak hi transfer badhaya ja sakta hai!`);
+                    }
                 }
             }
-        } else {
-            entry.gaya = newQty;
-            entry.qty = newQty;
-        }
 
-        if (isTransfer && entry.refId) {
-            const pair = hist.find(x => x && x.refId === entry.refId && String(x.id) !== String(id));
-            if (pair) {
-                pair.date = newDate;
-                if (pair.aaya > 0) pair.aaya = newQty;
-                if (pair.gaya > 0) pair.gaya = newQty;
+            entry.date = newDate;
+            entry.kariger = newKariger || (isTransfer ? 'Godown Transfer' : 'Godown Purchase');
+
+            if (oldAaya > 0) {
+                const aayaDiff = Number((newQty - oldAaya).toFixed(2));
+                entry.aaya = newQty;
+
+                if (isPurchase) {
+                    const list = safeArr(window.getStore?.('bana_stock'));
+                    const targetKid = entry.karkhanaId || 'k_main';
+                    const entryNameLower = String(entry.name || '').trim().toLowerCase();
+
+                    const item = list.find((x) => {
+                        const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
+                        return x?.name && x.name.trim().toLowerCase() === entryNameLower && matchKid;
+                    });
+
+                    if (item) {
+                        item.aaya = Math.max(0, safeNum((safeNum(item.aaya) + aayaDiff).toFixed(2)));
+                        item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
+                        if (typeof window.setStore === 'function') window.setStore('bana_stock', list);
+                    }
+                }
+            } else {
+                entry.gaya = newQty;
+                if (Object.prototype.hasOwnProperty.call(entry, 'qty')) {
+                    delete entry.qty;
+                }
             }
 
-            const transfers = window.safeArray ? window.safeArray(window.getStore('material_transfers')) : [];
-            const tr = transfers.find(t => t && t.id === entry.refId);
-            if (tr) {
-                tr.date = newDate;
-                tr.qty = newQty;
-                tr.quantity = newQty;
-                if (typeof window.setStore === 'function') window.setStore('material_transfers', transfers);
+            if (isTransfer && entry.refId) {
+                const pair = hist.find(x => x && x.refId === entry.refId && String(x.id) !== String(id));
+                if (pair) {
+                    pair.date = newDate;
+                    pair.kariger = entry.kariger;
+                    if (safeNum(pair.aaya) > 0) pair.aaya = newQty;
+                    if (safeNum(pair.gaya) > 0) pair.gaya = newQty;
+                }
+
+                const transfers = safeArr(window.getStore?.('material_transfers'));
+                const tr = transfers.find(t => t && t.id === entry.refId);
+                if (tr) {
+                    tr.date = newDate;
+                    tr.qty = newQty;
+                    tr.quantity = newQty;
+                    if (typeof window.setStore === 'function') window.setStore('material_transfers', transfers);
+                }
+
+                const kTransfers = safeArr(window.getStore?.('karkhana_transfers'));
+                const kTr = kTransfers.find(t => t && t.id === entry.refId);
+                if (kTr) {
+                    kTr.date = newDate;
+                    kTr.quantity = newQty;
+                    if (typeof window.setStore === 'function') window.setStore('karkhana_transfers', kTransfers);
+                }
             }
+
+            if (typeof window.setStore === 'function') window.setStore('bana_history', hist);
+
+            closeBanaEditModal();
+            applyPassbookFilters();
+            renderBanaTable();
+
+            if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+            alert('✅ Bana entry safalta-poorvak update ho gayi!');
+        } catch (err) {
+            console.error('[BanaEdit]', err);
+            try {
+                if (typeof window.setStore === 'function') {
+                    window.setStore('bana_history', snapHist);
+                    window.setStore('bana_stock', snapStock);
+                    window.setStore('material_transfers', snapTransfers);
+                    window.setStore('karkhana_transfers', snapKarkhanaTransfers);
+                }
+            } catch (rbErr) {
+                console.error('[BanaEdit Rollback]', rbErr);
+            }
+            alert('❌ Update fail ho gaya — Purana data restore ho gaya!');
+        } finally {
+            isSavingBanaEdit = false;
         }
-
-        if (typeof window.setStore === 'function') window.setStore('bana_history', hist);
-
-        closeBanaEditModal();
-        applyPassbookFilters();
-        renderBanaTable();
-
-        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-        alert('✅ Bana entry safalta-poorvak update ho gayi!');
     };
 
     /* ========================================================================
