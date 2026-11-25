@@ -308,6 +308,9 @@
 
     const downloadBackupFile = async () => {
         if (!window.currentUserId && !getUidSafe()) return alert('Pehle login karein!');
+        if (window.isBackupPreviewMode) {
+            return alert('⚠️ Pehle Preview Mode band karein, tabhi live data ka backup download hoga!');
+        }
 
         const btn = document.querySelector(".welcome-banner button[onclick*='syncToGoogleDrive']");
         const origHtml = btn ? btn.innerHTML : '';
@@ -342,7 +345,7 @@
                 window.URL.revokeObjectURL(downloadUrl);
                 closeProgressOverlay();
                 if (btn) btn.innerHTML = origHtml;
-            }, 300);
+            }, 1500);
         } catch (err) {
             closeProgressOverlay();
             if (btn) btn.innerHTML = origHtml;
@@ -452,7 +455,7 @@
     const openRawIdb = () => new Promise((resolve) => {
         if (!('indexedDB' in window)) return resolve(null);
         try {
-            const req = window.indexedDB.open('SimplicityERP_DB', 2);
+            const req = window.indexedDB.open('SimplicityERP_DB');
             req.onsuccess = (ev) => resolve(ev.target.result);
             req.onerror = () => resolve(null);
         } catch (_) {
@@ -468,28 +471,40 @@
         );
 
         const dbase = await openRawIdb();
-        if (dbase && dbase.objectStoreNames.contains('app_store')) {
-            await new Promise((resolve) => {
-                try {
-                    const tx = dbase.transaction('app_store', 'readonly');
-                    const req = tx.objectStore('app_store').openCursor();
-                    req.onsuccess = (ev) => {
-                        const cursor = ev.target.result;
-                        if (cursor) {
-                            const k = String(cursor.key);
-                            if (k.startsWith(sessPrefix) || globalFullKeys.has(k)) {
-                                oldMap.set(k, cursor.value);
-                            }
-                            cursor.continue();
-                        } else {
-                            resolve();
-                        }
+        if (dbase) {
+            if (dbase.objectStoreNames.contains('app_store')) {
+                await new Promise((resolve) => {
+                    let settled = false;
+                    const done = () => {
+                        if (settled) return;
+                        settled = true;
+                        try { dbase.close(); } catch (_) {}
+                        resolve();
                     };
-                    req.onerror = () => resolve();
-                } catch (_) {
-                    resolve();
-                }
-            });
+                    try {
+                        const tx = dbase.transaction('app_store', 'readonly');
+                        tx.oncomplete = done;
+                        tx.onerror = done;
+                        tx.onabort = done;
+                        const req = tx.objectStore('app_store').openCursor();
+                        req.onsuccess = (ev) => {
+                            const cursor = ev.target.result;
+                            if (cursor) {
+                                const k = String(cursor.key);
+                                if (k.startsWith(sessPrefix) || globalFullKeys.has(k)) {
+                                    oldMap.set(k, cursor.value);
+                                }
+                                cursor.continue();
+                            }
+                        };
+                        req.onerror = done;
+                    } catch (_) {
+                        done();
+                    }
+                });
+            } else {
+                try { dbase.close(); } catch (_) {}
+            }
         }
 
         const mem = window.APP_MEMORY_CACHE || {};
@@ -504,10 +519,24 @@
 
     const clearUserSyncQueue = async (uid) => {
         const dbase = await openRawIdb();
-        if (!dbase || !dbase.objectStoreNames.contains('sync_queue')) return;
+        if (!dbase) return;
+        if (!dbase.objectStoreNames.contains('sync_queue')) {
+            try { dbase.close(); } catch (_) {}
+            return;
+        }
         await new Promise((resolve) => {
+            let settled = false;
+            const done = () => {
+                if (settled) return;
+                settled = true;
+                try { dbase.close(); } catch (_) {}
+                resolve();
+            };
             try {
                 const tx = dbase.transaction('sync_queue', 'readwrite');
+                tx.oncomplete = done;
+                tx.onerror = done;
+                tx.onabort = done;
                 const store = tx.objectStore('sync_queue');
                 const req = store.openCursor();
                 req.onsuccess = (ev) => {
@@ -518,28 +547,38 @@
                             cursor.delete();
                         }
                         cursor.continue();
-                    } else {
-                        resolve();
                     }
                 };
-                req.onerror = () => resolve();
+                req.onerror = done;
             } catch (_) {
-                resolve();
+                done();
             }
         });
     };
 
     const enqueueFallbackSync = async (mutation) => {
         const dbase = await openRawIdb();
-        if (!dbase || !dbase.objectStoreNames.contains('sync_queue')) return;
+        if (!dbase) return;
+        if (!dbase.objectStoreNames.contains('sync_queue')) {
+            try { dbase.close(); } catch (_) {}
+            return;
+        }
         await new Promise((resolve) => {
+            let settled = false;
+            const done = () => {
+                if (settled) return;
+                settled = true;
+                try { dbase.close(); } catch (_) {}
+                resolve();
+            };
             try {
                 const tx = dbase.transaction('sync_queue', 'readwrite');
+                tx.oncomplete = done;
+                tx.onerror = done;
+                tx.onabort = done;
                 tx.objectStore('sync_queue').put(mutation);
-                tx.oncomplete = () => resolve();
-                tx.onerror = () => resolve();
             } catch (_) {
-                resolve();
+                done();
             }
         });
     };
@@ -635,6 +674,9 @@
         if (isDeleteWholeKey) {
             if (window.APP_MEMORY_CACHE) delete window.APP_MEMORY_CACHE[fullKey];
             if (typeof window.idbDelete === 'function') await window.idbDelete(fullKey);
+            if (typeof window.StorageEngine?.updateRowSnapshot === 'function') {
+                window.StorageEngine.updateRowSnapshot(fullKey, []);
+            }
             if (isLight) {
                 try { localStorage.removeItem(fullKey); } catch (_) {}
             }
@@ -714,11 +756,6 @@
         } catch (_) {}
         if (oldStr !== null && oldStr === newStr) return true;
 
-        // karkhana_transfers agar empty ho toh material_transfers me mat bhejein
-        if (shortKey === 'karkhana_transfers' && (!Array.isArray(nextValue) || nextValue.length === 0)) {
-            return true;
-        }
-
         const queueId = `${uid}_${fullKey}`;
         if (!navigator.onLine) {
             await enqueueFallbackSync({
@@ -786,6 +823,10 @@
         const reader = new FileReader();
 
         reader.onload = async (evt) => {
+            let uid = '';
+            let currentSess = '';
+            const preservedGlobalCache = {};
+
             try {
                 const parsed = JSON.parse(evt.target.result);
 
@@ -796,9 +837,9 @@
 
                 await waitForStoragePreload();
 
-                const uid = getUidSafe();
+                uid = getUidSafe();
                 const tid = getTidSafe(uid);
-                const currentSess = getActiveSessionSafe();
+                currentSess = getActiveSessionSafe();
                 const parsedSess = (parsed.session && /^\d{4}-\d{4}$/.test(String(parsed.session).trim()))
                     ? String(parsed.session).trim()
                     : null;
@@ -835,9 +876,23 @@
                 const oldWorkersKey = `${uid}_${targetSess}_jobwork_workers`;
                 const oldWorkers = Array.isArray(oldMap.get(oldWorkersKey)) ? oldMap.get(oldWorkersKey) : [];
 
+                // Preserve existing global keys before clearing memory cache
+                const orderedGlobalKeys = ['karkhana_list', 'active_karkhana_id', 'karkhana_transfers', 'info_ledger'];
+                orderedGlobalKeys.forEach((gk) => {
+                    const fullGk = `${uid}_${gk}`;
+                    if (window.APP_MEMORY_CACHE && Object.prototype.hasOwnProperty.call(window.APP_MEMORY_CACHE, fullGk)) {
+                        preservedGlobalCache[gk] = window.APP_MEMORY_CACHE[fullGk];
+                    } else if (oldMap.has(fullGk)) {
+                        preservedGlobalCache[gk] = oldMap.get(fullGk);
+                    }
+                });
+
                 // 3. Cancel pending debounce timers & stale offline queue
                 if (typeof window.clearMemoryCache === 'function') {
                     window.clearMemoryCache();
+                }
+                if (window.APP_MEMORY_CACHE) {
+                    window.APP_MEMORY_CACHE[`${uid}_app_active_session`] = targetSess;
                 }
                 await clearUserSyncQueue(uid);
 
@@ -975,7 +1030,6 @@
 
                 // 8. PHASE D: Global Keys (app_active_session sabse aakhir me commit ho!)
                 updateProgressOverlay(92, 'Updating Godam & Session settings...');
-                const orderedGlobalKeys = ['karkhana_list', 'active_karkhana_id', 'karkhana_transfers', 'info_ledger'];
                 for (const gk of orderedGlobalKeys) {
                     if (Object.prototype.hasOwnProperty.call(parsedData, gk)) {
                         await commitRestoredEntry({
@@ -987,14 +1041,30 @@
                             targetSess,
                             oldMap
                         });
+                    } else if (Object.prototype.hasOwnProperty.call(preservedGlobalCache, gk)) {
+                        if (window.APP_MEMORY_CACHE) {
+                            window.APP_MEMORY_CACHE[`${uid}_${gk}`] = preservedGlobalCache[gk];
+                        }
                     }
                 }
 
-                // Ensure targetSess exists in app_sessions_list
-                let sessionsList = Array.isArray(parsedData.app_sessions_list)
-                    ? parsedData.app_sessions_list.slice()
-                    : (Array.isArray(oldMap.get(`${uid}_app_sessions_list`)) ? oldMap.get(`${uid}_app_sessions_list`).slice() : []);
-                if (!sessionsList.includes(targetSess)) sessionsList.push(targetSess);
+                // Merge old and backup app_sessions_list so no session is dropped
+                const oldSessions = Array.isArray(oldMap.get(`${uid}_app_sessions_list`))
+                    ? oldMap.get(`${uid}_app_sessions_list`)
+                    : [];
+                const backupSessions = Array.isArray(parsedData.app_sessions_list)
+                    ? parsedData.app_sessions_list
+                    : [];
+                const sessionsList = [];
+                const seenSessions = new Set();
+                [...oldSessions, ...backupSessions, targetSess].forEach((s) => {
+                    if (s === undefined || s === null) return;
+                    const str = String(s).trim();
+                    if (!str || seenSessions.has(str)) return;
+                    seenSessions.add(str);
+                    sessionsList.push(typeof s === 'string' ? str : s);
+                });
+
                 await commitRestoredEntry({
                     shortKey: 'app_sessions_list',
                     nextValue: sessionsList,
@@ -1044,6 +1114,12 @@
                 }
             } catch (err) {
                 closeProgressOverlay();
+                if (uid && window.APP_MEMORY_CACHE) {
+                    if (currentSess) window.APP_MEMORY_CACHE[`${uid}_app_active_session`] = currentSess;
+                    Object.keys(preservedGlobalCache).forEach((gk) => {
+                        window.APP_MEMORY_CACHE[`${uid}_${gk}`] = preservedGlobalCache[gk];
+                    });
+                }
                 console.error('[BackupEngine] Restore error:', err);
                 if (navigator.onLine && typeof window.initSupabaseRealtime === 'function') {
                     window.initSupabaseRealtime();
