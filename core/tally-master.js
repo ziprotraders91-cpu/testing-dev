@@ -1,10 +1,19 @@
 /* ============================================================================
    SIMPLICITY ERP - TALLYPRIME DASHBOARD, GATEWAY, STOCK SUMMARY & BOOTSTRAP
    File: core/tally-master.js • Developed by Farhan Jawed
+   Hardening: Double-Load Guard • Chart Debounce (100ms) • Safe Key/Interval Guards
 ============================================================================ */
 
 (() => {
     'use strict';
+
+    if (window._tallyMasterLoaded) {
+        console.warn('[TallyMaster] Already loaded — skip duplicate');
+        return;
+    }
+    window._tallyMasterLoaded = true;
+
+    let _slChartDebounceTimer = null;
 
     /* ========================================================================
        1. LOGIN PASSWORD TOGGLE & PROMO SLIDESHOW
@@ -73,12 +82,14 @@
         });
     };
 
-    setInterval(() => {
-        const wrap = document.getElementById('login-wrapper');
-        if (wrap && wrap.style.display !== 'none') {
-            window.slSetSlide((slCurrentSlide + 1) % slSlides.length);
-        }
-    }, 4500);
+    if (!window._slSlideInterval) {
+        window._slSlideInterval = setInterval(() => {
+            const wrap = document.getElementById('login-wrapper');
+            if (wrap && wrap.style.display !== 'none' && typeof window.slSetSlide === 'function') {
+                window.slSetSlide((slCurrentSlide + 1) % slSlides.length);
+            }
+        }, 4500);
+    }
 
     /* ========================================================================
        2. GATEWAY SELECTION & DASHBOARD LIVE 4-CARD SYNC
@@ -114,150 +125,160 @@
     };
 
     window.slSyncDashboardCharts = function () {
-        const todayEl = document.getElementById('sl-today-date');
-        if (todayEl) {
+        if (_slChartDebounceTimer) clearTimeout(_slChartDebounceTimer);
+        _slChartDebounceTimer = setTimeout(() => {
             try {
-                todayEl.textContent = new Date().toLocaleDateString('en-IN', {
-                    weekday: 'short', day: '2-digit', month: 'short', year: 'numeric'
-                });
-            } catch (_) {}
-        }
-
-        const sesSel = document.getElementById('app-session-select');
-        const perEl = document.getElementById('sl-period-label');
-        if (sesSel && perEl && sesSel.value) {
-            perEl.textContent = 'Session ' + sesSel.value;
-        }
-
-        const banaTxt = document.getElementById('btn-total-bana')?.textContent || '';
-        const zariTxt = document.getElementById('btn-total-zari')?.textContent || '';
-        const sanchaTxt = document.getElementById('btn-total-sancha')?.textContent || '';
-        const sareeTxt = document.getElementById('btn-total-saree')?.textContent || '';
-
-        const banaVal = slParseNum(banaTxt);
-        const zariVal = slParseNum(zariTxt);
-
-        let taniVal = 0;
-        let chukkaVal = 0;
-        const taniM = sanchaTxt.match(/Tani:\s*([-+]?\d+(?:\.\d+)?)/i);
-        const chukkaM = sanchaTxt.match(/Chukka:\s*([-+]?\d+(?:\.\d+)?)/i);
-        if (taniM || chukkaM) {
-            taniVal = taniM ? parseFloat(taniM[1]) || 0 : 0;
-            chukkaVal = chukkaM ? parseFloat(chukkaM[1]) || 0 : 0;
-        } else {
-            taniVal = slParseNum(sanchaTxt);
-        }
-        const sareeVal = slParseNum(sareeTxt);
-
-        slSyncStockSummaryValues(banaVal, zariVal, taniVal, chukkaVal, sareeVal);
-
-        const fmtKg = (n) => (n % 1 === 0 ? String(Math.round(n)) : n.toFixed(1));
-        const setBar = (idVal, idH, label, pct) => {
-            const vEl = document.getElementById(idVal);
-            const hEl = document.getElementById(idH);
-            if (vEl) vEl.textContent = label;
-            if (hEl) hEl.style.height = Math.max(14, Math.min(92, pct)) + '%';
-        };
-
-        const maxKg = Math.max(banaVal, zariVal, taniVal, chukkaVal, 1);
-        setBar('sl-bar-val-bana', 'sl-bar-h-bana', fmtKg(banaVal), (banaVal / maxKg) * 88);
-        setBar('sl-bar-val-zari', 'sl-bar-h-zari', fmtKg(zariVal), (zariVal / maxKg) * 88);
-        setBar('sl-bar-val-tani', 'sl-bar-h-tani', fmtKg(taniVal), (taniVal / maxKg) * 88);
-        setBar('sl-bar-val-chukka', 'sl-bar-h-chukka', fmtKg(chukkaVal), (chukkaVal / maxKg) * 88);
-        setBar(
-            'sl-bar-val-saree',
-            'sl-bar-h-saree',
-            Math.round(sareeVal) + ' Pc',
-            sareeVal > 0 ? Math.max(22, Math.min(82, (sareeVal / Math.max(sareeVal, 100)) * 88)) : 14
-        );
-
-        let readyC = 0, rangaiC = 0, sanchaC = 0, totalC = 0;
-        try {
-            if (typeof window.getStore === 'function') {
-                const list = window.getStore('tani_orders_list');
-                if (Array.isArray(list)) {
-                    list.forEach((o) => {
-                        if (!o) return;
-                        const st = String(o.status || '').toLowerCase();
-                        if (st === 'ready') readyC++;
-                        else if (st === 'rangai') rangaiC++;
-                        else sanchaC++;
-                    });
-                    totalC = list.length;
+                const todayEl = document.getElementById('sl-today-date');
+                if (todayEl) {
+                    try {
+                        todayEl.textContent = new Date().toLocaleDateString('en-IN', {
+                            weekday: 'short', day: '2-digit', month: 'short', year: 'numeric'
+                        });
+                    } catch (_) {}
                 }
+
+                const sesSel = document.getElementById('app-session-select');
+                const perEl = document.getElementById('sl-period-label');
+                if (sesSel && perEl && sesSel.value) {
+                    perEl.textContent = 'Session ' + sesSel.value;
+                }
+
+                const banaTxt = document.getElementById('btn-total-bana')?.textContent || '';
+                const zariTxt = document.getElementById('btn-total-zari')?.textContent || '';
+                const sanchaTxt = document.getElementById('btn-total-sancha')?.textContent || '';
+                const sareeTxt = document.getElementById('btn-total-saree')?.textContent || '';
+
+                const banaVal = slParseNum(banaTxt);
+                const zariVal = slParseNum(zariTxt);
+
+                let taniVal = 0;
+                let chukkaVal = 0;
+                const taniM = sanchaTxt.match(/Tani:\s*([-+]?\d+(?:\.\d+)?)/i);
+                const chukkaM = sanchaTxt.match(/Chukka:\s*([-+]?\d+(?:\.\d+)?)/i);
+                if (taniM || chukkaM) {
+                    taniVal = taniM ? parseFloat(taniM[1]) || 0 : 0;
+                    chukkaVal = chukkaM ? parseFloat(chukkaM[1]) || 0 : 0;
+                } else {
+                    taniVal = slParseNum(sanchaTxt);
+                }
+                const sareeVal = slParseNum(sareeTxt);
+
+                slSyncStockSummaryValues(banaVal, zariVal, taniVal, chukkaVal, sareeVal);
+
+                const fmtKg = (n) => (n % 1 === 0 ? String(Math.round(n)) : n.toFixed(1));
+                const setBar = (idVal, idH, label, pct) => {
+                    const vEl = document.getElementById(idVal);
+                    const hEl = document.getElementById(idH);
+                    if (vEl) vEl.textContent = label;
+                    if (hEl) hEl.style.height = Math.max(14, Math.min(92, pct)) + '%';
+                };
+
+                const maxKg = Math.max(banaVal, zariVal, taniVal, chukkaVal, 1);
+                setBar('sl-bar-val-bana', 'sl-bar-h-bana', fmtKg(banaVal), (banaVal / maxKg) * 88);
+                setBar('sl-bar-val-zari', 'sl-bar-h-zari', fmtKg(zariVal), (zariVal / maxKg) * 88);
+                setBar('sl-bar-val-tani', 'sl-bar-h-tani', fmtKg(taniVal), (taniVal / maxKg) * 88);
+                setBar('sl-bar-val-chukka', 'sl-bar-h-chukka', fmtKg(chukkaVal), (chukkaVal / maxKg) * 88);
+                setBar(
+                    'sl-bar-val-saree',
+                    'sl-bar-h-saree',
+                    Math.round(sareeVal) + ' Pc',
+                    sareeVal > 0 ? Math.max(22, Math.min(82, (sareeVal / Math.max(sareeVal, 100)) * 88)) : 14
+                );
+
+                let readyC = 0, rangaiC = 0, sanchaC = 0, totalC = 0;
+                try {
+                    if (typeof window.getStore === 'function') {
+                        const list = window.getStore('tani_orders_list');
+                        if (Array.isArray(list)) {
+                            list.forEach((o) => {
+                                if (!o) return;
+                                const st = String(o.status || '').toLowerCase();
+                                if (st === 'ready') readyC++;
+                                else if (st === 'rangai') rangaiC++;
+                                else sanchaC++;
+                            });
+                            totalC = list.length;
+                        }
+                    }
+                } catch (_) {}
+
+                if (totalC === 0) {
+                    const taniOrdTxt = document.getElementById('btn-total-tani-orders')?.textContent || '';
+                    const rM = taniOrdTxt.match(/(\d+)\s*Ready/i);
+                    const rgM = taniOrdTxt.match(/(\d+)\s*Rangai/i);
+                    const sM = taniOrdTxt.match(/(\d+)\s*Sancha/i);
+                    if (rM) readyC = parseInt(rM[1], 10) || 0;
+                    if (rgM) rangaiC = parseInt(rgM[1], 10) || 0;
+                    if (sM) sanchaC = parseInt(sM[1], 10) || 0;
+                    totalC = readyC + rangaiC + sanchaC;
+                }
+
+                const circ = 238.76;
+                const readyDash = totalC > 0 ? (readyC / totalC) * circ : 0;
+                const rangaiDash = totalC > 0 ? (rangaiC / totalC) * circ : 0;
+                const pct = totalC > 0 ? Math.round((readyC / totalC) * 100) : 0;
+
+                const ringReady = document.getElementById('sl-ring-ready');
+                const ringRangai = document.getElementById('sl-ring-rangai');
+                if (ringReady) ringReady.setAttribute('stroke-dasharray', `${readyDash.toFixed(1)} ${circ}`);
+                if (ringRangai) {
+                    ringRangai.setAttribute('stroke-dasharray', `${rangaiDash.toFixed(1)} ${circ}`);
+                    ringRangai.setAttribute('stroke-dashoffset', `-${readyDash.toFixed(1)}`);
+                }
+
+                const elPct = document.getElementById('sl-ring-pct');
+                const elTot = document.getElementById('sl-tani-total-lbl');
+                const elLR = document.getElementById('sl-leg-ready');
+                const elLRg = document.getElementById('sl-leg-rangai');
+                const elLS = document.getElementById('sl-leg-sancha');
+                if (elPct) elPct.textContent = pct + '%';
+                if (elTot) elTot.textContent = totalC + ' Parchi';
+                if (elLR) elLR.textContent = String(readyC);
+                if (elLRg) elLRg.textContent = String(rangaiC);
+                if (elLS) elLS.textContent = String(sanchaC);
+
+                const karTxt = document.getElementById('btn-total-kariger')?.textContent || '';
+                const karCount = Math.max(0, Math.round(slParseNum(karTxt)));
+                const karCountEl = document.getElementById('sl-kariger-count');
+                if (karCountEl) karCountEl.textContent = String(karCount);
+
+                const kSel = document.getElementById('app-karkhana-select');
+                const karUnitEl = document.getElementById('sl-kariger-unit');
+                if (kSel && karUnitEl && kSel.selectedIndex >= 0) {
+                    karUnitEl.textContent = kSel.options[kSel.selectedIndex].textContent.replace(/^[\s🌐🏢🏭]+/, '').trim() || 'Sabhi Karkhane';
+                }
+
+                const payTxt = document.getElementById('btn-total-payment')?.textContent || '';
+                const diyaM = payTxt.match(/Diya:\s*₹?\s*([-+]?\d+(?:,\d+)*(?:\.\d+)?)/i);
+                const bakiM = payTxt.match(/Baki:\s*₹?\s*([-+]?\d+(?:,\d+)*(?:\.\d+)?)/i);
+                const diyaVal = diyaM ? (parseFloat(diyaM[1].replace(/,/g, '')) || 0) : 0;
+                const bakiVal = bakiM ? (parseFloat(bakiM[1].replace(/,/g, '')) || 0) : 0;
+                const kulDena = diyaVal + Math.max(0, bakiVal);
+                const payPct = kulDena > 0 ? Math.max(0, Math.min(100, Math.round((diyaVal / kulDena) * 100))) : 0;
+
+                const fmtInr = (n) => '₹ ' + Math.round(n).toLocaleString('en-IN');
+                const elPayHero = document.getElementById('sl-pay-baki-hero');
+                const elPayTot = document.getElementById('sl-pay-total');
+                const elPayPaid = document.getElementById('sl-pay-paid');
+                const elPayBaki = document.getElementById('sl-pay-baki');
+                const elPayPill = document.getElementById('sl-pay-pct-pill');
+                const elPayFill = document.getElementById('sl-pay-bar-fill');
+                if (elPayHero) elPayHero.textContent = fmtInr(bakiVal);
+                if (elPayTot) elPayTot.textContent = fmtInr(kulDena);
+                if (elPayPaid) elPayPaid.textContent = fmtInr(diyaVal);
+                if (elPayBaki) elPayBaki.textContent = fmtInr(bakiVal);
+                if (elPayPill) elPayPill.textContent = payPct + '% Paid';
+                if (elPayFill) elPayFill.style.width = payPct + '%';
+            } catch (err) {
+                console.warn('[TallyMaster Chart Sync]', err);
             }
-        } catch (_) {}
-
-        if (totalC === 0) {
-            const taniOrdTxt = document.getElementById('btn-total-tani-orders')?.textContent || '';
-            const rM = taniOrdTxt.match(/(\d+)\s*Ready/i);
-            const rgM = taniOrdTxt.match(/(\d+)\s*Rangai/i);
-            const sM = taniOrdTxt.match(/(\d+)\s*Sancha/i);
-            if (rM) readyC = parseInt(rM[1], 10) || 0;
-            if (rgM) rangaiC = parseInt(rgM[1], 10) || 0;
-            if (sM) sanchaC = parseInt(sM[1], 10) || 0;
-            totalC = readyC + rangaiC + sanchaC;
-        }
-
-        const circ = 238.76;
-        const readyDash = totalC > 0 ? (readyC / totalC) * circ : 0;
-        const rangaiDash = totalC > 0 ? (rangaiC / totalC) * circ : 0;
-        const pct = totalC > 0 ? Math.round((readyC / totalC) * 100) : 0;
-
-        const ringReady = document.getElementById('sl-ring-ready');
-        const ringRangai = document.getElementById('sl-ring-rangai');
-        if (ringReady) ringReady.setAttribute('stroke-dasharray', `${readyDash.toFixed(1)} ${circ}`);
-        if (ringRangai) {
-            ringRangai.setAttribute('stroke-dasharray', `${rangaiDash.toFixed(1)} ${circ}`);
-            ringRangai.setAttribute('stroke-dashoffset', `-${readyDash.toFixed(1)}`);
-        }
-
-        const elPct = document.getElementById('sl-ring-pct');
-        const elTot = document.getElementById('sl-tani-total-lbl');
-        const elLR = document.getElementById('sl-leg-ready');
-        const elLRg = document.getElementById('sl-leg-rangai');
-        const elLS = document.getElementById('sl-leg-sancha');
-        if (elPct) elPct.textContent = pct + '%';
-        if (elTot) elTot.textContent = totalC + ' Parchi';
-        if (elLR) elLR.textContent = String(readyC);
-        if (elLRg) elLRg.textContent = String(rangaiC);
-        if (elLS) elLS.textContent = String(sanchaC);
-
-        const karTxt = document.getElementById('btn-total-kariger')?.textContent || '';
-        const karCount = Math.max(0, Math.round(slParseNum(karTxt)));
-        const karCountEl = document.getElementById('sl-kariger-count');
-        if (karCountEl) karCountEl.textContent = String(karCount);
-
-        const kSel = document.getElementById('app-karkhana-select');
-        const karUnitEl = document.getElementById('sl-kariger-unit');
-        if (kSel && karUnitEl && kSel.selectedIndex >= 0) {
-            karUnitEl.textContent = kSel.options[kSel.selectedIndex].textContent.replace(/^[\s🌐🏢🏭]+/, '').trim() || 'Sabhi Karkhane';
-        }
-
-        const payTxt = document.getElementById('btn-total-payment')?.textContent || '';
-        const diyaM = payTxt.match(/Diya:\s*₹?\s*([-+]?\d+(?:,\d+)*(?:\.\d+)?)/i);
-        const bakiM = payTxt.match(/Baki:\s*₹?\s*([-+]?\d+(?:,\d+)*(?:\.\d+)?)/i);
-        const diyaVal = diyaM ? (parseFloat(diyaM[1].replace(/,/g, '')) || 0) : 0;
-        const bakiVal = bakiM ? (parseFloat(bakiM[1].replace(/,/g, '')) || 0) : 0;
-        const kulDena = diyaVal + Math.max(0, bakiVal);
-        const payPct = kulDena > 0 ? Math.max(0, Math.min(100, Math.round((diyaVal / kulDena) * 100))) : 0;
-
-        const fmtInr = (n) => '₹ ' + Math.round(n).toLocaleString('en-IN');
-        const elPayHero = document.getElementById('sl-pay-baki-hero');
-        const elPayTot = document.getElementById('sl-pay-total');
-        const elPayPaid = document.getElementById('sl-pay-paid');
-        const elPayBaki = document.getElementById('sl-pay-baki');
-        const elPayPill = document.getElementById('sl-pay-pct-pill');
-        const elPayFill = document.getElementById('sl-pay-bar-fill');
-        if (elPayHero) elPayHero.textContent = fmtInr(bakiVal);
-        if (elPayTot) elPayTot.textContent = fmtInr(kulDena);
-        if (elPayPaid) elPayPaid.textContent = fmtInr(diyaVal);
-        if (elPayBaki) elPayBaki.textContent = fmtInr(bakiVal);
-        if (elPayPill) elPayPill.textContent = payPct + '% Paid';
-        if (elPayFill) elPayFill.style.width = payPct + '%';
+        }, 100);
     };
 
     const slInitBadgeObserver = () => {
+        if (window._slBadgeObsBound) return;
+        window._slBadgeObsBound = true;
+
         const watchIds = [
             'btn-total-bana', 'btn-total-zari', 'btn-total-sancha', 'btn-total-saree',
             'btn-total-tani-orders', 'btn-total-kariger', 'btn-total-payment'
@@ -475,77 +496,82 @@
     /* ========================================================================
        4. DASHBOARD & STOCK SUMMARY KEYBOARD SHORTCUTS
     ======================================================================== */
-    document.addEventListener('keydown', (e) => {
-        if (!e || !e.key) return;
+    if (!window._tmKeysBound) {
+        window._tmKeysBound = true;
+        document.addEventListener('keydown', (e) => {
+            if (!e || !e.key) return;
 
-        const desk = document.getElementById('desktop-screen');
-        if (!desk || desk.style.display === 'none') return;
+            const desk = document.getElementById('desktop-screen');
+            if (!desk || desk.style.display === 'none') return;
 
-        const anyModalOpen = Array.from(document.querySelectorAll('.modal-overlay')).some((m) => m.style.display && m.style.display !== 'none');
-        if (anyModalOpen) return;
+            const anyModalOpen = Array.from(document.querySelectorAll(
+                '.modal-overlay, .kexp-overlay, #profile-modal, #client-payment-modal, #kariger-express-modal, #kariger-portal-admin-modal, #kariger-print-options-modal, #master-stock-express-modal, #master-jobwork-express-modal, #tani-express-modal'
+            )).some((m) => m.style.display && m.style.display !== 'none');
+            if (anyModalOpen) return;
 
-        // Inside Stock Summary Hub screen
-        const ssSec = document.getElementById('stock-summary-section');
-        if (ssSec && ssSec.style.display !== 'none') {
-            if (e.key === 'Escape') {
-                e.preventDefault();
-                e.stopImmediatePropagation();
-                window.backToDashboard();
+            // Inside Stock Summary Hub screen
+            const ssSec = document.getElementById('stock-summary-section');
+            if (ssSec && ssSec.style.display !== 'none') {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    window.backToDashboard();
+                    return;
+                }
+                if (e.key === 'ArrowDown') { e.preventDefault(); ssHighlightRow(ssActiveIdx + 1); return; }
+                if (e.key === 'ArrowUp') { e.preventDefault(); ssHighlightRow(ssActiveIdx - 1); return; }
+                if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(ssActiveIdx); return; }
+                if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key && e.key.length === 1) {
+                    const k = e.key.toLowerCase();
+                    if (k === 'b') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(0); return; }
+                    if (k === 'z') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(1); return; }
+                    if (k === 'n') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(2); return; }
+                    if (k === 'e') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(3); return; }
+                }
                 return;
             }
-            if (e.key === 'ArrowDown') { e.preventDefault(); ssHighlightRow(ssActiveIdx + 1); return; }
-            if (e.key === 'ArrowUp') { e.preventDefault(); ssHighlightRow(ssActiveIdx - 1); return; }
-            if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(ssActiveIdx); return; }
-            if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key && e.key.length === 1) {
+
+            // Dashboard Gateway Arrow + Letter Shortcuts
+            const dash = document.getElementById('dashboard-view');
+            if (!dash || dash.style.display === 'none') return;
+
+            const tag = (document.activeElement && document.activeElement.tagName) || '';
+            if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+
+            const items = Array.from(document.querySelectorAll('#dashboard-view .gw-item'));
+            if (!items.length) return;
+            let idx = items.findIndex((el) => el.classList.contains('active'));
+            if (idx < 0) idx = 0;
+
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                items[idx].classList.remove('active');
+                items[(idx + 1) % items.length].classList.add('active');
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                items[idx].classList.remove('active');
+                items[(idx - 1 + items.length) % items.length].classList.add('active');
+            } else if (e.key === 'Enter' && ((tag !== 'BUTTON' && tag !== 'A') || document.activeElement?.classList?.contains('gw-item'))) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                const targetItem = document.activeElement?.classList?.contains('gw-item') ? document.activeElement : items[idx];
+                setTimeout(() => targetItem?.click(), 0);
+            } else if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key && e.key.length === 1) {
                 const k = e.key.toLowerCase();
-                if (k === 'b') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(0); return; }
-                if (k === 'z') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(1); return; }
-                if (k === 'n') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(2); return; }
-                if (k === 'e') { e.preventDefault(); e.stopImmediatePropagation(); window.ssOpenStockGroup(3); return; }
+                const targetBtn = items.find((el) => el.dataset.gwKey === k);
+                if (targetBtn) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    setTimeout(() => targetBtn.click(), 0);
+                    return;
+                }
+                if (k === 'b' && typeof window.openBanaModule === 'function') { e.preventDefault(); e.stopImmediatePropagation(); window.__slReturnToStockSummary = false; setTimeout(() => window.openBanaModule(), 0); }
+                else if (k === 'z' && typeof window.openZariModule === 'function') { e.preventDefault(); e.stopImmediatePropagation(); window.__slReturnToStockSummary = false; setTimeout(() => window.openZariModule(), 0); }
+                else if (k === 'n' && typeof window.openSanchaModule === 'function') { e.preventDefault(); e.stopImmediatePropagation(); window.__slReturnToStockSummary = false; setTimeout(() => window.openSanchaModule(), 0); }
+                else if (k === 'e' && typeof window.openSareeModule === 'function') { e.preventDefault(); e.stopImmediatePropagation(); window.__slReturnToStockSummary = false; setTimeout(() => window.openSareeModule(), 0); }
             }
-            return;
-        }
-
-        // Dashboard Gateway Arrow + Letter Shortcuts
-        const dash = document.getElementById('dashboard-view');
-        if (!dash || dash.style.display === 'none') return;
-
-        const tag = (document.activeElement && document.activeElement.tagName) || '';
-        if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-
-        const items = Array.from(document.querySelectorAll('#dashboard-view .gw-item'));
-        if (!items.length) return;
-        let idx = items.findIndex((el) => el.classList.contains('active'));
-        if (idx < 0) idx = 0;
-
-        if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            items[idx].classList.remove('active');
-            items[(idx + 1) % items.length].classList.add('active');
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            items[idx].classList.remove('active');
-            items[(idx - 1 + items.length) % items.length].classList.add('active');
-        } else if (e.key === 'Enter' && (tag !== 'BUTTON' || document.activeElement?.classList?.contains('gw-item'))) {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            const targetItem = document.activeElement?.classList?.contains('gw-item') ? document.activeElement : items[idx];
-            setTimeout(() => targetItem?.click(), 0);
-        } else if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key && e.key.length === 1) {
-            const k = e.key.toLowerCase();
-            const targetBtn = items.find((el) => el.dataset.gwKey === k);
-            if (targetBtn) {
-                e.preventDefault();
-                e.stopImmediatePropagation();
-                setTimeout(() => targetBtn.click(), 0);
-                return;
-            }
-            if (k === 'b' && typeof window.openBanaModule === 'function') { e.preventDefault(); e.stopImmediatePropagation(); window.__slReturnToStockSummary = false; setTimeout(() => window.openBanaModule(), 0); }
-            else if (k === 'z' && typeof window.openZariModule === 'function') { e.preventDefault(); e.stopImmediatePropagation(); window.__slReturnToStockSummary = false; setTimeout(() => window.openZariModule(), 0); }
-            else if (k === 'n' && typeof window.openSanchaModule === 'function') { e.preventDefault(); e.stopImmediatePropagation(); window.__slReturnToStockSummary = false; setTimeout(() => window.openSanchaModule(), 0); }
-            else if (k === 'e' && typeof window.openSareeModule === 'function') { e.preventDefault(); e.stopImmediatePropagation(); window.__slReturnToStockSummary = false; setTimeout(() => window.openSareeModule(), 0); }
-        }
-    });
+        });
+    }
 
     /* ========================================================================
        5. NAVBAR KARKHANA DROPDOWN & GLOBAL MODULE NAVIGATION
@@ -607,6 +633,8 @@
         if (typeof window.tmCloseSheetOverlay === 'function') window.tmCloseSheetOverlay(false);
         window.__slReturnToStockSummary = false;
         document.querySelectorAll('.module-section').forEach((s) => s.style.display = 'none');
+        const dbSec = document.getElementById('daybook-section');
+        if (dbSec) dbSec.style.display = 'none';
         const dView = document.getElementById('dashboard-view');
         if (dView) dView.style.display = window.innerWidth <= 860 ? 'block' : 'flex';
         if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
@@ -629,7 +657,9 @@
         ensureStockSummaryDOM();
         window.populateNavbarKarkhanaDropdown();
         slInitBadgeObserver();
-        if (typeof window.checkAutoLogin === 'function') window.checkAutoLogin();
+        if (typeof window.checkAutoLogin === 'function' && !window.currentUserId) {
+            window.checkAutoLogin();
+        }
     };
 
     if (document.readyState === 'loading') {
