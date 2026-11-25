@@ -8,12 +8,20 @@
    - [F4] Copy All Same from Previous Tani
    - Tally Accept Bar: Save & Print [Y/Enter] | Only Save [S] | Edit [N/Esc]
    - 100% Preserved: Sancha Portal Sync, Tani Order List, Urdu A6 Print & WhatsApp
+   Hardening: Double-Load Guard • Save Lock • Rollback • Exact-Match/New-Text Safe
 ============================================================================ */
 
 (() => {
     'use strict';
 
+    if (window._taniExpressLoaded) {
+        console.warn('[TaniExpress] Already loaded — skip duplicate');
+        return;
+    }
+    window._taniExpressLoaded = true;
+
     let lastSavedTaniExpressOrder = null;
+    let isSubmittingTani = false;
 
     // Step & Contextual Picker State
     let currentStep = 1; // 1 = Order Details, 2 = 8-Colors Matching
@@ -32,6 +40,8 @@
         if (typeof window.safeArray === 'function') return window.safeArray(v);
         return [];
     };
+
+    const cloneSnap = (v) => JSON.parse(JSON.stringify(toArray(v)));
 
     const getFromStore = (key) => {
         if (typeof window.getStore === 'function') return window.getStore(key);
@@ -72,6 +82,13 @@
         const s = String(p ?? '').trim();
         if (!s || s === '-' || s.toLowerCase() === 'undefined' || s.toLowerCase() === 'null') return '';
         return s;
+    };
+
+    const setTaniStatus = (msg, isError = false) => {
+        const el = document.getElementById('texp-status-msg');
+        if (!el) return;
+        el.style.color = isError ? '#dc2626' : '#92400e';
+        el.textContent = msg;
     };
 
     const getToday = () => {
@@ -212,9 +229,8 @@
                 count++;
             }
         });
-        const msgEl = document.getElementById('texp-status-msg');
-        if (msgEl && count > 0) {
-            msgEl.textContent = `✅ Pichli Tani ki ${count} fields copy ho gayi! Ab zaroori badlav karke Accept karein.`;
+        if (count > 0) {
+            setTaniStatus(`✅ Pichli Tani ki ${count} fields copy ho gayi! Ab zaroori badlav karke Accept karein.`);
         }
     };
 
@@ -257,7 +273,6 @@
         }
 
         if (kind === 'sancha') {
-            // Pull Sancha Makers (person) from Sancha Stock + Past Tani Orders (NOT Tani Item names!)
             const map = new Map();
             if (typeof window.getSanchaMakersSummary === 'function') {
                 window.getSanchaMakersSummary('tani', '', 'all').forEach((m) => {
@@ -337,14 +352,17 @@
     const sortAndFilterPickerItems = (items, query) => {
         const q = String(query || '').trim().toLowerCase();
         if (!q) return items;
+        const exact = [];
         const prefix = [];
         const substr = [];
         items.forEach(it => {
-            const hay = `${it.label} ${it.sub || ''}`.toLowerCase();
-            if (it.label.toLowerCase().startsWith(q)) prefix.push(it);
+            const lblLower = it.label.toLowerCase();
+            const hay = `${lblLower} ${String(it.sub || '').toLowerCase()}`;
+            if (lblLower === q) exact.push(it);
+            else if (lblLower.startsWith(q)) prefix.push(it);
             else if (hay.includes(q)) substr.push(it);
         });
-        return [...prefix, ...substr];
+        return [...exact, ...prefix, ...substr];
     };
 
     const renderContextualPicker = (kind, inputId, queryText = '') => {
@@ -523,6 +541,7 @@
         const existing = document.getElementById('master-tani-express-modal');
         if (existing) existing.remove();
 
+        isSubmittingTani = false;
         modalOpenedAt = performance.now();
         const today = getToday();
         const nextOrderNo = getNextParchiNumber();
@@ -1117,6 +1136,7 @@
 
                 const kind = inp.getAttribute('data-picker') || 'summary';
                 pickerSelectedIdx = 0;
+                pickerNavigated = false;
                 renderContextualPicker(kind, inp.id, inp.value);
 
                 if (inp.id === 'texp-kariger') {
@@ -1209,11 +1229,13 @@
 
                     const typedNonEmpty = inp.value.trim() !== '';
 
-                    if (isPickerActive && (pickerNavigated || typedNonEmpty)) {
+                    // If user pressed ArrowUp/Down to highlight a list item, always pick it
+                    if (isPickerActive && pickerNavigated) {
                         applyPickerSelection(pickerSelectedIdx, true);
                         return;
                     }
 
+                    // If empty and ghost exists, Enter accepts ghost
                     if (!typedNonEmpty && inp.dataset.ghost) {
                         inp.value = inp.dataset.ghost;
                         clearFieldGhost(inp, true);
@@ -1221,8 +1243,18 @@
                         return;
                     }
 
-                    const isListPicker = (kind === 'kariger' || kind === 'sancha' || kind === 'rangi' || kind === 'bana');
-                    if (isPickerActive && isListPicker) {
+                    // Kariger MUST match kariger_list: pick top match unless already exact match
+                    if (kind === 'kariger' && isPickerActive) {
+                        const exactAlready = typedNonEmpty && pickerFilteredItems[0] &&
+                            pickerFilteredItems[0].label.toLowerCase() === inp.value.trim().toLowerCase();
+                        if (!exactAlready) {
+                            applyPickerSelection(pickerSelectedIdx, true);
+                            return;
+                        }
+                    }
+
+                    // For sancha / rangi / bana / color: if user typed text manually without arrows, keep typed text (allows new names)
+                    if (!typedNonEmpty && isPickerActive && (kind === 'sancha' || kind === 'rangi' || kind === 'bana')) {
                         applyPickerSelection(pickerSelectedIdx, true);
                         return;
                     }
@@ -1321,12 +1353,15 @@
         window.removeEventListener('keydown', handleTaniExpressGlobalKeydown, true);
         const modal = document.getElementById('master-tani-express-modal');
         if (modal) modal.remove();
+        isSubmittingTani = false;
     };
 
     /* ========================================================================
-       5. ATOMIC SUBMIT (SAVES TO TANI_ORDERS_LIST & PUSHES TO SANCHA PORTAL)
+       5. ATOMIC SUBMIT (LOCK + ROLLBACK + SAVES TO TANI_ORDERS_LIST & PORTAL)
        ======================================================================== */
-    window.submitTaniExpress = (shouldPrint = null) => {
+    window.submitTaniExpress = (shouldPrint = false) => {
+        if (isSubmittingTani) return;
+
         const orderNo = String(document.getElementById('texp-order-no')?.value || '').trim() || getNextParchiNumber();
         const date = document.getElementById('texp-order-date')?.value || getToday();
         const kariger = String(document.getElementById('texp-kariger')?.value || '').trim().toUpperCase();
@@ -1341,162 +1376,186 @@
         const bana = String(document.getElementById('texp-bana')?.value || '').trim();
 
         if (!kariger) {
+            showTaniAcceptBar(false);
             setTaniStep(1, 'texp-kariger');
-            alert('कृपया कारीगर का नाम चुनिए!');
-            document.getElementById('texp-kariger')?.focus();
+            setTaniStatus('⚠️ कृपया कारीगर का नाम चुनिए!', true);
             return;
         }
 
         const allKarigers = toArray(getFromStore('kariger_list'));
         const karigerExists = allKarigers.some(k => k && String(k.name || '').trim().toUpperCase() === kariger);
         if (!karigerExists) {
+            showTaniAcceptBar(false);
             setTaniStep(1, 'texp-kariger');
-            alert('चुना गया कारीगर Master Sheet में नहीं है! कृपया सही कारीगर चुनें।');
-            document.getElementById('texp-kariger')?.focus();
+            setTaniStatus('⚠️ चुना गया कारीगर Master Sheet में नहीं है! कृपया सही कारीगर चुनें।', true);
             return;
         }
 
-        const matchingTable = [];
-        const usedColors = [];
+        isSubmittingTani = true;
+        const snapOrders = cloneSnap(getFromStore('tani_orders_list'));
+        const snapColors = cloneSnap(getFromStore('tani_learned_colors'));
+        const snapRangi = cloneSnap(getFromStore('tani_learned_rangi'));
+        let saveSucceeded = false;
 
-        if (border) usedColors.push(border);
+        try {
+            const matchingTable = [];
+            const usedColors = [];
 
-        for (let i = 1; i <= 8; i++) {
-            const sCol = String(document.getElementById(`texp-col-saree-${i}`)?.value || '').trim();
-            const bCol = String(document.getElementById(`texp-col-border-${i}`)?.value || '').trim();
-            const bnCol = String(document.getElementById(`texp-col-bana-${i}`)?.value || '').trim();
-            if (sCol || bCol || bnCol) {
-                matchingTable.push({ row: i, saree: sCol, border: bCol, bana: bnCol });
-                if (sCol) usedColors.push(sCol);
-                if (bCol) usedColors.push(bCol);
-                if (bnCol) usedColors.push(bnCol);
-            }
-        }
+            if (border) usedColors.push(border);
 
-        saveNewLearnedColors(usedColors);
-
-        if (rangi) {
-            const rList = toArray(getFromStore('tani_learned_rangi'));
-            if (!rList.includes(rangi)) {
-                rList.push(rangi);
-                setToStore('tani_learned_rangi', rList);
-            }
-        }
-
-        const selectedContrasts = [];
-        const contrastLabels = [];
-        document.querySelectorAll('input[name="texp_contrast"]:checked').forEach(c => {
-            selectedContrasts.push(c.value);
-            if (c.value === 'aanchal_blouse') contrastLabels.push('آنچل بلاؤز');
-            else if (c.value === 'border_only') contrastLabels.push('صرف بارڈر');
-            else if (c.value === 'self') contrastLabels.push('سیلف');
-        });
-
-        const contrastVal = selectedContrasts.length ? selectedContrasts.join(', ') : 'aanchal_blouse';
-        const contrastLabel = contrastLabels.length ? contrastLabels.join(' + ') : 'آنچل بلاؤز کنٹراس';
-
-        const list = getTaniOrders();
-        const targetId = `tani_${Date.now()}`;
-
-        const newOrderObj = {
-            id: targetId,
-            orderNo: orderNo,
-            date: date,
-            sancha: sancha,
-            kariger: kariger,
-            mohalla: mohalla,
-            paai: paai,
-            border: border,
-            bana: bana,
-            meter: meter,
-            pcs: pcs,
-            rangi: rangi,
-            matchingTable: matchingTable,
-            contrastVal: contrastVal,
-            contrastLabel: contrastLabel,
-            selectedContrasts: selectedContrasts,
-            status: 'sancha',
-            sanchaPortalStatus: 'pending',
-            statusHistory: [
-                { status: 'sancha', date: date, note: 'Tani Express Entry' }
-            ],
-            createdAt: Date.now()
-        };
-
-        list.unshift(newOrderObj);
-        setToStore('tani_orders_list', list);
-
-        lastSavedTaniExpressOrder = newOrderObj;
-
-        if (sancha && window.SanchaPortalSync && typeof window.SanchaPortalSync.pushTaniOrderToSanchaPortal === 'function') {
-            window.SanchaPortalSync.pushTaniOrderToSanchaPortal(newOrderObj).then((ok) => {
-                if (ok) {
-                    const latest = getTaniOrders();
-                    const found = latest.find(x => String(x.id) === String(newOrderObj.id));
-                    if (found && !found.sanchaPortalPushed) {
-                        found.sanchaPortalPushed = true;
-                        setToStore('tani_orders_list', latest);
-                    }
+            for (let i = 1; i <= 8; i++) {
+                const sCol = String(document.getElementById(`texp-col-saree-${i}`)?.value || '').trim();
+                const bCol = String(document.getElementById(`texp-col-border-${i}`)?.value || '').trim();
+                const bnCol = String(document.getElementById(`texp-col-bana-${i}`)?.value || '').trim();
+                if (sCol || bCol || bnCol) {
+                    matchingTable.push({ row: i, saree: sCol, border: bCol, bana: bnCol });
+                    if (sCol) usedColors.push(sCol);
+                    if (bCol) usedColors.push(bCol);
+                    if (bnCol) usedColors.push(bnCol);
                 }
+            }
+
+            saveNewLearnedColors(usedColors);
+
+            if (rangi) {
+                const rList = toArray(getFromStore('tani_learned_rangi'));
+                if (!rList.includes(rangi)) {
+                    rList.push(rangi);
+                    setToStore('tani_learned_rangi', rList);
+                }
+            }
+
+            const selectedContrasts = [];
+            const contrastLabels = [];
+            document.querySelectorAll('input[name="texp_contrast"]:checked').forEach(c => {
+                selectedContrasts.push(c.value);
+                if (c.value === 'aanchal_blouse') contrastLabels.push('آنچل بلاؤز');
+                else if (c.value === 'border_only') contrastLabels.push('صرف بارڈر');
+                else if (c.value === 'self') contrastLabels.push('سیلف');
             });
+
+            const contrastVal = selectedContrasts.length ? selectedContrasts.join(', ') : 'aanchal_blouse';
+            const contrastLabel = contrastLabels.length ? contrastLabels.join(' + ') : 'آنچل بلاؤز کنٹراس';
+
+            const list = getTaniOrders();
+            const targetId = `tani_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+            const newOrderObj = {
+                id: targetId,
+                orderNo: orderNo,
+                date: date,
+                sancha: sancha,
+                kariger: kariger,
+                mohalla: mohalla,
+                paai: paai,
+                border: border,
+                bana: bana,
+                meter: meter,
+                pcs: pcs,
+                rangi: rangi,
+                matchingTable: matchingTable,
+                contrastVal: contrastVal,
+                contrastLabel: contrastLabel,
+                selectedContrasts: selectedContrasts,
+                status: 'sancha',
+                sanchaPortalStatus: 'pending',
+                statusHistory: [
+                    { status: 'sancha', date: date, note: 'Tani Express Entry' }
+                ],
+                createdAt: Date.now()
+            };
+
+            list.unshift(newOrderObj);
+            setToStore('tani_orders_list', list);
+
+            lastSavedTaniExpressOrder = newOrderObj;
+
+            if (sancha && window.SanchaPortalSync && typeof window.SanchaPortalSync.pushTaniOrderToSanchaPortal === 'function') {
+                window.SanchaPortalSync.pushTaniOrderToSanchaPortal(newOrderObj).then((ok) => {
+                    if (ok) {
+                        const latest = getTaniOrders();
+                        const found = latest.find(x => String(x.id) === String(newOrderObj.id));
+                        if (found && !found.sanchaPortalPushed) {
+                            found.sanchaPortalPushed = true;
+                            setToStore('tani_orders_list', latest);
+                        }
+                    }
+                }).catch((syncErr) => console.warn('[TaniExpress] SanchaPortalSync error:', syncErr));
+            }
+
+            if (typeof window.updateTaniOrderBadges === 'function') window.updateTaniOrderBadges();
+            if (typeof window.renderTaniMonthTabs === 'function') window.renderTaniMonthTabs();
+            if (typeof window.renderTaniOrdersTable === 'function') window.renderTaniOrdersTable();
+            if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+            if (typeof window.slSyncDashboardCharts === 'function') window.slSyncDashboardCharts();
+
+            showTaniAcceptBar(false);
+            setTaniStatus(`✅ Parchi #${orderNo} (${kariger}) save & sync ho gayi!`);
+
+            const nextNum = getNextParchiNumber();
+            const noEl = document.getElementById('texp-order-no');
+            const badgeEl = document.getElementById('texp-parchi-badge');
+            if (noEl) noEl.value = nextNum;
+            if (badgeEl) badgeEl.textContent = `Parchi #${nextNum}`;
+
+            document.getElementById('texp-kariger').value = '';
+            document.getElementById('texp-mohalla').value = '';
+            document.getElementById('texp-sancha').value = '';
+            document.getElementById('texp-rangi').value = '';
+            document.getElementById('texp-meter').value = '';
+            document.getElementById('texp-pcs').value = '';
+            document.getElementById('texp-paai').value = '';
+            document.getElementById('texp-border').value = '';
+            document.getElementById('texp-bana').value = '';
+
+            for (let i = 1; i <= 8; i++) {
+                const sEl = document.getElementById(`texp-col-saree-${i}`);
+                const bEl = document.getElementById(`texp-col-border-${i}`);
+                const bnEl = document.getElementById(`texp-col-bana-${i}`);
+                if (sEl) sEl.value = '';
+                if (bEl) bEl.value = '';
+                if (bnEl) bnEl.value = '';
+            }
+
+            // Reset matching style checkboxes to default
+            document.querySelectorAll('input[name="texp_contrast"]').forEach((cb) => {
+                cb.checked = (cb.value === 'aanchal_blouse');
+            });
+
+            clearAllGhosts();
+            setTaniStep(1, 'texp-kariger');
+            saveSucceeded = true;
+        } catch (err) {
+            console.error('[TaniExpress Save Failed]', err);
+            try {
+                setToStore('tani_orders_list', snapOrders);
+                setToStore('tani_learned_colors', snapColors);
+                setToStore('tani_learned_rangi', snapRangi);
+            } catch (rbErr) {
+                console.error('[TaniExpress Rollback Error]', rbErr);
+            }
+            setTaniStatus('❌ Error: Parchi save fail hui, data rollback ho gaya!', true);
+        } finally {
+            isSubmittingTani = false;
         }
 
-        if (typeof window.updateTaniOrderBadges === 'function') window.updateTaniOrderBadges();
-        if (typeof window.renderTaniMonthTabs === 'function') window.renderTaniMonthTabs();
-        if (typeof window.renderTaniOrdersTable === 'function') window.renderTaniOrdersTable();
-        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-        if (typeof window.slSyncDashboardCharts === 'function') window.slSyncDashboardCharts();
-
-        showTaniAcceptBar(false);
-
-        const statusMsg = document.getElementById('texp-status-msg');
-        if (statusMsg) {
-            statusMsg.textContent = `✅ Parchi #${orderNo} (${kariger}) save & sync ho gayi!`;
-        }
-
-        const nextNum = getNextParchiNumber();
-        const noEl = document.getElementById('texp-order-no');
-        const badgeEl = document.getElementById('texp-parchi-badge');
-        if (noEl) noEl.value = nextNum;
-        if (badgeEl) badgeEl.textContent = `Parchi #${nextNum}`;
-
-        document.getElementById('texp-kariger').value = '';
-        document.getElementById('texp-mohalla').value = '';
-        document.getElementById('texp-sancha').value = '';
-        document.getElementById('texp-rangi').value = '';
-        document.getElementById('texp-meter').value = '';
-        document.getElementById('texp-pcs').value = '';
-        document.getElementById('texp-paai').value = '';
-        document.getElementById('texp-border').value = '';
-        document.getElementById('texp-bana').value = '';
-
-        for (let i = 1; i <= 8; i++) {
-            const sEl = document.getElementById(`texp-col-saree-${i}`);
-            const bEl = document.getElementById(`texp-col-border-${i}`);
-            const bnEl = document.getElementById(`texp-col-bana-${i}`);
-            if (sEl) sEl.value = '';
-            if (bEl) bEl.value = '';
-            if (bnEl) bnEl.value = '';
-        }
-
-        clearAllGhosts();
-        setTaniStep(1, 'texp-kariger');
-
-        if (shouldPrint === true) {
-            printLastSavedTaniExpressSlip();
-        } else if (shouldPrint === null) {
-            if (confirm(`✅ Parchi #${orderNo} save ho gayi!\n\nKya aap iski Urdu A6 Parchi print karna chahte hain?`)) {
+        if (saveSucceeded && shouldPrint === true) {
+            try {
                 printLastSavedTaniExpressSlip();
+            } catch (pErr) {
+                console.warn('[TaniExpress Print Warning]', pErr);
             }
         }
     };
 
     /* ========================================================================
-       6. A6 PHYSICAL SLIP PRINT (EXACT NASTALIQ URDU REPLICA - UNTOUCHED)
+       6. A6 PHYSICAL SLIP PRINT (EXACT NASTALIQ URDU REPLICA - PWA SAFE)
        ======================================================================== */
     window.printLastSavedTaniExpressSlip = () => {
         if (!lastSavedTaniExpressOrder) {
-            return alert('प्रिंट करने के लिए कोई रीसेंट तानी पर्ची नहीं मिली!');
+            console.warn('[TaniExpress Print] Koi recent tani parchi nahi mili.');
+            setTaniStatus('⚠️ प्रिंट करने के लिए कोई रीसेंट तानी पर्ची नहीं मिली!', true);
+            return;
         }
 
         const item = lastSavedTaniExpressOrder;
@@ -1519,7 +1578,11 @@
         const isSelf = selContrasts.includes('self') ? '☑' : '☐';
 
         const printWin = window.open('', '', 'width=450,height=700');
-        if (!printWin) return alert('Popup block hai! Kripya browser me popup allow karein.');
+        if (!printWin) {
+            console.warn('[TaniExpress Print] Popup block hai! Browser me popup allow karein.');
+            setTaniStatus('⚠️ Print Popup block hai! Browser me popup allow karein.');
+            return;
+        }
 
         printWin.document.write(`
             <!DOCTYPE html>
@@ -1602,11 +1665,13 @@
     };
 
     /* ========================================================================
-       7. WHATSAPP PARCHI SHARING
+       7. WHATSAPP PARCHI SHARING (PWA SAFE)
        ======================================================================== */
     window.sendTaniExpressWhatsApp = () => {
         if (!lastSavedTaniExpressOrder) {
-            return alert('व्हाट्सएप पर भेजने के लिए कोई रीसेंट पर्ची नहीं मिली!');
+            console.warn('[TaniExpress WA] Koi recent parchi nahi mili.');
+            setTaniStatus('⚠️ व्हाट्सएप पर भेजने के लिए कोई रीसेंट पर्ची नहीं मिली!', true);
+            return;
         }
 
         const item = lastSavedTaniExpressOrder;
