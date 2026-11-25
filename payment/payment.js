@@ -2,10 +2,21 @@
    SIMPLICITY ERP - PAYMENTS & PARTY LEDGER ENGINE (TALLYPRIME WHITE & GOLD)
    File: payment/payment.js • Developed by Farhan Jawed
    (100% Supabase-Safe | Inline Party Ledger -> F5 Payment -> F8 Tani Sheet)
+   Hardening: Save Locks • Rollback • Advance-Friendly • PWA Safe UI
 ============================================================================ */
 
 (() => {
     'use strict';
+
+    if (window._paymentEngineLoaded) {
+        console.warn('[Payment] Already loaded — skip duplicate');
+        return;
+    }
+    window._paymentEngineLoaded = true;
+
+    // Global Double-Submit Locks
+    let isSavingPayment = false;
+    let isSavingCashTransfer = false;
 
     /* ========================================================================
        1. GLOBAL STATE & MEMOIZATION POOL
@@ -52,6 +63,10 @@
     };
 
     const escJsAttr = (s) => encodeURIComponent(String(s || '')).replace(/'/g, '%27');
+
+    const uidRand = () => `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+    const cloneSnap = (v) => JSON.parse(JSON.stringify(Array.isArray(v) ? v : []));
 
     const safeGetStore = (key) => {
         try {
@@ -111,13 +126,19 @@
         return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : new Date().toISOString().split('T')[0];
     };
 
-    const isAnyExpressOverlayOpen = () => {
-        return Boolean(
+    const isAnyOtherOverlayOpen = () => {
+        if (
             document.getElementById('kariger-express-modal') ||
             document.getElementById('master-stock-express-modal') ||
             document.getElementById('master-jobwork-express-modal') ||
-            document.getElementById('tani-express-modal')
-        );
+            document.getElementById('tani-express-modal') ||
+            document.getElementById('client-payment-modal') ||
+            document.getElementById('kariger-portal-admin-modal')
+        ) {
+            return true;
+        }
+        return Array.from(document.querySelectorAll('.modal-overlay, #profile-modal'))
+            .some((m) => m.style.display && m.style.display !== 'none');
     };
 
     const showPaymentToast = (msg) => {
@@ -133,6 +154,21 @@
         el.__toastTimer = setTimeout(() => {
             el.textContent = el.dataset.origText || orig;
         }, 4000);
+    };
+
+    const setModalInlineMsg = (elId, msg, isError = true) => {
+        const el = document.getElementById(elId);
+        if (!el) return;
+        if (!msg) {
+            el.style.display = 'none';
+            el.textContent = '';
+            return;
+        }
+        el.style.display = 'block';
+        el.style.color = isError ? '#b91c1c' : '#92400e';
+        el.style.background = isError ? '#fef2f2' : '#fdf6e2';
+        el.style.borderColor = isError ? '#fecaca' : '#e5d5a7';
+        el.textContent = msg;
     };
 
     /* ========================================================================
@@ -856,7 +892,10 @@
 
         const pageRows = getPaymentCurrentPageRows();
         const chosen = pageRows[paymentListActiveIdx];
-        if (!chosen) return alert('Pehle koi Kariger chunein!');
+        if (!chosen) {
+            showPaymentToast('⚠️ Pehle koi Kariger chunein!');
+            return;
+        }
         openQuickPayModal(chosen.id, escJsAttr(chosen.kariger), escJsAttr(chosen.karkhanaId), chosen.baki);
     };
 
@@ -867,7 +906,7 @@
     };
 
     /* ========================================================================
-       8. TALLY PAYMENT VOUCHER MODAL (F5 — 1-FIELD-PER-ROW + ACCEPT? Y/N)
+       8. TALLY PAYMENT VOUCHER MODAL (F5 — ADVANCE-FRIENDLY + SNAPSHOT ROLLBACK)
        ======================================================================== */
     const showQuickPayAcceptStrip = (show) => {
         const bar = document.getElementById('qp-accept-strip');
@@ -891,6 +930,7 @@
         const godamName = (typeof window.getKarkhanaNameById === 'function')
             ? window.getKarkhanaNameById(karkhanaId)
             : 'Main Godown';
+        const curBaki = roundCurrency(bakiAmt);
 
         const modalHtml = `
             <div id="quick-pay-modal" class="pay-modal-overlay">
@@ -906,7 +946,7 @@
                                 <span><strong>Vch :</strong> Payment</span>
                             </div>
                             <div style="margin-top:4px;"><strong>Particulars :</strong> ${esc(karigerName)}</div>
-                            <div style="color:#b47d00; font-weight:800; font-size:13.5px; margin-top:4px;">Cur Bal (Baki): ₹ ${roundCurrency(bakiAmt).toFixed(2)}</div>
+                            <div style="color:#b47d00; font-weight:800; font-size:13.5px; margin-top:4px;">Cur Bal (Baki): ₹ ${curBaki.toFixed(2)}</div>
                         </div>
 
                         <div class="pay-modal-form-row">
@@ -919,8 +959,10 @@
                         </div>
                         <div class="pay-modal-form-row">
                             <label for="quick-pay-note">Narration / Note :</label>
-                            <input type="text" id="quick-pay-note" placeholder="e.g. Weekly Hafta payment" class="pay-modal-inp">
+                            <input type="text" id="quick-pay-note" placeholder="e.g. Weekly Hafta / Advance payment" class="pay-modal-inp">
                         </div>
+
+                        <div id="qp-error-msg" style="display:none; font-size:12px; font-weight:700; padding:7px 10px; border-radius:5px; border:1px solid #fecaca; margin-top:6px;"></div>
 
                         <div id="qp-accept-strip" class="pay-accept-bar" style="display:none;">
                             <span style="font-size:13px; font-weight:800; color:#1f2937;">Accept? Payment Save Karein?</span>
@@ -944,6 +986,19 @@
             showQuickPayAcceptStrip(false);
             document.getElementById('quick-pay-note')?.focus();
         };
+
+        const amtInputEl = document.getElementById('quick-pay-amount');
+        if (amtInputEl) {
+            amtInputEl.addEventListener('input', () => {
+                const v = roundCurrency(amtInputEl.value);
+                if (v > 0 && v > Math.max(0, curBaki) + 0.01) {
+                    const advAmt = roundCurrency(v - Math.max(0, curBaki));
+                    setModalInlineMsg('qp-error-msg', `ℹ️ Isme ₹ ${advAmt.toFixed(2)} Advance jama hoga (Kariger ka Advance/Minus balance banega).`, false);
+                } else {
+                    setModalInlineMsg('qp-error-msg', '');
+                }
+            });
+        }
 
         const yesBtn = document.getElementById('qp-accept-yes');
         if (yesBtn) {
@@ -998,7 +1053,9 @@
     };
 
     const submitQuickPayForm = (karigerId, safeKName, safeKid) => {
+        if (isSavingPayment) return;
         showQuickPayAcceptStrip(false);
+
         const karigerName = decodeURIComponent(safeKName || '');
         const karkhanaId = decodeURIComponent(safeKid || '');
 
@@ -1008,10 +1065,17 @@
         const note = String(document.getElementById('quick-pay-note')?.value || '').trim();
 
         if (amt <= 0) {
-            alert('Kripya sahi raqam (Amount ₹) daalein!');
+            setModalInlineMsg('qp-error-msg', '⚠️ Kripya sahi raqam (Amount ₹) daalein!', true);
+            showPaymentToast('⚠️ Kripya sahi raqam (Amount ₹) daalein!');
             document.getElementById('quick-pay-amount')?.focus();
             return;
         }
+
+        isSavingPayment = true;
+
+        // Snapshot for Rollback (Advance payments fully allowed)
+        const snapSheets = cloneSnap(typeof window.getKarigerSheets === 'function' ? window.getKarigerSheets(karigerId) : []);
+        const snapPayRecords = cloneSnap(safeGetStore('payment_records'));
 
         try {
             // 1. Kariger Tani Sheet Update
@@ -1039,7 +1103,7 @@
             const activeSheet = sheets[sheets.length - 1];
             activeSheet.rows = window.safeArray ? window.safeArray(activeSheet.rows) : (Array.isArray(activeSheet.rows) ? activeSheet.rows : []);
 
-            const payRef = `pay_${Date.now()}`;
+            const payRef = `pay_${uidRand()}`;
             const newRow = {
                 id: payRef,
                 date: payDate,
@@ -1068,7 +1132,7 @@
             // 2. DEDICATED PAYMENTS STORE RECORD (Saved to Supabase 'payments' table)
             const payRecords = safeGetStore('payment_records');
             payRecords.push({
-                id: `pay_rec_${Date.now()}`,
+                id: `pay_rec_${uidRand()}`,
                 date: payDate,
                 type: 'kariger_mazdoori',
                 category: 'Kariger Mazdoori',
@@ -1106,12 +1170,29 @@
             showPaymentToast(`✅ ₹ ${amt.toFixed(2)} — ${karigerName} ki sheet aur Payments Table me save ho gaya!`);
         } catch (err) {
             console.error('[PaymentEngine] Quick pay execution failure:', err);
-            alert('Payment process karne me takleef aayi.');
+
+            // ROLLBACK SYSTEM
+            try {
+                if (typeof window.saveKarigerSheets === 'function') {
+                    window.saveKarigerSheets(karigerId, snapSheets);
+                }
+                if (typeof window.setStore === 'function') {
+                    window.setStore('payment_records', snapPayRecords);
+                }
+                invalidatePaymentCache(karigerId);
+            } catch (rbErr) {
+                console.error('[PaymentEngine] Rollback error:', rbErr);
+            }
+
+            setModalInlineMsg('qp-error-msg', '❌ Payment process fail ho gaya — Data rollback ho gaya!', true);
+            showPaymentToast('❌ Payment process fail ho gaya — Data Rollback ho gaya!');
+        } finally {
+            isSavingPayment = false;
         }
     };
 
     /* ========================================================================
-       9. CONTRA / CASH TRANSFER MODAL (F4 — 1-FIELD-PER-ROW + ACCEPT? Y/N)
+       9. CONTRA / CASH TRANSFER MODAL (F4 — LOCK + ROLLBACK + PWA SAFE)
        ======================================================================== */
     const showCashTransferAcceptStrip = (show) => {
         const bar = document.getElementById('ct-accept-strip');
@@ -1176,6 +1257,8 @@
                             <input type="text" id="cash-transfer-note" placeholder="e.g. Weekly Mazdoori ke liye bheja" class="pay-modal-inp">
                         </div>
 
+                        <div id="ct-error-msg" style="display:none; font-size:12px; font-weight:700; padding:7px 10px; border-radius:5px; border:1px solid #fecaca; margin-top:6px;"></div>
+
                         <div id="ct-accept-strip" class="pay-accept-bar" style="display:none;">
                             <span style="font-size:13px; font-weight:800; color:#1f2937;">Accept? Cash Transfer Confirm?</span>
                             <div style="display:flex; gap:8px;">
@@ -1218,6 +1301,8 @@
         order.forEach((fid, i) => {
             const el = document.getElementById(fid);
             if (!el) return;
+            el.addEventListener('input', () => setModalInlineMsg('ct-error-msg', ''));
+            el.addEventListener('change', () => setModalInlineMsg('ct-error-msg', ''));
             el.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && e.ctrlKey) {
                     e.preventDefault();
@@ -1252,7 +1337,9 @@
     };
 
     const submitCashTransferForm = () => {
+        if (isSavingCashTransfer) return;
         showCashTransferAcceptStrip(false);
+
         const fromKid = document.getElementById('cash-from-godam')?.value;
         const toKid = document.getElementById('cash-to-godam')?.value;
         const amt = roundCurrency(document.getElementById('cash-transfer-amt')?.value);
@@ -1261,13 +1348,20 @@
         const note = String(document.getElementById('cash-transfer-note')?.value || '').trim();
 
         if (String(fromKid) === String(toKid)) {
-            return alert('Bhejne wala aur Paane wala godam alag-alag hona chahiye!');
+            setModalInlineMsg('ct-error-msg', '⚠️ Bhejne wala aur Paane wala godam alag-alag hona chahiye!', true);
+            showPaymentToast('⚠️ Bhejne wala aur Paane wala godam alag-alag hona chahiye!');
+            return;
         }
         if (amt <= 0) {
-            alert('Kripya sahi amount (₹) bharein!');
+            setModalInlineMsg('ct-error-msg', '⚠️ Kripya sahi amount (₹) bharein!', true);
+            showPaymentToast('⚠️ Kripya sahi amount (₹) bharein!');
             document.getElementById('cash-transfer-amt')?.focus();
             return;
         }
+
+        isSavingCashTransfer = true;
+        const snapPayRecords = cloneSnap(safeGetStore('payment_records'));
+        const snapTransfers = cloneSnap(safeGetStore('material_transfers'));
 
         try {
             const fromName = (typeof window.getKarkhanaNameById === 'function')
@@ -1277,12 +1371,13 @@
                 ? window.getKarkhanaNameById(toKid)
                 : toKid;
 
-            const trRef = `tr_cash_${Date.now()}`;
+            const trRef = `tr_cash_${uidRand()}`;
+            const nowTs = Date.now();
 
             const payRecords = safeGetStore('payment_records');
 
             payRecords.push({
-                id: `pay_tr_out_${Date.now()}`,
+                id: `pay_tr_out_${uidRand()}`,
                 date,
                 type: 'cash_transfer_out',
                 category: 'Karkhana Fund Transfer',
@@ -1292,11 +1387,11 @@
                 paymentMode: 'Cash',
                 remarks: `Cash Bheja ➔ ${toName}${note ? ` (${note})` : ''}`,
                 refId: trRef,
-                timestamp: Date.now()
+                timestamp: nowTs
             });
 
             payRecords.push({
-                id: `pay_tr_in_${Date.now() + 1}`,
+                id: `pay_tr_in_${uidRand()}`,
                 date,
                 type: 'cash_transfer_in',
                 category: 'Karkhana Fund Transfer',
@@ -1306,7 +1401,7 @@
                 paymentMode: 'Cash',
                 remarks: `Cash Aamad ⬅ ${fromName}${note ? ` (${note})` : ''}`,
                 refId: trRef,
-                timestamp: Date.now() + 1
+                timestamp: nowTs + 1
             });
 
             if (typeof window.setStore === 'function') {
@@ -1336,7 +1431,18 @@
             showPaymentToast(`✅ ₹ ${amt.toFixed(2)} (${fromName} ➔ ${toName}) transfer save & sync ho gaya!`);
         } catch (err) {
             console.error('[PaymentEngine] Cash transfer failure:', err);
-            alert('Cash transfer execute karne me takleef aayi.');
+            try {
+                if (typeof window.setStore === 'function') {
+                    window.setStore('payment_records', snapPayRecords);
+                    window.setStore('material_transfers', snapTransfers);
+                }
+            } catch (rbErr) {
+                console.error('[PaymentEngine] Transfer rollback error:', rbErr);
+            }
+            setModalInlineMsg('ct-error-msg', '❌ Cash transfer fail hua — Data rollback ho gaya!', true);
+            showPaymentToast('❌ Cash transfer fail!');
+        } finally {
+            isSavingCashTransfer = false;
         }
     };
 
@@ -1451,9 +1557,13 @@
     window.__payTriggerFromLedger = triggerSelectedQuickPay;
 
     window.__payOpenKarigerSheet = () => {
-        if (!window.activePaymentKarigerId) return alert('Pehle koi Kariger chunein!');
+        if (!window.activePaymentKarigerId) {
+            showPaymentToast('⚠️ Pehle koi Kariger chunein!');
+            return;
+        }
         if (typeof window.openKarigerSheet !== 'function') {
-            return alert('Kariger Sheet module load nahi hua hai.');
+            showPaymentToast('⚠️ Kariger Sheet module load nahi hua hai.');
+            return;
         }
         setDisplay('payment-section', 'none');
         window.openKarigerSheet(window.activePaymentKarigerId);
@@ -1463,7 +1573,10 @@
         const startIndex = (paymentPassbookCurrentPage - 1) * PAYMENT_PASSBOOK_PAGE_SIZE;
         const pageRows = filteredPaymentPassbookCache.slice(startIndex, startIndex + PAYMENT_PASSBOOK_PAGE_SIZE);
         const row = pageRows[paymentLedgerActiveIdx];
-        if (!row) return alert('Print karne ke liye koi entry chunein!');
+        if (!row) {
+            showPaymentToast('⚠️ Print karne ke liye koi entry chunein!');
+            return;
+        }
         printSinglePaymentEntry(row.date, row.sheetTitle, row.saree, row.debit, row.note, row.credit, row.runningBal);
     };
 
@@ -1752,7 +1865,7 @@
     const handlePaymentKeydown = (e) => {
         const sec = document.getElementById('payment-section');
         if (!sec || sec.style.display === 'none') return;
-        if (isAnyExpressOverlayOpen()) return;
+        if (isAnyOtherOverlayOpen()) return;
 
         // 1. Quick Pay Modal open
         const qpModal = document.getElementById('quick-pay-modal');
@@ -1896,7 +2009,7 @@
     };
 
     /* ========================================================================
-       12. A6 PAPER & THERMAL PRINTER PRINT ENGINES
+       12. A6 PAPER & THERMAL PRINTER PRINT ENGINES (PWA SAFE)
        ======================================================================== */
     const getPaymentKarkhanaPrintName = (kId) => {
         if (!kId || kId === 'all') return 'Sabhi Godam (All Units)';
@@ -1909,7 +2022,9 @@
     const printPaymentReport = () => {
         const rows = currentPaymentFilteredRowsCache;
         if (!rows || !rows.length) {
-            return alert('Print karne ke liye koi Payment record nahi mila!');
+            console.warn('[Payment Print] Print karne ke liye koi Payment record nahi mila.');
+            showPaymentToast('⚠️ Print karne ke liye koi Payment record nahi mila!');
+            return;
         }
 
         const kName = getPaymentKarkhanaPrintName(window.currentPaymentKarkhanaFilter);
@@ -1937,7 +2052,11 @@
         });
 
         const printWindow = window.open('', '', 'width=450,height=650');
-        if (!printWindow) return alert('Popup block hai! Kripya browser me popup allow karein.');
+        if (!printWindow) {
+            console.warn('[Payment Print] Popup block hai! Browser me popup allow karein.');
+            showPaymentToast('⚠️ Print Popup block hai! Browser me popup allow karein.');
+            return;
+        }
 
         printWindow.document.write(`
             <html>
@@ -2007,7 +2126,9 @@
     const printPaymentPassbookFiltered = () => {
         const rows = filteredPaymentPassbookCache;
         if (!rows || !rows.length) {
-            return alert('Print karne ke liye koi ledger entry nahi mili!');
+            console.warn('[Payment Print] Print karne ke liye koi ledger entry nahi mili.');
+            showPaymentToast('⚠️ Print karne ke liye koi ledger entry nahi mili!');
+            return;
         }
 
         const karigerName = window.activePaymentKarigerName || 'Kariger';
@@ -2037,7 +2158,11 @@
         });
 
         const printWindow = window.open('', '', 'width=450,height=650');
-        if (!printWindow) return alert('Popup block hai! Kripya browser me popup allow karein.');
+        if (!printWindow) {
+            console.warn('[Payment Print] Popup block hai! Browser me popup allow karein.');
+            showPaymentToast('⚠️ Print Popup block hai! Browser me popup allow karein.');
+            return;
+        }
 
         printWindow.document.write(`
             <html>
@@ -2110,7 +2235,11 @@
         const crAmt = safeNum(credit);
 
         const printWindow = window.open('', '', 'width=420,height=550');
-        if (!printWindow) return alert('Popup block hai! Kripya browser me popup allow karein.');
+        if (!printWindow) {
+            console.warn('[Payment Print] Popup block hai! Browser me popup allow karein.');
+            showPaymentToast('⚠️ Print Popup block hai! Browser me popup allow karein.');
+            return;
+        }
 
         printWindow.document.write(`
             <html>
