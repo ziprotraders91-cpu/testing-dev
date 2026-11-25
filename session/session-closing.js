@@ -2,6 +2,7 @@
    SIMPLICITY ERP - 5-STAGE ENTERPRISE BULLETPROOF YEAR CLOSING ENGINE
    File: session/session-closing.js • Developed by Farhan Jawed
    Architecture: Row-by-Row Delta Sync + IndexedDB + Strict Session Isolation
+   Hardening: Deterministic Session-Scoped IDs • Partial Rollback • PWA Safe UI
 ============================================================================ */
 
 (() => {
@@ -14,6 +15,7 @@
 
     let pendingTransferNewSession = null;
     let isClosingInProgress = false;
+    let isStartingNewSession = false;
     let pipelineState = null;
 
     const yieldThread = (ms = UI_THREAD_YIELD_MS) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -26,6 +28,47 @@
     const safeInt = (val, fallback = 0) => {
         const n = parseInt(val, 10);
         return (isNaN(n) || !isFinite(n)) ? fallback : n;
+    };
+
+    // Deterministic FNV-1a 32-bit hash so Hindi/Urdu/special-char names never collide on retry or across sessions
+    const deterministicHash = (str) => {
+        let h = 0x811c9dc5;
+        const s = String(str || '');
+        for (let i = 0; i < s.length; i++) {
+            h ^= s.charCodeAt(i);
+            h = Math.imul(h, 0x01000193);
+        }
+        return (h >>> 0).toString(36);
+    };
+
+    const toSafeSlug = (str, fallback = 'ITEM') => {
+        const cleaned = String(str || fallback)
+            .trim()
+            .replace(/[^a-zA-Z0-9]+/g, '_')
+            .replace(/^_+|_+$/g, '');
+        return (cleaned || fallback).slice(0, 32);
+    };
+
+    const showClosingValidationError = (msg) => {
+        const modalBody = document.querySelector('#session-closing-modal .modal-body');
+        if (!modalBody) {
+            console.warn('[SessionClosing Validation]', msg);
+            return;
+        }
+
+        const oldErr = document.getElementById('session-closing-err-banner');
+        if (oldErr) oldErr.remove();
+
+        const errorDiv = document.createElement('div');
+        errorDiv.id = 'session-closing-err-banner';
+        errorDiv.style.cssText = 'color:#b91c1c; background:#fef2f2; border:1px solid #fecaca; padding:10px; border-radius:6px; margin-bottom:10px; font-weight:bold; font-size:13px;';
+        errorDiv.innerText = msg;
+        modalBody.prepend(errorDiv);
+
+        clearTimeout(modalBody.__errTimer);
+        modalBody.__errTimer = setTimeout(() => {
+            if (errorDiv && errorDiv.parentNode) errorDiv.remove();
+        }, 4000);
     };
 
     const getSafeUserId = () => {
@@ -102,15 +145,114 @@
         } catch (_) {}
     };
 
+    const clearPartialSessionFromIndexedDB = async (uId, targetSess) => {
+        if (!('indexedDB' in window)) return;
+        const prefix = `${uId}_${targetSess}_`;
+
+        try {
+            await new Promise((resolve) => {
+                // Open without hardcoded version so it matches current DB version cleanly
+                const req = window.indexedDB.open('SimplicityERP_DB');
+                req.onsuccess = (e) => {
+                    const dbase = e.target.result;
+                    try {
+                        const storeNames = [];
+                        if (dbase.objectStoreNames.contains('app_store')) storeNames.push('app_store');
+                        if (dbase.objectStoreNames.contains('sync_queue')) storeNames.push('sync_queue');
+                        if (!storeNames.length) {
+                            try { dbase.close(); } catch (_) {}
+                            return resolve();
+                        }
+
+                        const tx = dbase.transaction(storeNames, 'readwrite');
+
+                        if (dbase.objectStoreNames.contains('app_store')) {
+                            const appStore = tx.objectStore('app_store');
+                            const curReq = appStore.openKeyCursor();
+                            curReq.onsuccess = (ev) => {
+                                const cursor = ev.target.result;
+                                if (cursor) {
+                                    if (String(cursor.key).startsWith(prefix)) {
+                                        appStore.delete(cursor.key);
+                                    }
+                                    cursor.continue();
+                                }
+                            };
+                        }
+
+                        if (dbase.objectStoreNames.contains('sync_queue')) {
+                            const qStore = tx.objectStore('sync_queue');
+                            const qReq = qStore.openCursor();
+                            qReq.onsuccess = (ev) => {
+                                const cursor = ev.target.result;
+                                if (cursor) {
+                                    const val = cursor.value;
+                                    const tKey = String(val?.targetKey || '');
+                                    if (tKey.startsWith(prefix) || String(cursor.key).includes(prefix)) {
+                                        qStore.delete(cursor.key);
+                                    }
+                                    cursor.continue();
+                                }
+                            };
+                        }
+
+                        tx.oncomplete = () => {
+                            try { dbase.close(); } catch (_) {}
+                            resolve();
+                        };
+                        tx.onerror = () => {
+                            try { dbase.close(); } catch (_) {}
+                            resolve();
+                        };
+                    } catch (_) {
+                        try { dbase.close(); } catch (_) {}
+                        resolve();
+                    }
+                };
+                req.onerror = () => resolve();
+            });
+        } catch (_) {}
+    };
+
+    const cleanupPartialSessionData = async (uId, targetSess, cleanCloudToo = false) => {
+        if (!uId || !targetSess) return;
+        const prefix = `${uId}_${targetSess}_`;
+
+        try {
+            if (window.APP_MEMORY_CACHE) {
+                Object.keys(window.APP_MEMORY_CACHE).forEach((k) => {
+                    if (k.startsWith(prefix)) delete window.APP_MEMORY_CACHE[k];
+                });
+            }
+            clearSessionDeltaCursors(uId, targetSess);
+            await clearPartialSessionFromIndexedDB(uId, targetSess);
+
+            if (cleanCloudToo && navigator.onLine) {
+                const sb = getSupabase();
+                if (sb && typeof sb.rpc === 'function') {
+                    await sb.rpc('delete_user_session_data', {
+                        p_user_id: uId,
+                        p_session: targetSess
+                    });
+                }
+            }
+        } catch (cleanErr) {
+            console.warn('[SessionClosing Partial Cleanup Warning]:', cleanErr);
+        }
+    };
+
     const enqueueDeltaFallback = async (uId, fullKey, rows) => {
         if (!Array.isArray(rows) || rows.length === 0) return;
         try {
-            const req = window.indexedDB.open('SimplicityERP_DB', 2);
+            const req = window.indexedDB.open('SimplicityERP_DB');
             await new Promise((resolve) => {
                 req.onsuccess = (e) => {
+                    const db = e.target.result;
                     try {
-                        const db = e.target.result;
-                        if (!db.objectStoreNames.contains('sync_queue')) return resolve(false);
+                        if (!db.objectStoreNames.contains('sync_queue')) {
+                            try { db.close(); } catch (_) {}
+                            return resolve(false);
+                        }
                         const tx = db.transaction('sync_queue', 'readwrite');
                         tx.objectStore('sync_queue').put({
                             id: `delta_${uId}_${fullKey}`,
@@ -120,9 +262,16 @@
                             deletes: [],
                             timestamp: Date.now()
                         });
-                        tx.oncomplete = () => resolve(true);
-                        tx.onerror = () => resolve(false);
+                        tx.oncomplete = () => {
+                            try { db.close(); } catch (_) {}
+                            resolve(true);
+                        };
+                        tx.onerror = () => {
+                            try { db.close(); } catch (_) {}
+                            resolve(false);
+                        };
                     } catch (_) {
+                        try { db.close(); } catch (_) {}
                         resolve(false);
                     }
                 };
@@ -167,7 +316,8 @@
         stage3_newZariHistory: [],
         stage4_newSanchaItems: [],
         stage4_newSanchaHistory: [],
-        stage4_oldJwWorkers: []
+        stage4_oldJwWorkers: [],
+        stage5CloudTouched: false
     });
 
     const startSequentialYearClosing = async () => {
@@ -177,13 +327,27 @@
         const newSessEl = document.getElementById('session-new-input');
         const newSess = String(newSessEl?.value || '').trim();
 
-        if (!newSess) return alert('Naye Saal ka naam daalein! (Jaise: 2027-2028)');
-        if (!/^\d{4}-\d{4}$/.test(newSess)) return alert('Sahi format daalein! (Jaise: 2027-2028)');
-        if (newSess === curSess) return alert('Naya session purane se alag hona chahiye!');
+        if (!newSess) {
+            showClosingValidationError('⚠️ Naye Saal ka naam daalein! (Jaise: 2027-2028)');
+            newSessEl?.focus();
+            return;
+        }
+        if (!/^\d{4}-\d{4}$/.test(newSess)) {
+            showClosingValidationError('⚠️ Sahi format daalein! (Jaise: 2027-2028)');
+            newSessEl?.focus();
+            return;
+        }
+        if (newSess === curSess) {
+            showClosingValidationError('⚠️ Naya session purane se alag hona chahiye!');
+            newSessEl?.focus();
+            return;
+        }
 
         const sessions = window.getAppSessions ? window.getAppSessions() : [];
         if (sessions.includes(newSess)) {
-            return alert('Ye Session pehle se bana hua hai! Pehle ise Delete Zone se delete karein, fir fresh banayein.');
+            showClosingValidationError('⚠️ Ye Session pehle se bana hua hai! Pehle ise Delete Zone se delete karein, fir fresh banayein.');
+            newSessEl?.focus();
+            return;
         }
 
         const uId = getSafeUserId();
@@ -234,8 +398,26 @@
             await runStage5_FinalizeCommitAsync(curSess, newSess, uId);
         } catch (pipelineErr) {
             console.error('[SessionClosing] Pipeline error:', pipelineErr);
-            alert(`Year closing me dikkat: ${pipelineErr.message || pipelineErr}`);
-            if (modal) modal.style.display = 'none';
+
+            // CLEANUP PARTIAL DATA (Naya Session in RAM, Delta Cursors, IndexedDB & Cloud if Stage 5 started)
+            const cleanCloud = Boolean(pipelineState && pipelineState.stage5CloudTouched);
+            await cleanupPartialSessionData(uId, newSess, cleanCloud);
+
+            pipelineState = null;
+            pendingTransferNewSession = null;
+
+            if (modalBody) {
+                modalBody.innerHTML = `
+                    <div style="background:#fef2f2; border:1.5px solid #fecaca; border-radius:10px; padding:14px; color:#991b1b;">
+                        <div style="font-weight:800; font-size:15px; margin-bottom:6px;">❌ Year Closing Fail Ho Gayi</div>
+                        <div style="font-size:13px; margin-bottom:10px;">Aapka purana session (${curSess}) 100% safe hai aur aadha-adhoora data saaf kar diya gaya hai.</div>
+                        <div style="font-size:12px; background:#ffffff; border:1px solid #fca5a5; padding:8px; border-radius:6px; margin-bottom:12px; word-break:break-word;">Error: ${String(pipelineErr?.message || pipelineErr)}</div>
+                        <button type="button" onclick="document.getElementById('session-transfer-modal').style.display='none'" style="width:100%; background:#dc2626; color:#ffffff; border:none; padding:9px; border-radius:7px; font-weight:800; cursor:pointer;">Close</button>
+                    </div>`;
+            } else if (modal) {
+                modal.style.display = 'none';
+            }
+
             if (typeof window.initSupabaseRealtime === 'function') {
                 window.initSupabaseRealtime();
             }
@@ -319,6 +501,8 @@
                     ? window.groupSareeStockByTab(rawHistory, tb, k.id)
                     : [];
 
+                const bucketCounters = Object.create(null);
+
                 for (const r of rows) {
                     const bachiQty = safeInt(r.bachi !== undefined ? r.bachi : (r.aai - r.gai));
                     if (bachiQty <= 0) continue;
@@ -328,13 +512,20 @@
                     else if (tb === 'lott') pipelineState.stage2_totLottPcs += bachiQty;
 
                     seq++;
-                    const sUniqueId = `saree_open_${tb}_${baseTs}_${seq}`;
+                    const sareeLabel = r.sareeName || 'GENERAL SAREE';
                     const maker = r.karigerName || '📦 Pichla Bacha Stock';
+                    const rawSeed = `${newSess}|${tb}|${k.id}|${sareeLabel}|${maker}`;
+                    const occ = (bucketCounters[rawSeed] || 0) + 1;
+                    bucketCounters[rawSeed] = occ;
+
+                    const safeSareeSlug = toSafeSlug(sareeLabel, 'SAREE');
+                    const hashSuffix = deterministicHash(`${rawSeed}|${occ}`);
+                    const sUniqueId = `saree_open_${newSess}_${tb}_${k.id}_${safeSareeSlug}_${hashSuffix}`;
 
                     pipelineState.stage2_newSareeHistory.push({
                         id: sUniqueId,
                         date: todayStr,
-                        sareeName: r.sareeName || 'GENERAL SAREE',
+                        sareeName: sareeLabel,
                         karigerName: maker,
                         kariger: maker,
                         partyName: '📦 Pichla Bacha Stock',
@@ -372,14 +563,17 @@
         const uniqueBanaNames = getUniqueItemNamesCaseInsensitive([...rawBana, ...rawBHist]);
 
         for (const bName of uniqueBanaNames) {
+            const bSlug = toSafeSlug(bName, 'BANA');
             for (const k of karkhanas) {
                 const statsK = (typeof window.getBanaItemStats === 'function') ? window.getBanaItemStats(bName, k.id) : { bacha: 0 };
                 const bachaVal = Math.max(0, safeNum(statsK.bacha));
                 if (bachaVal <= 0) continue;
 
                 bSeq++;
+                const bHash = deterministicHash(`${newSess}|bana|${k.id}|${bName}`);
+
                 pipelineState.stage3_newBanaStock.push({
-                    id: `bana_open_${baseTs}_${bSeq}`,
+                    id: `bana_open_${newSess}_${k.id}_${bSlug}_${bHash}`,
                     name: bName,
                     date: todayStr,
                     aaya: bachaVal,
@@ -393,7 +587,7 @@
                 });
 
                 pipelineState.stage3_newBanaHistory.push({
-                    id: `bhist_open_${baseTs}_${bSeq}`,
+                    id: `bhist_open_${newSess}_${k.id}_${bSlug}_${bHash}`,
                     date: todayStr,
                     name: bName,
                     kariger: '📦 Pichla Bacha Stock',
@@ -413,14 +607,17 @@
         const uniqueZariNames = getUniqueItemNamesCaseInsensitive([...rawZari, ...rawZHist]);
 
         for (const zName of uniqueZariNames) {
+            const zSlug = toSafeSlug(zName, 'ZARI');
             for (const k of karkhanas) {
                 const statsZK = (typeof window.getZariItemStats === 'function') ? window.getZariItemStats(zName, k.id) : { bacha: 0 };
                 const bachaValZ = Math.max(0, safeNum(statsZK.bacha));
                 if (bachaValZ <= 0) continue;
 
                 zSeq++;
+                const zHash = deterministicHash(`${newSess}|zari|${k.id}|${zName}`);
+
                 pipelineState.stage3_newZariStock.push({
-                    id: `zari_open_${baseTs}_${zSeq}`,
+                    id: `zari_open_${newSess}_${k.id}_${zSlug}_${zHash}`,
                     name: zName,
                     date: todayStr,
                     aaya: bachaValZ,
@@ -434,7 +631,7 @@
                 });
 
                 pipelineState.stage3_newZariHistory.push({
-                    id: `zhist_open_${baseTs}_${zSeq}`,
+                    id: `zhist_open_${newSess}_${k.id}_${zSlug}_${zHash}`,
                     date: todayStr,
                     name: zName,
                     kariger: '📦 Pichla Bacha Stock',
@@ -477,6 +674,7 @@
                            String(x.category || 'tani').toLowerCase() === cat
                 );
                 const personLabel = (origItem && origItem.person) ? origItem.person : '-';
+                const sSlug = toSafeSlug(itemName, 'SANCHA');
 
                 for (const k of karkhanas) {
                     const stats = (typeof window.getSanchaItemStats === 'function')
@@ -486,8 +684,10 @@
                     if (bacha <= 0) continue;
 
                     sSeq++;
+                    const sHash = deterministicHash(`${newSess}|sancha|${cat}|${k.id}|${itemName}`);
+
                     pipelineState.stage4_newSanchaItems.push({
-                        id: `sancha_open_${cat}_${baseTs}_${sSeq}`,
+                        id: `sancha_open_${newSess}_${cat}_${k.id}_${sSlug}_${sHash}`,
                         name: itemName,
                         category: cat,
                         aaya: bacha,
@@ -503,7 +703,7 @@
                     });
 
                     pipelineState.stage4_newSanchaHistory.push({
-                        id: `shist_open_${cat}_${baseTs}_${sSeq}`,
+                        id: `shist_open_${newSess}_${cat}_${k.id}_${sSlug}_${sHash}`,
                         date: todayStr,
                         name: itemName,
                         category: cat,
@@ -566,6 +766,7 @@
 
             let ok = false;
             if (navigator.onLine && typeof window.CloudEngine?.cloudWriteDelta === 'function') {
+                pipelineState.stage5CloudTouched = true;
                 ok = await window.CloudEngine.cloudWriteDelta(fullKey, data, [], newSess);
             }
             if (!ok && data.length > 0) {
@@ -626,6 +827,7 @@
                 let chunkOk = false;
 
                 if (navigator.onLine && sb && typeof sb.from === 'function') {
+                    pipelineState.stage5CloudTouched = true;
                     try {
                         const { error } = await sb
                             .from('tani_sheets')
@@ -736,64 +938,76 @@
        ⭐ GUARANTEED ACTIVE SESSION SWITCH (DIRECT ADVANCEMENT)
        ======================================================================== */
     const completeNewSessionStartup = async (targetSess) => {
-        const modal = document.getElementById('session-transfer-modal');
-        if (modal) modal.style.display = 'none';
+        if (isStartingNewSession) return;
+        isStartingNewSession = true;
 
-        const uId = getSafeUserId();
-        const tid = getSafeTenantId(uId);
-        const s = targetSess || pendingTransferNewSession || '2026-2027';
+        try {
+            const modal = document.getElementById('session-transfer-modal');
+            if (modal) modal.style.display = 'none';
 
-        localStorage.removeItem(`${uId}_app_deleted_sessions`);
-        safeSetLocalStorage(`${uId}_app_active_session`, s);
-        if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[`${uId}_app_active_session`] = s;
+            const uId = getSafeUserId();
+            const tid = getSafeTenantId(uId);
+            const fallbackSess = (typeof window.getActiveFinancialSession === 'function')
+                ? window.getActiveFinancialSession()
+                : '2026-2027';
+            const s = targetSess || pendingTransferNewSession || fallbackSess;
 
-        let curSessions = window.getAppSessions ? window.getAppSessions().slice() : [];
-        if (!curSessions.includes(s)) curSessions.push(s);
-        curSessions.sort();
-        safeSetLocalStorage(`${uId}_app_sessions_list`, curSessions);
-        if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[`${uId}_app_sessions_list`] = curSessions;
+            localStorage.removeItem(`${uId}_app_deleted_sessions`);
+            safeSetLocalStorage(`${uId}_app_active_session`, s);
+            if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[`${uId}_app_active_session`] = s;
 
-        const sb = getSupabase();
-        if (navigator.onLine && sb && typeof sb.from === 'function') {
-            const now = new Date().toISOString();
-            try {
-                const { error } = await sb.from('app_store').upsert([
-                    {
-                        id: `${uId}_app_sessions_list`,
-                        user_id: uId,
-                        tenant_id: tid,
-                        session: s,
-                        data: curSessions,
-                        key: `${uId}_app_sessions_list`,
-                        value: curSessions,
-                        updated_at: now
-                    },
-                    {
-                        id: `${uId}_app_active_session`,
-                        user_id: uId,
-                        tenant_id: tid,
-                        session: s,
-                        data: s,
-                        key: `${uId}_app_active_session`,
-                        value: s,
-                        updated_at: now
+            let curSessions = window.getAppSessions ? window.getAppSessions().slice() : [];
+            if (!curSessions.includes(s)) curSessions.push(s);
+            curSessions.sort();
+            safeSetLocalStorage(`${uId}_app_sessions_list`, curSessions);
+            if (window.APP_MEMORY_CACHE) window.APP_MEMORY_CACHE[`${uId}_app_sessions_list`] = curSessions;
+
+            const sb = getSupabase();
+            if (navigator.onLine && sb && typeof sb.from === 'function') {
+                const now = new Date().toISOString();
+                try {
+                    const { error } = await sb.from('app_store').upsert([
+                        {
+                            id: `${uId}_app_sessions_list`,
+                            user_id: uId,
+                            tenant_id: tid,
+                            session: s,
+                            data: curSessions,
+                            key: `${uId}_app_sessions_list`,
+                            value: curSessions,
+                            updated_at: now
+                        },
+                        {
+                            id: `${uId}_app_active_session`,
+                            user_id: uId,
+                            tenant_id: tid,
+                            session: s,
+                            data: s,
+                            key: `${uId}_app_active_session`,
+                            value: s,
+                            updated_at: now
+                        }
+                    ], { onConflict: 'id' });
+                    if (error) {
+                        console.error('[SessionClosing startup app_store error]:', error.message);
                     }
-                ], { onConflict: 'id' });
-                if (error) {
-                    console.error('[SessionClosing startup app_store error]:', error.message);
+                } catch (cErr) {
+                    console.error('[SessionClosing app_store write]:', cErr);
                 }
-            } catch (cErr) {
-                console.error('[SessionClosing app_store write]:', cErr);
             }
-        }
 
-        if (typeof window.clearMemoryCache === 'function') {
-            window.clearMemoryCache();
-        }
+            if (typeof window.clearMemoryCache === 'function') {
+                window.clearMemoryCache();
+            }
 
-        setTimeout(() => {
+            setTimeout(() => {
+                window.location.reload();
+            }, 250);
+        } catch (err) {
+            console.error('[SessionClosing startup error]:', err);
+            isStartingNewSession = false;
             window.location.reload();
-        }, 250);
+        }
     };
 
     const sessionClosingAPI = {
