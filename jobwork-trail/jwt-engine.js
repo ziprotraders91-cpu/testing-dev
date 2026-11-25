@@ -415,384 +415,532 @@
     };
 
     J.commitVchBatch = (printType = '') => {
-        if (J.s.isSaving) return;
         J.syncVchMetaFromDom();
         if (!J.s.vchBatch.length) return J.toast('Batch khali hai! Pehle kam se kam 1 saree add karein.', true);
 
-        const snap = J.getSnapshot();
-        const worker = snap.workers.find((w) => w.id === J.s.activeWorkerId);
-        if (!worker) return J.toast('Worker nahi mila!', true);
+        return J.safeSave('isSavingVch', () => {
+            const snap = J.computeLiveState(J.getActiveGodam());
+            const worker = snap.workers.find((w) => w.id === J.s.activeWorkerId);
+            if (!worker) return J.toast('Worker nahi mila!', true);
 
-        const grpObj = J.getGroupObj(worker.group);
-        const isOutstationOut = (J.s.vchDir === 'out' && grpObj.outstation);
-        const dDate = J.toIsoDate(J.s.vchMeta.date) || J.getTodayIso();
-        const gLabel = grpObj.label;
-
-        J.s.isSaving = true;
-        try {
-            const txnId = J.genId('jwt');
-            const sH = J.safeArr(J.getStoreSafe('saree_history')).slice();
-            const { sheets, lastSheet } = J.ensureWorkerSheet(worker.id);
-
-            let totQty = 0;
-            let totDmg = 0;
-            const sheetItems = [];
-            let savedRow = null;
+            // Live stock / pending re-validation before mutating storage
+            const neededByKey = new Map();
+            J.s.vchBatch.forEach((it) => {
+                const q = J.safeInt(it.qty);
+                if (q <= 0) throw new Error('Batch me 0 qty entry invalid hai!');
+                const key = it.batchKey || '';
+                neededByKey.set(key, (neededByKey.get(key) || 0) + q);
+            });
 
             if (J.s.vchDir === 'out') {
-                J.s.vchBatch.forEach((it, idx) => {
-                    totQty += it.qty;
-                    sheetItems.push({
-                        id: `it_${txnId}_${idx}`,
-                        karigar: it.maker,
-                        saree: it.saree,
-                        karkhanaId: it.karkhanaId,
-                        doneStages: [...it.doneStages],
-                        bucket: 'unfinished',
-                        qty: it.qty
-                    });
-                });
-                savedRow = {
-                    id: txnId,
-                    date: dDate,
-                    gayiQty: totQty,
-                    gayiItems: sheetItems,
-                    stockSource: 'fresh',
-                    aayiQty: 0,
-                    aayiItems: [],
-                    damagePcs: 0,
-                    damageAmt: 0,
-                    isTrailV2: true,
-                    isOutstation: isOutstationOut,
-                    firmId: isOutstationOut ? (J.s.vchMeta.firmId || '') : '',
-                    firmName: isOutstationOut ? (J.s.vchMeta.firmName || '') : '',
-                    jwNo: isOutstationOut ? (J.s.vchMeta.jwNo || J.getNextChallanNo()).trim() : '',
-                    transport: isOutstationOut ? (J.s.vchMeta.transport || '').trim() : '',
-                    lrNo: isOutstationOut ? (J.s.vchMeta.lrNo || '').trim() : '',
-                    designNote: isOutstationOut ? (J.s.vchMeta.designNote || '').trim() : ''
-                };
-                if (isOutstationOut && savedRow.jwNo) J.bumpChallanSeq(savedRow.jwNo);
-                lastSheet.rows.push(savedRow);
-                J.setStoreSafe('saree_history', J.rebuildWorkerRowSareeHistory(sH, worker, savedRow));
+                for (const [bKey, needQty] of neededByKey.entries()) {
+                    const batch = snap.godamBatches.find((b) => b.key === bKey);
+                    const avail = batch ? batch.pcs : 0;
+                    if (needQty > avail) {
+                        return J.toast(`Godam stock kam hai! Available: ${avail} Pcs, Required: ${needQty} Pcs.`, true);
+                    }
+                }
             } else {
-                J.s.vchBatch.forEach((it, idx) => {
-                    const nextTrail = [...it.doneStages];
-                    if (worker.group && !nextTrail.includes(worker.group)) nextTrail.push(worker.group);
-                    const targetBucket = it.dest === 'finished' ? 'finished' : (it.dest === 'lott' ? 'lott' : 'unfinished');
-                    const isDmg = (targetBucket === 'lott');
-                    if (isDmg) totDmg += it.qty; else totQty += it.qty;
-
-                    sheetItems.push({
-                        id: `it_${txnId}_${idx}`,
-                        karigar: it.maker,
-                        saree: it.saree,
-                        karkhanaId: it.karkhanaId,
-                        prevStages: [...it.doneStages],
-                        doneStages: nextTrail,
-                        destBucket: targetBucket,
-                        isDamage: isDmg,
-                        qty: it.qty
-                    });
-                });
-                savedRow = {
-                    id: txnId,
-                    date: dDate,
-                    gayiQty: 0,
-                    gayiItems: [],
-                    stockSource: 'fresh',
-                    aayiQty: totQty,
-                    aayiItems: sheetItems,
-                    damagePcs: totDmg,
-                    damageAmt: 0,
-                    isTrailV2: true
-                };
-                lastSheet.rows.push(savedRow);
-                J.setStoreSafe('saree_history', J.rebuildWorkerRowSareeHistory(sH, worker, savedRow));
+                for (const [bKey, needQty] of neededByKey.entries()) {
+                    const pBatch = worker.pendingItems.find((p) => p.key === bKey);
+                    const avail = pBatch ? pBatch.pcs : 0;
+                    if (needQty > avail) {
+                        return J.toast(`Worker pending kam hai! Available: ${avail} Pcs, Required: ${needQty} Pcs.`, true);
+                    }
+                }
             }
 
-            J.setStoreSafe(`jobwork_sheets_${worker.id}`, sheets);
+            const grpObj = J.getGroupObj(worker.group);
+            const isOutstationOut = (J.s.vchDir === 'out' && grpObj.outstation);
+            const dDate = J.toIsoDate(J.s.vchMeta.date) || J.getTodayIso();
+            const gLabel = grpObj.label;
 
-            if (isOutstationOut) {
-                J.s.lastChallanObj = J.buildOutstationPayloadFromRow(worker, savedRow);
-            } else {
-                J.s.lastChallanObj = {
-                    isOutstation: false,
-                    title: `${gLabel.toUpperCase()} ${J.s.vchDir === 'out' ? 'OUT (GAYI)' : 'IN (WAPAS AAYI)'}`,
-                    party: `${worker.name} (${gLabel})`,
-                    date: dDate,
-                    items: J.s.vchBatch.map((x) => ({
-                        maker: x.maker,
-                        saree: x.saree,
-                        trail: J.s.vchDir === 'out'
-                            ? J.formatTrail(x.doneStages, 'unfinished')
-                            : J.formatTrail([...x.doneStages, ...(x.doneStages.includes(worker.group) ? [] : [worker.group])], x.dest === 'finished' ? 'finished' : (x.dest === 'lott' ? 'lott' : 'unfinished')),
-                        qty: x.qty
-                    }))
-                };
-            }
-
-            const defFirm = J.getFirmProfile();
-            J.s.vchBatch = [];
-            J.s.vchAcceptOpen = false;
-            J.s.vchPickStep = 'kariger';
-            J.s.vchSelectedMaker = null;
-            J.s.vchSelectedBatchKey = null;
-            J.s.vchRightIdx = 0;
-            J.s.vchMeta = {
-                date: J.getTodayIso(),
-                firmId: isOutstationOut ? defFirm.id : '',
-                firmName: isOutstationOut ? defFirm.name : '',
-                jwNo: isOutstationOut ? J.getNextChallanNo() : '',
-                transport: '',
-                lrNo: '',
-                designNote: ''
+            const sheetKey = `jobwork_sheets_${worker.id}`;
+            const snapshot = {
+                sareeHistory: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('saree_history')))),
+                workerSheets: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe(sheetKey)))),
+                seq: J.getStoreSafe(J.SEQ_STORE_KEY)
             };
+            let mutatedStorage = false;
 
-            J.invalidateAllCaches(worker.id);
-            J.toast(`✅ ${totQty + totDmg} Pcs Save ho gayi!`);
-            if (printType === 'both' && J.s.lastChallanObj.isOutstation) {
-                J.printOutstationBoth(J.s.lastChallanObj);
-            } else if (printType === 'challan' || printType === 'both') {
-                if (J.s.lastChallanObj.isOutstation) J.printOutstationChallan(J.s.lastChallanObj);
-                else J.printBatchChallan(J.s.lastChallanObj);
-            } else if (printType === 'slip' && J.s.lastChallanObj.isOutstation) {
-                J.printPackingSlip(J.s.lastChallanObj);
+            J.s.isSaving = true;
+            try {
+                const txnId = J.genId('jwt');
+                const sH = J.safeArr(J.getStoreSafe('saree_history')).slice();
+                const { sheets, lastSheet } = J.ensureWorkerSheet(worker.id);
+
+                let totQty = 0;
+                let totDmg = 0;
+                const sheetItems = [];
+                let savedRow = null;
+
+                if (J.s.vchDir === 'out') {
+                    J.s.vchBatch.forEach((it, idx) => {
+                        totQty += it.qty;
+                        sheetItems.push({
+                            id: `it_${txnId}_${idx}`,
+                            karigar: it.maker,
+                            saree: it.saree,
+                            karkhanaId: it.karkhanaId,
+                            doneStages: [...it.doneStages],
+                            bucket: 'unfinished',
+                            qty: it.qty
+                        });
+                    });
+                    savedRow = {
+                        id: txnId,
+                        date: dDate,
+                        gayiQty: totQty,
+                        gayiItems: sheetItems,
+                        stockSource: 'fresh',
+                        aayiQty: 0,
+                        aayiItems: [],
+                        damagePcs: 0,
+                        damageAmt: 0,
+                        isTrailV2: true,
+                        isOutstation: isOutstationOut,
+                        firmId: isOutstationOut ? (J.s.vchMeta.firmId || '') : '',
+                        firmName: isOutstationOut ? (J.s.vchMeta.firmName || '') : '',
+                        jwNo: isOutstationOut ? (J.s.vchMeta.jwNo || J.getNextChallanNo()).trim() : '',
+                        transport: isOutstationOut ? (J.s.vchMeta.transport || '').trim() : '',
+                        lrNo: isOutstationOut ? (J.s.vchMeta.lrNo || '').trim() : '',
+                        designNote: isOutstationOut ? (J.s.vchMeta.designNote || '').trim() : ''
+                    };
+                    lastSheet.rows.push(savedRow);
+                    mutatedStorage = true;
+                    J.setStoreSafe('saree_history', J.rebuildWorkerRowSareeHistory(sH, worker, savedRow));
+                } else {
+                    J.s.vchBatch.forEach((it, idx) => {
+                        const nextTrail = [...it.doneStages];
+                        if (worker.group && !nextTrail.includes(worker.group)) nextTrail.push(worker.group);
+                        const targetBucket = it.dest === 'finished' ? 'finished' : (it.dest === 'lott' ? 'lott' : 'unfinished');
+                        const isDmg = (targetBucket === 'lott');
+                        if (isDmg) totDmg += it.qty; else totQty += it.qty;
+
+                        sheetItems.push({
+                            id: `it_${txnId}_${idx}`,
+                            karigar: it.maker,
+                            saree: it.saree,
+                            karkhanaId: it.karkhanaId,
+                            prevStages: [...it.doneStages],
+                            doneStages: nextTrail,
+                            destBucket: targetBucket,
+                            isDamage: isDmg,
+                            qty: it.qty
+                        });
+                    });
+                    savedRow = {
+                        id: txnId,
+                        date: dDate,
+                        gayiQty: 0,
+                        gayiItems: [],
+                        stockSource: 'fresh',
+                        aayiQty: totQty,
+                        aayiItems: sheetItems,
+                        damagePcs: totDmg,
+                        damageAmt: 0,
+                        isTrailV2: true
+                    };
+                    lastSheet.rows.push(savedRow);
+                    mutatedStorage = true;
+                    J.setStoreSafe('saree_history', J.rebuildWorkerRowSareeHistory(sH, worker, savedRow));
+                }
+
+                J.setStoreSafe(sheetKey, sheets);
+                if (isOutstationOut && savedRow.jwNo) J.bumpChallanSeq(savedRow.jwNo);
+
+                if (isOutstationOut) {
+                    J.s.lastChallanObj = J.buildOutstationPayloadFromRow(worker, savedRow);
+                } else {
+                    J.s.lastChallanObj = {
+                        isOutstation: false,
+                        title: `${gLabel.toUpperCase()} ${J.s.vchDir === 'out' ? 'OUT (GAYI)' : 'IN (WAPAS AAYI)'}`,
+                        party: `${worker.name} (${gLabel})`,
+                        date: dDate,
+                        items: J.s.vchBatch.map((x) => ({
+                            maker: x.maker,
+                            saree: x.saree,
+                            trail: J.s.vchDir === 'out'
+                                ? J.formatTrail(x.doneStages, 'unfinished')
+                                : J.formatTrail([...x.doneStages, ...(x.doneStages.includes(worker.group) ? [] : [worker.group])], x.dest === 'finished' ? 'finished' : (x.dest === 'lott' ? 'lott' : 'unfinished')),
+                            qty: x.qty
+                        }))
+                    };
+                }
+
+                const defFirm = J.getFirmProfile();
+                J.s.vchBatch = [];
+                J.s.vchAcceptOpen = false;
+                J.s.vchPickStep = 'kariger';
+                J.s.vchSelectedMaker = null;
+                J.s.vchSelectedBatchKey = null;
+                J.s.vchRightIdx = 0;
+                J.s.vchMeta = {
+                    date: J.getTodayIso(),
+                    firmId: isOutstationOut ? defFirm.id : '',
+                    firmName: isOutstationOut ? defFirm.name : '',
+                    jwNo: isOutstationOut ? J.getNextChallanNo() : '',
+                    transport: '',
+                    lrNo: '',
+                    designNote: ''
+                };
+
+                J.invalidateAllCaches(worker.id);
+                J.toast(`✅ ${totQty + totDmg} Pcs Save ho gayi!`);
+                if (printType === 'both' && J.s.lastChallanObj.isOutstation) {
+                    J.printOutstationBoth(J.s.lastChallanObj);
+                } else if (printType === 'challan' || printType === 'both') {
+                    if (J.s.lastChallanObj.isOutstation) J.printOutstationChallan(J.s.lastChallanObj);
+                    else J.printBatchChallan(J.s.lastChallanObj);
+                } else if (printType === 'slip' && J.s.lastChallanObj.isOutstation) {
+                    J.printPackingSlip(J.s.lastChallanObj);
+                }
+                J.renderScreen();
+            } catch (err) {
+                if (mutatedStorage) {
+                    J.setStoreSafe('saree_history', snapshot.sareeHistory);
+                    J.setStoreSafe(sheetKey, snapshot.workerSheets);
+                    J.setStoreSafe(J.SEQ_STORE_KEY, snapshot.seq);
+                    J.invalidateAllCaches(worker.id);
+                }
+                throw err;
+            } finally {
+                J.s.isSaving = false;
             }
-            J.renderScreen();
-        } catch (err) {
-            console.error('[JW-Trail] commitVchBatch error:', err);
-            J.toast('Batch save karne me error aaya!', true);
-        } finally {
-            J.s.isSaving = false;
-        }
+        });
     };
 
     window.jwtSaveWorkerHistEdit = (sheetId, rowId) => {
         if (!J.s.activeWorkerId || !rowId) return;
-        const snap = J.getSnapshot();
-        const worker = snap.workers.find((w) => w.id === J.s.activeWorkerId);
-        if (!worker) return;
+        return J.safeSave('isSavingVch', () => {
+            const snap = J.computeLiveState(J.getActiveGodam());
+            const worker = snap.workers.find((w) => w.id === J.s.activeWorkerId);
+            if (!worker) return;
 
-        const sheets = J.safeArr(J.getStoreSafe(`jobwork_sheets_${J.s.activeWorkerId}`)).slice();
-        const sIdx = sheets.findIndex((s) => s && String(s.id) === String(sheetId));
-        if (sIdx < 0) return;
+            const sheetKey = `jobwork_sheets_${J.s.activeWorkerId}`;
+            const sheets = J.safeArr(J.getStoreSafe(sheetKey)).slice();
+            const sIdx = sheets.findIndex((s) => s && String(s.id) === String(sheetId));
+            if (sIdx < 0) return;
 
-        const sheet = { ...sheets[sIdx], rows: J.safeArr(sheets[sIdx].rows).slice() };
-        const rIdx = sheet.rows.findIndex((r) => r && String(r.id) === String(rowId));
-        if (rIdx < 0) return;
+            const sheet = { ...sheets[sIdx], rows: J.safeArr(sheets[sIdx].rows).slice() };
+            const rIdx = sheet.rows.findIndex((r) => r && String(r.id) === String(rowId));
+            if (rIdx < 0) return;
 
-        const oldRow = sheet.rows[rIdx];
-        const newDate = J.toIsoDate(document.getElementById('jwt-eh-date')?.value) || oldRow.date;
-        const isOut = J.safeInt(oldRow.gayiQty) > 0;
-        const oldItems = isOut ? J.safeArr(oldRow.gayiItems) : J.safeArr(oldRow.aayiItems);
-        if (!oldItems.length) return J.toast('Is legacy entry ke items edit nahi ho sakte.', true);
+            const oldRow = sheet.rows[rIdx];
+            const newDate = J.toIsoDate(document.getElementById('jwt-eh-date')?.value) || oldRow.date;
+            const isOut = J.safeInt(oldRow.gayiQty) > 0;
+            const oldItems = isOut ? J.safeArr(oldRow.gayiItems) : J.safeArr(oldRow.aayiItems);
+            if (!oldItems.length) return J.toast('Is legacy entry ke items edit nahi ho sakte.', true);
 
-        const newItems = [];
-        let newTot = 0, newDmg = 0;
+            const newItems = [];
+            let newTot = 0, newDmg = 0;
 
-        for (let i = 0; i < oldItems.length; i++) {
-            const it = { ...oldItems[i] };
-            const qVal = J.safeInt(document.getElementById(`jwt-eh-qty-${i}`)?.value);
-            if (qVal <= 0) return J.toast('Har item ki Qty 1 ya zyada honi chahiye!', true);
+            for (let i = 0; i < oldItems.length; i++) {
+                const it = { ...oldItems[i] };
+                const qVal = J.safeInt(document.getElementById(`jwt-eh-qty-${i}`)?.value);
+                if (qVal <= 0) return J.toast('Har item ki Qty 1 ya zyada honi chahiye!', true);
 
-            const oldQ = J.safeInt(it.qty);
-            const diff = qVal - oldQ;
+                const oldQ = J.safeInt(it.qty);
+                const diff = qVal - oldQ;
 
-            if (isOut && diff > 0) {
-                const b = snap.godamBatches.find((x) =>
-                    x.saree === J.normText(it.saree) &&
-                    x.maker === J.normText(it.karigar) &&
-                    x.karkhanaId === J.normGodam(it.karkhanaId) &&
-                    x.bucket === 'unfinished' &&
-                    x.trailKey === (Array.isArray(it.doneStages) ? it.doneStages.join('|') : '')
-                );
-                const avail = b ? b.pcs : 0;
-                if (diff > avail) return J.toast(`${it.karigar} (${it.saree}) ka Godam stock sirf ${avail} aur bacha hai!`, true);
+                if (isOut && diff > 0) {
+                    const b = snap.godamBatches.find((x) =>
+                        x.saree === J.normText(it.saree) &&
+                        x.maker === J.normText(it.karigar) &&
+                        x.karkhanaId === J.normGodam(it.karkhanaId) &&
+                        x.bucket === 'unfinished' &&
+                        x.trailKey === (Array.isArray(it.doneStages) ? it.doneStages.join('|') : '')
+                    );
+                    const avail = b ? b.pcs : 0;
+                    if (diff > avail) return J.toast(`${it.karigar} (${it.saree}) ka Godam stock sirf ${avail} aur bacha hai!`, true);
+                }
+                if (!isOut && diff > 0 && diff > worker.pending) {
+                    return J.toast(`Worker ke paas sirf ${worker.pending} Pcs aur pending hain!`, true);
+                }
+                if (isOut && diff < 0 && (-diff) > worker.pending) {
+                    return J.toast(`Out Qty kam karne par pending minus me jayega! Pehle IN entry edit/delete karein.`, true);
+                }
+
+                it.qty = qVal;
+                if (!isOut) {
+                    const destEl = document.getElementById(`jwt-eh-dest-${i}`);
+                    if (destEl) { it.destBucket = destEl.value; it.isDamage = (destEl.value === 'lott'); }
+                    if (it.isDamage) newDmg += qVal; else newTot += qVal;
+                } else {
+                    newTot += qVal;
+                }
+                newItems.push(it);
             }
-            if (!isOut && diff > 0 && diff > worker.pending) {
-                return J.toast(`Worker ke paas sirf ${worker.pending} Pcs aur pending hain!`, true);
-            }
-            if (isOut && diff < 0 && (-diff) > worker.pending) {
-                return J.toast(`Out Qty kam karne par pending minus me jayega! Pehle IN entry edit/delete karein.`, true);
-            }
 
-            it.qty = qVal;
-            if (!isOut) {
-                const destEl = document.getElementById(`jwt-eh-dest-${i}`);
-                if (destEl) { it.destBucket = destEl.value; it.isDamage = (destEl.value === 'lott'); }
-                if (it.isDamage) newDmg += qVal; else newTot += qVal;
-            } else {
-                newTot += qVal;
+            const snapshot = {
+                sareeHistory: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('saree_history')))),
+                workerSheets: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe(sheetKey))))
+            };
+
+            const updatedRow = {
+                ...oldRow,
+                date: newDate,
+                jwNo: document.getElementById('jwt-eh-jwno') ? document.getElementById('jwt-eh-jwno').value.trim() : oldRow.jwNo,
+                transport: document.getElementById('jwt-eh-trans') ? document.getElementById('jwt-eh-trans').value.trim() : oldRow.transport,
+                lrNo: document.getElementById('jwt-eh-lr') ? document.getElementById('jwt-eh-lr').value.trim() : oldRow.lrNo,
+                designNote: document.getElementById('jwt-eh-design') ? document.getElementById('jwt-eh-design').value.trim() : oldRow.designNote,
+                gayiQty: isOut ? newTot : 0,
+                gayiItems: isOut ? newItems : [],
+                aayiQty: isOut ? 0 : newTot,
+                aayiItems: isOut ? [] : newItems,
+                damagePcs: isOut ? 0 : newDmg
+            };
+            sheet.rows[rIdx] = updatedRow;
+            sheets[sIdx] = sheet;
+
+            let mutatedStorage = false;
+            try {
+                const sH = J.rebuildWorkerRowSareeHistory(J.safeArr(J.getStoreSafe('saree_history')), worker, updatedRow);
+                mutatedStorage = true;
+                J.setStoreSafe('saree_history', sH);
+                J.setStoreSafe(sheetKey, sheets);
+                J.s.editWorkerRowInfo = null;
+                J.invalidateAllCaches(J.s.activeWorkerId);
+                J.toast('✅ Register entry update ho gayi!');
+                J.renderScreen();
+            } catch (err) {
+                if (mutatedStorage) {
+                    J.setStoreSafe('saree_history', snapshot.sareeHistory);
+                    J.setStoreSafe(sheetKey, snapshot.workerSheets);
+                    J.invalidateAllCaches(J.s.activeWorkerId);
+                }
+                throw err;
             }
-            newItems.push(it);
-        }
-
-        const updatedRow = {
-            ...oldRow,
-            date: newDate,
-            jwNo: document.getElementById('jwt-eh-jwno') ? document.getElementById('jwt-eh-jwno').value.trim() : oldRow.jwNo,
-            transport: document.getElementById('jwt-eh-trans') ? document.getElementById('jwt-eh-trans').value.trim() : oldRow.transport,
-            lrNo: document.getElementById('jwt-eh-lr') ? document.getElementById('jwt-eh-lr').value.trim() : oldRow.lrNo,
-            designNote: document.getElementById('jwt-eh-design') ? document.getElementById('jwt-eh-design').value.trim() : oldRow.designNote,
-            gayiQty: isOut ? newTot : 0,
-            gayiItems: isOut ? newItems : [],
-            aayiQty: isOut ? 0 : newTot,
-            aayiItems: isOut ? [] : newItems,
-            damagePcs: isOut ? 0 : newDmg
-        };
-        sheet.rows[rIdx] = updatedRow;
-        sheets[sIdx] = sheet;
-
-        const sH = J.rebuildWorkerRowSareeHistory(J.safeArr(J.getStoreSafe('saree_history')), worker, updatedRow);
-        J.setStoreSafe('saree_history', sH);
-        J.setStoreSafe(`jobwork_sheets_${J.s.activeWorkerId}`, sheets);
-        J.s.editWorkerRowInfo = null;
-        J.invalidateAllCaches(J.s.activeWorkerId);
-        J.toast('✅ Register entry update ho gayi!');
-        J.renderScreen();
+        });
     };
 
     window.jwtDeleteWorkerHistRow = (sheetId, rowId) => {
         if (!J.s.activeWorkerId || !rowId) return;
-        const sheets = J.safeArr(J.getStoreSafe(`jobwork_sheets_${J.s.activeWorkerId}`)).slice();
-        const sIdx = sheets.findIndex((s) => s && String(s.id) === String(sheetId));
-        if (sIdx < 0) return;
-        const sheet = { ...sheets[sIdx], rows: J.safeArr(sheets[sIdx].rows).slice() };
-        const row = sheet.rows.find((r) => r && String(r.id) === String(rowId));
-        if (!row) return;
+        return J.safeSave('isDeleting', () => {
+            const sheetKey = `jobwork_sheets_${J.s.activeWorkerId}`;
+            const sheets = J.safeArr(J.getStoreSafe(sheetKey)).slice();
+            const sIdx = sheets.findIndex((s) => s && String(s.id) === String(sheetId));
+            if (sIdx < 0) return;
+            const sheet = { ...sheets[sIdx], rows: J.safeArr(sheets[sIdx].rows).slice() };
+            const row = sheet.rows.find((r) => r && String(r.id) === String(rowId));
+            if (!row) return;
 
-        const snap = J.getSnapshot();
-        const worker = snap.workers.find((w) => w.id === J.s.activeWorkerId);
-        if (worker && J.safeInt(row.gayiQty) > worker.pending) {
-            return J.toast('Is batch ki sarees pehle hi wapas aa chuki hain! Pehle IN entry delete karein.', true);
-        }
-        if (!confirm('Kya is entry ko delete karna chahte hain? Stock automatic adjust ho jayega.')) return;
+            const snap = J.computeLiveState(J.getActiveGodam());
+            const worker = snap.workers.find((w) => w.id === J.s.activeWorkerId);
+            if (worker && J.safeInt(row.gayiQty) > worker.pending) {
+                return J.toast('Is batch ki sarees pehle hi wapas aa chuki hain! Pehle IN entry delete karein.', true);
+            }
 
-        sheet.rows = sheet.rows.filter((r) => r && String(r.id) !== String(rowId));
-        sheets[sIdx] = sheet;
-        const sH = J.safeArr(J.getStoreSafe('saree_history')).filter((h) => !h || String(h.refId) !== String(rowId));
-        J.setStoreSafe('saree_history', sH);
-        J.setStoreSafe(`jobwork_sheets_${J.s.activeWorkerId}`, sheets);
-        J.s.editWorkerRowInfo = null;
-        J.s.regPrintRowInfo = null;
-        J.invalidateAllCaches(J.s.activeWorkerId);
-        J.toast('Entry delete ho gayi!');
-        J.renderScreen();
+            const snapshot = {
+                sareeHistory: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('saree_history')))),
+                workerSheets: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe(sheetKey))))
+            };
+
+            sheet.rows = sheet.rows.filter((r) => r && String(r.id) !== String(rowId));
+            sheets[sIdx] = sheet;
+
+            let mutatedStorage = false;
+            try {
+                const sH = J.safeArr(J.getStoreSafe('saree_history')).filter((h) => !h || String(h.refId) !== String(rowId));
+                mutatedStorage = true;
+                J.setStoreSafe('saree_history', sH);
+                J.setStoreSafe(sheetKey, sheets);
+                J.s.editWorkerRowInfo = null;
+                J.s.regPrintRowInfo = null;
+                J.invalidateAllCaches(J.s.activeWorkerId);
+                J.toast('Entry delete ho gayi!');
+                J.renderScreen();
+            } catch (err) {
+                if (mutatedStorage) {
+                    J.setStoreSafe('saree_history', snapshot.sareeHistory);
+                    J.setStoreSafe(sheetKey, snapshot.workerSheets);
+                    J.invalidateAllCaches(J.s.activeWorkerId);
+                }
+                throw err;
+            }
+        });
     };
 
     J.commitFinalOutBatch = (doPrint = false) => {
-        if (J.s.isSaving) return;
         if (!J.s.foBatch.length) return J.toast('Batch khali hai! Kam se kam 1 Saree add karein.', true);
 
-        const dDate = J.toIsoDate(document.getElementById('jwt-fo-date')?.value) || J.getTodayIso();
-        const note = String(document.getElementById('jwt-fo-note')?.value || '').trim() || 'Apni Main Dukan';
-
-        J.s.isSaving = true;
-        try {
-            const challanId = J.genId('dukan');
-            const now = Date.now();
-            const sH = J.safeArr(J.getStoreSafe('saree_history')).slice();
-            const dukanHist = J.safeArr(J.getStoreSafe('dukan_transfer_history')).slice();
-
-            J.s.foBatch.forEach((it, idx) => {
-                const lType = J.legacyTypeFromTrail(it.doneStages, it.bucket);
-                const trTxt = J.formatTrail(it.doneStages, it.bucket);
-                sH.push({
-                    id: `sh_fo_${challanId}_${idx}`,
-                    refId: `${challanId}_${idx}`,
-                    date: dDate, sareeName: it.saree, karigerName: it.maker, kariger: it.maker,
-                    partyName: note, targetWorker: note, karkhanaId: it.karkhanaId,
-                    type: lType, typeLabel: `🚚 Final Out ➔ ${note} [${trTxt}]`,
-                    aai: 0, gai: it.qty, isOut: true,
-                    doneStages: [...it.doneStages], stageBucket: it.bucket, note, timestamp: now + idx
-                });
-                dukanHist.unshift({
-                    id: `${challanId}_${idx}`, date: dDate, sareeName: it.saree, karigerName: it.maker,
-                    pcs: it.qty, note: `${note} [${trTxt}]`, karkhanaId: it.karkhanaId,
-                    doneStages: [...it.doneStages], stageBucket: it.bucket, timestamp: now + idx
-                });
+        return J.safeSave('isSavingFo', () => {
+            const snap = J.computeLiveState(J.getActiveGodam());
+            const neededByKey = new Map();
+            J.s.foBatch.forEach((it) => {
+                const q = J.safeInt(it.qty);
+                if (q <= 0) throw new Error('Final Out batch me 0 qty invalid hai!');
+                const key = it.batchKey || '';
+                neededByKey.set(key, (neededByKey.get(key) || 0) + q);
             });
+            for (const [bKey, needQty] of neededByKey.entries()) {
+                const batch = snap.godamBatches.find((b) => b.key === bKey);
+                const avail = batch ? batch.pcs : 0;
+                if (needQty > avail) {
+                    return J.toast(`Godam stock kam hai! Available: ${avail} Pcs, Required: ${needQty} Pcs.`, true);
+                }
+            }
 
-            J.setStoreSafe('saree_history', sH);
-            J.setStoreSafe('dukan_transfer_history', dukanHist);
+            const dDate = J.toIsoDate(document.getElementById('jwt-fo-date')?.value) || J.getTodayIso();
+            const note = String(document.getElementById('jwt-fo-note')?.value || '').trim() || 'Apni Main Dukan';
 
-            J.s.lastChallanObj = {
-                isOutstation: false,
-                title: 'FINAL OUT (DISPATCH CHALLAN)',
-                party: note,
-                date: dDate,
-                items: J.s.foBatch.map((x) => ({ maker: x.maker, saree: x.saree, trail: J.formatTrail(x.doneStages, x.bucket), qty: x.qty }))
+            const snapshot = {
+                sareeHistory: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('saree_history')))),
+                dukanTransfer: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('dukan_transfer_history'))))
             };
+            let mutatedStorage = false;
 
-            J.s.foBatch = [];
-            J.s.foAcceptOpen = false;
-            J.s.foPickStep = 'kariger';
-            J.s.foSelectedMaker = null;
-            J.s.foSelectedBatchKey = null;
-            J.s.foRightIdx = 0;
+            J.s.isSaving = true;
+            try {
+                const challanId = J.genId('dukan');
+                const now = Date.now();
+                const sH = J.safeArr(J.getStoreSafe('saree_history')).slice();
+                const dukanHist = J.safeArr(J.getStoreSafe('dukan_transfer_history')).slice();
 
-            J.invalidateAllCaches();
-            if (typeof window.renderDukanTransferTable === 'function') { try { window.renderDukanTransferTable(); } catch (_) {} }
-            J.toast('✅ Final Out Challan save ho gaya!');
-            if (doPrint) J.printBatchChallan(J.s.lastChallanObj);
-            J.renderScreen();
-        } finally {
-            J.s.isSaving = false;
-        }
+                J.s.foBatch.forEach((it, idx) => {
+                    const lType = J.legacyTypeFromTrail(it.doneStages, it.bucket);
+                    const trTxt = J.formatTrail(it.doneStages, it.bucket);
+                    sH.push({
+                        id: `sh_fo_${challanId}_${idx}`,
+                        refId: `${challanId}_${idx}`,
+                        date: dDate, sareeName: it.saree, karigerName: it.maker, kariger: it.maker,
+                        partyName: note, targetWorker: note, karkhanaId: it.karkhanaId,
+                        type: lType, typeLabel: `🚚 Final Out ➔ ${note} [${trTxt}]`,
+                        aai: 0, gai: it.qty, isOut: true,
+                        doneStages: [...it.doneStages], stageBucket: it.bucket, note, timestamp: now + idx
+                    });
+                    dukanHist.unshift({
+                        id: `${challanId}_${idx}`, date: dDate, sareeName: it.saree, karigerName: it.maker,
+                        pcs: it.qty, note: `${note} [${trTxt}]`, karkhanaId: it.karkhanaId,
+                        doneStages: [...it.doneStages], stageBucket: it.bucket, timestamp: now + idx
+                    });
+                });
+
+                mutatedStorage = true;
+                J.setStoreSafe('saree_history', sH);
+                J.setStoreSafe('dukan_transfer_history', dukanHist);
+
+                J.s.lastChallanObj = {
+                    isOutstation: false,
+                    title: 'FINAL OUT (DISPATCH CHALLAN)',
+                    party: note,
+                    date: dDate,
+                    items: J.s.foBatch.map((x) => ({ maker: x.maker, saree: x.saree, trail: J.formatTrail(x.doneStages, x.bucket), qty: x.qty }))
+                };
+
+                J.s.foBatch = [];
+                J.s.foAcceptOpen = false;
+                J.s.foPickStep = 'kariger';
+                J.s.foSelectedMaker = null;
+                J.s.foSelectedBatchKey = null;
+                J.s.foRightIdx = 0;
+
+                J.invalidateAllCaches();
+                if (typeof window.renderDukanTransferTable === 'function') { try { window.renderDukanTransferTable(); } catch (_) {} }
+                J.toast('✅ Final Out Challan save ho gaya!');
+                if (doPrint) J.printBatchChallan(J.s.lastChallanObj);
+                J.renderScreen();
+            } catch (err) {
+                if (mutatedStorage) {
+                    J.setStoreSafe('saree_history', snapshot.sareeHistory);
+                    J.setStoreSafe('dukan_transfer_history', snapshot.dukanTransfer);
+                    J.invalidateAllCaches();
+                }
+                throw err;
+            } finally {
+                J.s.isSaving = false;
+            }
+        });
     };
 
     window.jwtSaveFinalOutEdit = (entryId) => {
-        const dukanHist = J.safeArr(J.getStoreSafe('dukan_transfer_history')).slice();
-        const dIdx = dukanHist.findIndex((x) => x && String(x.id) === String(entryId));
-        if (dIdx < 0) return;
+        return J.safeSave('isSavingFo', () => {
+            const dukanHist = J.safeArr(J.getStoreSafe('dukan_transfer_history')).slice();
+            const dIdx = dukanHist.findIndex((x) => x && String(x.id) === String(entryId));
+            if (dIdx < 0) return;
 
-        const oldEntry = dukanHist[dIdx];
-        const newDate = J.toIsoDate(document.getElementById('jwt-efo-date')?.value) || oldEntry.date;
-        const newNote = String(document.getElementById('jwt-efo-note')?.value || '').trim() || oldEntry.note;
-        const newPcs = J.safeInt(document.getElementById('jwt-efo-pcs')?.value);
-        if (newPcs <= 0) return J.toast('Sahi Pcs daalein!', true);
+            const oldEntry = dukanHist[dIdx];
+            const newDate = J.toIsoDate(document.getElementById('jwt-efo-date')?.value) || oldEntry.date;
+            const newNote = String(document.getElementById('jwt-efo-note')?.value || '').trim() || oldEntry.note;
+            const newPcs = J.safeInt(document.getElementById('jwt-efo-pcs')?.value);
+            if (newPcs <= 0) return J.toast('Sahi Pcs daalein!', true);
 
-        const diff = newPcs - J.safeInt(oldEntry.pcs);
-        if (diff > 0) {
-            const snap = J.getSnapshot();
-            const trKey = Array.isArray(oldEntry.doneStages) ? oldEntry.doneStages.join('|') : null;
-            const b = snap.godamBatches.find((x) =>
-                x.saree === J.normText(oldEntry.sareeName) &&
-                x.maker === J.normText(oldEntry.karigerName) &&
-                (!oldEntry.karkhanaId || x.karkhanaId === J.normGodam(oldEntry.karkhanaId)) &&
-                (trKey === null || x.trailKey === trKey)
-            );
-            const avail = b ? b.pcs : 0;
-            if (diff > avail) return J.toast(`Godam me sirf ${avail} Pcs aur bache hain!`, true);
-        }
-
-        dukanHist[dIdx] = { ...oldEntry, date: newDate, note: newNote, pcs: newPcs };
-        const sH = J.safeArr(J.getStoreSafe('saree_history')).map((h) => {
-            if (!h) return h;
-            if (String(h.refId) === String(entryId) || String(h.id) === `sh_fo_${entryId}`) {
-                return { ...h, date: newDate, partyName: newNote, targetWorker: newNote, gai: newPcs, note: newNote };
+            const diff = newPcs - J.safeInt(oldEntry.pcs);
+            if (diff > 0) {
+                const snap = J.computeLiveState(J.getActiveGodam());
+                const trKey = Array.isArray(oldEntry.doneStages) ? oldEntry.doneStages.join('|') : null;
+                const b = snap.godamBatches.find((x) =>
+                    x.saree === J.normText(oldEntry.sareeName) &&
+                    x.maker === J.normText(oldEntry.karigerName) &&
+                    (!oldEntry.karkhanaId || x.karkhanaId === J.normGodam(oldEntry.karkhanaId)) &&
+                    (!oldEntry.stageBucket || x.bucket === oldEntry.stageBucket) &&
+                    (trKey === null || x.trailKey === trKey)
+                );
+                const avail = b ? b.pcs : 0;
+                if (diff > avail) return J.toast(`Godam me sirf ${avail} Pcs aur bache hain!`, true);
             }
-            return h;
-        });
 
-        J.setStoreSafe('dukan_transfer_history', dukanHist);
-        J.setStoreSafe('saree_history', sH);
-        J.s.editFoId = null;
-        J.invalidateAllCaches();
-        J.toast('✅ Final Out entry update ho gayi!');
-        J.renderScreen();
+            const snapshot = {
+                sareeHistory: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('saree_history')))),
+                dukanTransfer: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('dukan_transfer_history'))))
+            };
+
+            dukanHist[dIdx] = { ...oldEntry, date: newDate, note: newNote, pcs: newPcs };
+            const sH = J.safeArr(J.getStoreSafe('saree_history')).map((h) => {
+                if (!h) return h;
+                if (String(h.refId) === String(entryId) || String(h.id) === `sh_fo_${entryId}`) {
+                    return { ...h, date: newDate, partyName: newNote, targetWorker: newNote, gai: newPcs, note: newNote };
+                }
+                return h;
+            });
+
+            let mutatedStorage = false;
+            try {
+                mutatedStorage = true;
+                J.setStoreSafe('dukan_transfer_history', dukanHist);
+                J.setStoreSafe('saree_history', sH);
+                J.s.editFoId = null;
+                J.invalidateAllCaches();
+                J.toast('✅ Final Out entry update ho gayi!');
+                J.renderScreen();
+            } catch (err) {
+                if (mutatedStorage) {
+                    J.setStoreSafe('dukan_transfer_history', snapshot.dukanTransfer);
+                    J.setStoreSafe('saree_history', snapshot.sareeHistory);
+                    J.invalidateAllCaches();
+                }
+                throw err;
+            }
+        });
     };
 
     window.jwtDeleteFinalOutEntry = (entryId) => {
         if (!entryId) return;
-        if (!confirm('Kya is Final Out entry ko delete karna chahte hain? Saree wapas Godam stock me jud jayegi.')) return;
-        const dukanHist = J.safeArr(J.getStoreSafe('dukan_transfer_history')).filter((x) => !x || String(x.id) !== String(entryId));
-        const sH = J.safeArr(J.getStoreSafe('saree_history')).filter((h) => !h || (String(h.refId) !== String(entryId) && String(h.id) !== `sh_fo_${entryId}`));
-        J.setStoreSafe('dukan_transfer_history', dukanHist);
-        J.setStoreSafe('saree_history', sH);
-        J.s.editFoId = null;
-        J.invalidateAllCaches();
-        J.toast('Final Out entry delete ho gayi!');
-        J.renderScreen();
+        return J.safeSave('isDeleting', () => {
+            const snapshot = {
+                sareeHistory: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('saree_history')))),
+                dukanTransfer: JSON.parse(JSON.stringify(J.safeArr(J.getStoreSafe('dukan_transfer_history'))))
+            };
+            const dukanHist = J.safeArr(J.getStoreSafe('dukan_transfer_history')).filter((x) => !x || String(x.id) !== String(entryId));
+            const sH = J.safeArr(J.getStoreSafe('saree_history')).filter((h) => !h || (String(h.refId) !== String(entryId) && String(h.id) !== `sh_fo_${entryId}`));
+
+            let mutatedStorage = false;
+            try {
+                mutatedStorage = true;
+                J.setStoreSafe('dukan_transfer_history', dukanHist);
+                J.setStoreSafe('saree_history', sH);
+                J.s.editFoId = null;
+                J.invalidateAllCaches();
+                J.toast('Final Out entry delete ho gayi!');
+                J.renderScreen();
+            } catch (err) {
+                if (mutatedStorage) {
+                    J.setStoreSafe('dukan_transfer_history', snapshot.dukanTransfer);
+                    J.setStoreSafe('saree_history', snapshot.sareeHistory);
+                    J.invalidateAllCaches();
+                }
+                throw err;
+            }
+        });
     };
 })();
