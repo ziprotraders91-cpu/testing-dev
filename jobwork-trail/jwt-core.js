@@ -78,6 +78,11 @@
         billPayAcceptOpen: false,
 
         isSaving: false,
+        isSavingVch: false,
+        isSavingFo: false,
+        isSavingBill: false,
+        isSavingInward: false,
+        lastSaveTime: 0,
         navGuardTs: 0,
         cachedSnapshot: null
     };
@@ -198,6 +203,23 @@
         el.style.display = 'block';
         clearTimeout(el._t);
         el._t = setTimeout(() => { el.style.display = 'none'; }, 2600);
+    };
+
+    J.safeSave = (lockKey, fn) => {
+        if (J.s[lockKey]) return J.toast('⏳ Save chal raha hai...', true);
+        if (Date.now() - (J.s.lastSaveTime || 0) < 1000) return J.toast('⏳ 1 second baad try karein', true);
+
+        J.s[lockKey] = true;
+        J.s.lastSaveTime = Date.now();
+
+        try {
+            return fn();
+        } catch (error) {
+            console.error(`[Save Failed - ${lockKey}]`, error);
+            J.toast(`❌ Error: ${error.message}`, true);
+        } finally {
+            J.s[lockKey] = false;
+        }
     };
 
     J.invalidateAllCaches = (workerId = null) => {
