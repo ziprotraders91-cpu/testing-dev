@@ -2,15 +2,22 @@
    SIMPLICITY ERP - JOBWORK EXPRESS VOUCHER (UNIFIED TRAIL & DYNAMIC GROUPS)
    File: jobwork-express/jobwork-express.js (v3.5 - Final Out = Finished Stock)
    100% Synced with: jobwork-trail, saree_history, jobwork_workers,
-   jobwork_groups, jobwork_firm_profile, jw_challan_seq,
+   jobwork_groups, dukan_firms, jobwork_firm_profile, jw_challan_seq,
    jobwork_sheets_*, dukan_transfer_history
 ============================================================================ */
 
 (() => {
     'use strict';
 
+    if (window._jwExpressLoaded) {
+        console.warn('[jobwork-express] Already loaded — skip');
+        return;
+    }
+    window._jwExpressLoaded = true;
+
     const GROUPS_STORE_KEY = 'jobwork_groups';
     const FIRM_STORE_KEY = 'jobwork_firm_profile';
+    const FIRMS_LIST_KEY = 'dukan_firms';
     const SEQ_STORE_KEY = 'jw_challan_seq';
 
     const DEFAULT_GROUPS = [
@@ -32,6 +39,7 @@
     let selectedBatchKey = null;
     let jwMakerArrowUsed = false;
     let isSubmitting = false;
+    let pendingClearAction = null;
 
     const safeArr = (v) => {
         if (Array.isArray(v)) return v.filter(Boolean);
@@ -49,8 +57,13 @@
     };
 
     const setToStore = (key, val) => {
-        if (typeof window.setStore === 'function') window.setStore(key, val);
-        else localStorage.setItem(key, JSON.stringify(val));
+        try {
+            if (typeof window.setStore === 'function') window.setStore(key, val);
+            else localStorage.setItem(key, JSON.stringify(val));
+        } catch (err) {
+            console.error(`[jobwork-express] setToStore(${key}) failed:`, err);
+            throw err;
+        }
     };
 
     const safeNum = (v, fb = 0) => {
@@ -77,21 +90,44 @@
         const s = String(val).trim();
         if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
         const p = s.split(/[-/]/);
-        if (p.length === 3 && p[0].length === 2 && p[2].length === 4) {
+        if (p.length === 3 && p[0].length <= 2 && p[1].length <= 2 && p[2].length === 4) {
             return `${p[2]}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`;
         }
         return s;
     };
 
+    const getLocalTodayIso = () => {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+
     const getToday = () => {
         const raw = (typeof window.getTodayDate === 'function')
             ? window.getTodayDate()
-            : new Date().toISOString().split('T')[0];
+            : getLocalTodayIso();
         const iso = toIsoDate(raw);
-        return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : new Date().toISOString().split('T')[0];
+        return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : getLocalTodayIso();
     };
 
     const formatDisplay = (d) => (typeof window.formatDateDisplay === 'function') ? window.formatDateDisplay(d) : (d || '-');
+
+    const showExpStatus = (msg, isErr = true) => {
+        const statusEl = document.getElementById('jw-exp-status-msg');
+        if (statusEl) {
+            clearTimeout(statusEl._t);
+            statusEl.style.color = isErr ? '#dc2626' : '#15803d';
+            statusEl.textContent = msg;
+            statusEl._t = setTimeout(() => {
+                statusEl.style.color = '#92400e';
+                statusEl.textContent = 'Kariger ➔ Stage ➔ Pcs · Khali Kariger Enter = Save';
+            }, 3000);
+        }
+        if (window._JWT && typeof window._JWT.toast === 'function') {
+            window._JWT.toast(msg, isErr);
+        } else if (window.DukanERP && typeof window.DukanERP.toast === 'function') {
+            window.DukanERP.toast(msg);
+        }
+    };
 
     const normGodamId = (kid) => {
         const clean = String(kid || '').trim();
@@ -119,12 +155,33 @@
     const genId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
     const getFirmProfile = () => {
+        if (window._JWT && typeof window._JWT.getFirmProfile === 'function') {
+            const p = window._JWT.getFirmProfile();
+            if (p && p.name) {
+                return {
+                    name: String(p.name || 'INDIAN FABRICS').trim(),
+                    address: String(p.address || '').trim(),
+                    mobile: String(p.mobile || p.mob || '').trim(),
+                    gst: String(p.gst || '').trim()
+                };
+            }
+        }
+        const firms = safeArr(getFromStore(FIRMS_LIST_KEY)).filter((f) => f && f.name);
+        if (firms.length) {
+            const def = firms.find((f) => f.isDefault) || firms[0];
+            return {
+                name: String(def.name || 'INDIAN FABRICS').trim(),
+                address: [def.address, def.city].filter(Boolean).join(', '),
+                mobile: String(def.mobile || def.mob || '').trim(),
+                gst: String(def.gst || '').trim()
+            };
+        }
         const raw = getFromStore(FIRM_STORE_KEY);
         if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
             return {
                 name: String(raw.name || 'INDIAN FABRICS').trim(),
                 address: String(raw.address || '').trim(),
-                mobile: String(raw.mobile || '').trim(),
+                mobile: String(raw.mobile || raw.mob || '').trim(),
                 gst: String(raw.gst || '').trim()
             };
         }
@@ -599,6 +656,8 @@
         selectedMaker = null;
         selectedBatchKey = null;
         jwMakerArrowUsed = false;
+        isSubmitting = false;
+        pendingClearAction = null;
 
         const today = getToday();
         const godamName = getGodamLabel(getEffectiveGodown());
@@ -757,6 +816,18 @@
         </div>`;
 
         document.body.insertAdjacentHTML('beforeend', modalHtml);
+        const modalEl = document.getElementById('master-jobwork-express-modal');
+        if (modalEl) {
+            modalEl.addEventListener('click', (e) => {
+                if (e.target === modalEl) {
+                    if (expressBatchItems.length > 0) {
+                        showExpStatus('⚠️ Batch list me items hain! Band karne ke liye [Esc] ya Back dabayein.', true);
+                        return;
+                    }
+                    window.closeJobWorkExpressModal();
+                }
+            });
+        }
         updateCategoryUI();
         populateExpressWorkers();
         updateMovementUI();
@@ -895,11 +966,14 @@
             }
         } else if (jwPickerMode === 'movement') {
             if (item.data !== movementType) {
-                if (!confirmClearBatchIfNeeded('Len-Den')) return;
-                movementType = item.data;
-                resetCurrentBatchPickerFields();
-                updateMovementUI();
-                renderExpressBatchGrid();
+                const applyMove = () => {
+                    movementType = item.data;
+                    resetCurrentBatchPickerFields();
+                    updateMovementUI();
+                    renderExpressBatchGrid();
+                    focusFirstField('jw-exp-worker-input');
+                };
+                if (!confirmClearBatchIfNeeded('Len-Den', applyMove)) return;
             }
             focusFirstField('jw-exp-worker-input');
         } else if (jwPickerMode === 'worker') {
@@ -907,13 +981,16 @@
             const wInp = document.getElementById('jw-exp-worker-input');
             const prevWorkerId = wSel ? wSel.value : '';
             const nextWorkerId = String(item.data.id || '');
+            const applyWorker = () => {
+                if (nextWorkerId !== prevWorkerId) resetCurrentBatchPickerFields();
+                if (wSel) wSel.value = nextWorkerId;
+                if (wInp) wInp.value = item.data.label;
+                focusFirstField('jw-exp-date');
+            };
             if (prevWorkerId && nextWorkerId !== prevWorkerId && movementType === 'aayi' && activeCategory !== 'dukan') {
-                if (!confirmClearBatchIfNeeded('Worker')) return;
+                if (!confirmClearBatchIfNeeded('Worker', applyWorker)) return;
             }
-            if (nextWorkerId !== prevWorkerId) resetCurrentBatchPickerFields();
-            if (wSel) wSel.value = nextWorkerId;
-            if (wInp) wInp.value = item.data.label;
-            focusFirstField('jw-exp-date');
+            applyWorker();
         } else if (jwPickerMode === 'kariger') {
             selectedMaker = item.data;
             const mInp = document.getElementById('jw-exp-maker-input');
@@ -963,13 +1040,30 @@
         }, 30);
     };
 
+    const showJwClearConfirm = (lbl) => {
+        const bar = document.getElementById('jw-exp-accept-strip');
+        if (!bar) return;
+        bar.innerHTML = `
+            <strong style="font-size:12.5px; color:#991b1b;">⚠️ Batch list me ${expressBatchItems.length} item hain. ${esc(lbl)} badalne par list clear hogi. Aage badhein?</strong>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button type="button" id="jw-exp-accept-yes" class="jw-btn-save" onclick="window.__jwConfirmClear()">Yes, Clear Karo [Y / Enter]</button>
+                <button type="button" class="jw-btn-sec" onclick="window.__jwCancelAccept()">No [N / Esc]</button>
+            </div>
+        `;
+        bar.style.display = 'flex';
+        bar.scrollIntoView({ block: 'nearest' });
+        setTimeout(() => document.getElementById('jw-exp-accept-yes')?.focus(), 20);
+    };
+
     const showJwAcceptPrompt = (show) => {
         const bar = document.getElementById('jw-exp-accept-strip');
         if (!bar) return;
         if (!show) {
+            pendingClearAction = null;
             bar.style.display = 'none';
             return;
         }
+        pendingClearAction = null;
         const outst = isOutstationOutActive();
         bar.innerHTML = outst ? `
             <strong style="font-size:12.5px;">Save Karein — Kya Print Karna Hai?</strong>
@@ -995,14 +1089,14 @@
 
     window.askSaveMasterJobWorkExpress = () => {
         if (!expressBatchItems.length) {
-            alert('Batch me kam se kam 1 Saree jodein!');
+            showExpStatus('⚠️ Batch me kam se kam 1 Saree jodein!', true);
             focusFirstField('jw-exp-maker-input');
             return;
         }
         const isDukan = (activeCategory === 'dukan');
         const workerId = document.getElementById('jw-exp-worker')?.value;
         if (!isDukan && !workerId) {
-            alert('Kripya list me se Worker chunein!');
+            showExpStatus('⚠️ Kripya list me se Worker chunein!', true);
             focusFirstField('jw-exp-worker-input');
             return;
         }
@@ -1010,7 +1104,14 @@
     };
 
     const bindJobWorkExpressEvents = () => {
+        window.__jwConfirmClear = () => {
+            const fn = pendingClearAction;
+            pendingClearAction = null;
+            showJwAcceptPrompt(false);
+            if (typeof fn === 'function') fn();
+        };
         window.__jwCancelAccept = () => {
+            pendingClearAction = null;
             showJwAcceptPrompt(false);
             focusFirstField('jw-exp-maker-input');
         };
@@ -1165,12 +1266,21 @@
 
         if (acceptOpen) {
             const k = e.key.toLowerCase();
+            if (pendingClearAction) {
+                if (k === 'y' || (e.key === 'Enter' && document.activeElement?.id === 'jw-exp-accept-yes')) {
+                    e.preventDefault(); e.stopImmediatePropagation(); window.__jwConfirmClear(); return;
+                }
+                if (k === 'n' || e.key === 'Escape') {
+                    e.preventDefault(); e.stopImmediatePropagation(); window.__jwCancelAccept(); return;
+                }
+                return;
+            }
             if (k === 'y') { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress(''); return; }
             if (k === 'p') { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress('challan'); return; }
             if (k === 'l' && isOutstationOutActive()) { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress('slip'); return; }
             if (k === 'b' && isOutstationOutActive()) { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress('both'); return; }
             if (k === 'n' || e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); window.__jwCancelAccept(); return; }
-            if (e.key === 'Enter' && document.activeElement?.id === 'jw-exp-accept-yes') {
+            if ((e.key === 'Enter' && document.activeElement?.id === 'jw-exp-accept-yes') || (e.ctrlKey && e.key === 'Enter')) {
                 e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress(''); return;
             }
         }
@@ -1218,18 +1328,23 @@
         window.removeEventListener('keydown', handleJobWorkExpressGlobalKeydown, true);
         document.getElementById('master-jobwork-express-modal')?.remove();
         expressBatchItems = [];
+        pendingClearAction = null;
     };
 
-    const confirmClearBatchIfNeeded = (lbl) => {
+    const confirmClearBatchIfNeeded = (lbl, onConfirmFn = null) => {
         if (!expressBatchItems.length) return true;
-        const ok = confirm(`Batch list me ${expressBatchItems.length} item hain. ${lbl} badalne par list clear hogi. Aage badhein?`);
-        if (ok) { expressBatchItems = []; renderExpressBatchGrid(); }
-        return ok;
+        pendingClearAction = () => {
+            expressBatchItems = [];
+            renderExpressBatchGrid();
+            if (typeof onConfirmFn === 'function') onConfirmFn();
+        };
+        showJwClearConfirm(lbl);
+        return false;
     };
 
     window.switchJobWorkCategory = (cat, advanceFocus = false) => {
         if (cat !== activeCategory) {
-            if (!confirmClearBatchIfNeeded('Process')) return false;
+            if (!confirmClearBatchIfNeeded('Process', () => switchJobWorkCategory(cat, advanceFocus))) return false;
             activeCategory = cat;
             movementType = 'gayi';
             expMeta = { jwNo: '', transport: '', lrNo: '', designNote: '' };
@@ -1247,7 +1362,7 @@
 
     window.toggleMovementType = (advanceFocus = false) => {
         if (activeCategory === 'dukan') return;
-        if (!confirmClearBatchIfNeeded('Len-Den')) return;
+        if (!confirmClearBatchIfNeeded('Len-Den', () => toggleMovementType(advanceFocus))) return;
         movementType = (movementType === 'gayi') ? 'aayi' : 'gayi';
         resetCurrentBatchPickerFields();
         updateMovementUI();
@@ -1334,7 +1449,7 @@
     window.addExpressBatchRow = () => {
         const batch = getActiveSourceBatches().find((b) => b.key === selectedBatchKey);
         if (!batch) {
-            alert('Pehle Kariger aur Stage Batch chunein!');
+            showExpStatus('⚠️ Pehle Kariger aur Stage Batch chunein!', true);
             focusFirstField('jw-exp-maker-input');
             return;
         }
@@ -1342,7 +1457,7 @@
         const avail = batch.pcs - getUsedBatchQty(batch.key);
         const qty = safeInt(document.getElementById('jw-exp-qty-input')?.value);
         if (qty <= 0 || qty > avail) {
-            alert(`Sahi Pcs daalein (Max ${avail} Pcs available)!`);
+            showExpStatus(`⚠️ Sahi Pcs daalein (Max ${avail} Pcs available)!`, true);
             focusFirstField('jw-exp-qty-input');
             return;
         }
@@ -1406,13 +1521,14 @@
     };
 
     window.submitMasterJobWorkExpress = (printMode = '') => {
-        if (isSubmitting) return;
-        showJwAcceptPrompt(false);
+        if (isSubmitting) return showExpStatus('⏳ Save chal raha hai...', true);
+        if (Date.now() - (window._lastExpSubmit || 0) < 1000) return showExpStatus('⏳ 1 second baad try karein', true);
 
+        showJwAcceptPrompt(false);
         const resolvedPrint = (printMode === true) ? 'challan' : (printMode || '');
 
         if (!expressBatchItems.length) {
-            alert('Batch me kam se kam 1 Saree jodein!');
+            showExpStatus('⚠️ Batch me kam se kam 1 Saree jodein!', true);
             focusFirstField('jw-exp-maker-input');
             return;
         }
@@ -1423,7 +1539,7 @@
         const dDate = toIsoDate(document.getElementById('jw-exp-date')?.value) || getToday();
 
         if (!isDukan && !workerId) {
-            alert('Kripya list me se Worker chunein!');
+            showExpStatus('⚠️ Kripya list me se Worker chunein!', true);
             focusFirstField('jw-exp-worker-input');
             return;
         }
@@ -1431,8 +1547,32 @@
         syncExpMetaFromDom();
         const isOutstOut = isOutstationOutActive();
 
+        // 1. SNAPSHOT (Data Loss se bachne ke liye)
+        const snapSaree = JSON.parse(JSON.stringify(safeArr(getFromStore('saree_history'))));
+        const snapDukan = isDukan ? JSON.parse(JSON.stringify(safeArr(getFromStore('dukan_transfer_history')))) : null;
+        const snapSheets = (!isDukan && workerId) ? JSON.parse(JSON.stringify(safeArr(getFromStore(`jobwork_sheets_${workerId}`)))) : null;
+        const snapSeq = getFromStore(SEQ_STORE_KEY);
+        let mutatedStorage = false;
+
         isSubmitting = true;
+        window._lastExpSubmit = Date.now();
         try {
+            // Live Stock Re-Validation before mutating storage
+            const liveBatches = getActiveSourceBatches();
+            const neededByKey = new Map();
+            expressBatchItems.forEach((it) => {
+                const q = safeInt(it.qty);
+                if (q <= 0) throw new Error('Batch me 0 qty entry invalid hai!');
+                neededByKey.set(it.batchKey, (neededByKey.get(it.batchKey) || 0) + q);
+            });
+            for (const [bKey, needQty] of neededByKey.entries()) {
+                const match = liveBatches.find((b) => b.key === bKey);
+                const avail = match ? match.pcs : 0;
+                if (needQty > avail) {
+                    throw new Error(`Stock kam ho gaya! Available: ${avail} Pcs, Required: ${needQty} Pcs.`);
+                }
+            }
+
             const txnId = genId(isDukan ? 'dukan' : 'jwt');
             const now = Date.now();
             const sH = safeArr(getFromStore('saree_history')).slice();
@@ -1501,6 +1641,7 @@
                     });
                 });
 
+                mutatedStorage = true;
                 setToStore('saree_history', sH);
                 setToStore('dukan_transfer_history', dukanHist);
 
@@ -1514,7 +1655,8 @@
                 if (typeof window.renderDukanTransferTable === 'function') { try { window.renderDukanTransferTable(); } catch (_) {} }
             } else {
                 const worker = safeArr(getFromStore('jobwork_workers')).find((w) => String(w.id) === String(workerId));
-                const wName = worker ? worker.name : workerNameInput;
+                if (!worker) throw new Error('Selected worker record nahi mila!');
+                const wName = worker.name || workerNameInput;
                 const gLabel = grpLabel(activeCategory);
                 const targetLabel = `${wName} (${gLabel})`;
                 const isGayi = (movementType === 'gayi');
@@ -1628,12 +1770,13 @@
                     rowObj.transport = transport;
                     rowObj.lrNo = lrNo;
                     rowObj.designNote = designNote;
-                    if (jwNo) bumpChallanSeq(jwNo);
                 }
 
                 lastSh.rows.push(rowObj);
+                mutatedStorage = true;
                 setToStore('saree_history', sH);
                 setToStore(`jobwork_sheets_${workerId}`, sheets);
+                if (isOutstOut && jwNo) bumpChallanSeq(jwNo);
 
                 if (isOutstOut) {
                     const sareeMap = new Map();
@@ -1712,9 +1855,22 @@
             updateMovementUI();
             renderExpressBatchGrid();
 
-            const statusEl = document.getElementById('jw-exp-status-msg');
-            if (statusEl) statusEl.textContent = isDukan ? '✅ Final Out save hua — Finished Stock me jud gaya!' : '✅ Batch safalta-poorvak save ho gaya!';
+            showExpStatus(isDukan ? '✅ Final Out save hua — Finished Stock me jud gaya!' : '✅ Batch safalta-poorvak save ho gaya!', false);
             focusFirstField('jw-exp-maker-input');
+        } catch (error) {
+            console.error('[Express Save Failed]', error);
+            if (mutatedStorage) {
+                try {
+                    setToStore('saree_history', snapSaree);
+                    if (isDukan && snapDukan !== null) setToStore('dukan_transfer_history', snapDukan);
+                    if (!isDukan && workerId && snapSheets !== null) setToStore(`jobwork_sheets_${workerId}`, snapSheets);
+                    setToStore(SEQ_STORE_KEY, snapSeq);
+                } catch (_) {}
+                if (window._JWT && window._JWT.s) window._JWT.s.cachedSnapshot = null;
+                if (typeof window.invalidateJobWorkCache === 'function') window.invalidateJobWorkCache(isDukan ? null : workerId);
+                if (typeof window.invalidateSareeCalcCache === 'function') window.invalidateSareeCalcCache();
+            }
+            showExpStatus('❌ Save Fail: ' + error.message, true);
         } finally {
             isSubmitting = false;
         }
@@ -1722,7 +1878,12 @@
 
     const openPrintWin = (title, css, bodyHtml, w = 520, h = 680) => {
         const pw = window.open('', '', `width=${w},height=${h}`);
-        if (!pw) return alert('Popup block hai! Kripya browser me allow karein.');
+        if (!pw) {
+            console.warn('[jobwork-express] Print popup blocked by browser.');
+            showExpStatus('⚠️ Popup block hai! Kripya browser me allow karein.', true);
+            return;
+        }
+        pw.document.open();
         pw.document.write(`<html><head><title>${esc(title)}</title><style>${css}</style></head><body>${bodyHtml}<script>window.onload=function(){window.focus();window.print();setTimeout(()=>window.close(),600);};<\/script></body></html>`);
         pw.document.close();
     };
@@ -1833,19 +1994,19 @@
     };
 
     const printOutstationChallan = (c) => {
-        if (!c || !c.sareeRows || !c.sareeRows.length) return alert('Print karne ke liye data nahi hai.');
+        if (!c || !c.sareeRows || !c.sareeRows.length) return showExpStatus('⚠️ Print karne ke liye data nahi hai.', true);
         const p = buildOutstationChallanParts(c);
         openPrintWin(`Challan-${c.jwNo}`, `@page { size: A5 portrait; margin: 7mm; } body { margin: 0; padding: 6px; } ${p.css}`, p.html, 680, 760);
     };
 
     const printOutstationPackingSlip = (c) => {
-        if (!c) return alert('Packing slip ke liye data nahi hai.');
+        if (!c) return showExpStatus('⚠️ Packing slip ke liye data nahi hai.', true);
         const p = buildOutstationSlipParts(c);
         openPrintWin(`PackingSlip-${c.jwNo}`, `@page { size: A6 portrait; margin: 4mm; } body { margin: 0; padding: 4mm; } ${p.css}`, p.html, 420, 560);
     };
 
     const printOutstationBoth = (c) => {
-        if (!c || !c.sareeRows || !c.sareeRows.length) return alert('Print karne ke liye data nahi hai.');
+        if (!c || !c.sareeRows || !c.sareeRows.length) return showExpStatus('⚠️ Print karne ke liye data nahi hai.', true);
         const ch = buildOutstationChallanParts(c);
         const sl = buildOutstationSlipParts(c);
         const css = `
@@ -1862,14 +2023,14 @@
 
     window.printLastSavedJobWorkPackingSlip = () => {
         if (!lastSavedExpressBatch || !lastSavedExpressBatch.isOutstation) {
-            return alert('Pehle Outstation Challan save karein!');
+            return showExpStatus('⚠️ Pehle Outstation Challan save karein!', true);
         }
         printOutstationPackingSlip(lastSavedExpressBatch);
     };
 
     window.printLastSavedJobWorkChallan = () => {
         if (!lastSavedExpressBatch || !lastSavedExpressBatch.items.length) {
-            return alert('Print karne ke liye koi recent batch entry nahi mili!');
+            return showExpStatus('⚠️ Print karne ke liye koi recent batch entry nahi mili!', true);
         }
         if (lastSavedExpressBatch.isOutstation) {
             printOutstationChallan(lastSavedExpressBatch);
