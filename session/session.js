@@ -2,12 +2,17 @@
    SIMPLICITY ERP - HIGH-SCALE FINANCIAL YEAR SESSION CONTROLLER
    File: session/session.js • Developed by Farhan Jawed
    Architecture: Clean Direct Sessions • Auto-Injected Modals • Atomic RPC Delete
+   Security & PWA: No Backdoor Passwords • Async Locks • Inline PWA Confirmations
 ============================================================================ */
 
 (() => {
     'use strict';
 
     const DEFAULT_BOOTSTRAP_SESSION = '2026-2027';
+
+    // Async Double-Click / Re-entry Locks
+    let isDeletingSession = false;
+    let isSwitchingSession = false;
 
     const hasLoggedInUser = () => {
         try {
@@ -69,6 +74,26 @@
         return window.supabaseClient || window.CloudEngine?.supabase || window.supabase || null;
     };
 
+    const setDeleteStatus = (msg, isError = true) => {
+        const el = document.getElementById('session-del-status');
+        if (!el) return;
+        if (!msg) {
+            el.style.display = 'none';
+            el.textContent = '';
+            return;
+        }
+        el.style.display = 'block';
+        el.style.color = isError ? '#b91c1c' : '#15803d';
+        el.style.background = isError ? '#fee2e2' : '#dcfce7';
+        el.style.borderColor = isError ? '#fca5a5' : '#86efac';
+        el.textContent = msg;
+    };
+
+    const hideDeleteConfirmBar = () => {
+        const bar = document.getElementById('session-del-confirm-bar');
+        if (bar) bar.style.display = 'none';
+    };
+
     const ensureSessionModals = () => {
         if (!document.body) return;
 
@@ -122,7 +147,15 @@
                                         <input type="password" id="session-del-password" placeholder="Password" style="width:100%; padding:7px; border:1px solid #fca5a5; border-radius:6px; margin-top:3px; box-sizing:border-box;">
                                     </div>
                                 </div>
-                                <button type="button" onclick="confirmAndDeleteSessionWithAuth()" style="width:100%; background:#dc2626; color:#ffffff; border:none; padding:9px; border-radius:7px; font-weight:800; font-size:13px; cursor:pointer;">
+                                <div id="session-del-status" style="display:none; font-size:12px; font-weight:700; padding:7px 10px; border-radius:6px; border:1px solid #fca5a5; margin-bottom:8px;"></div>
+                                <div id="session-del-confirm-bar" style="display:none; background:#ffffff; border:1.5px solid #dc2626; border-radius:7px; padding:10px; margin-bottom:8px;">
+                                    <div id="session-del-confirm-text" style="font-size:12px; font-weight:800; color:#991b1b; margin-bottom:8px;"></div>
+                                    <div style="display:flex; gap:8px;">
+                                        <button type="button" id="session-del-confirm-yes" style="flex:1; background:#dc2626; color:#ffffff; border:none; padding:7px; border-radius:6px; font-weight:800; font-size:12px; cursor:pointer;">Haan, Delete Karein</button>
+                                        <button type="button" id="session-del-confirm-no" style="flex:1; background:#f1f5f9; color:#334155; border:1px solid #cbd5e1; padding:7px; border-radius:6px; font-weight:700; font-size:12px; cursor:pointer;">Cancel</button>
+                                    </div>
+                                </div>
+                                <button type="button" id="session-del-trigger-btn" onclick="confirmAndDeleteSessionWithAuth()" style="width:100%; background:#dc2626; color:#ffffff; border:none; padding:9px; border-radius:7px; font-weight:800; font-size:13px; cursor:pointer;">
                                     🗑️ Session Delete Karein
                                 </button>
                             </div>
@@ -130,6 +163,40 @@
                     </div>
                 </div>`;
             document.body.insertAdjacentHTML('beforeend', closingHtml);
+
+            ['session-delete-select', 'session-del-user-id', 'session-del-password'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.addEventListener('input', () => {
+                        setDeleteStatus('');
+                        hideDeleteConfirmBar();
+                    });
+                    el.addEventListener('change', () => {
+                        setDeleteStatus('');
+                        hideDeleteConfirmBar();
+                    });
+                }
+            });
+
+            const noBtn = document.getElementById('session-del-confirm-no');
+            if (noBtn) {
+                noBtn.addEventListener('click', () => {
+                    hideDeleteConfirmBar();
+                    setDeleteStatus('');
+                });
+            }
+
+            if (!window.__sessionEscBound) {
+                window.__sessionEscBound = true;
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') {
+                        const m = document.getElementById('session-closing-modal');
+                        if (m && m.style.display !== 'none') {
+                            closeSessionClosingModal();
+                        }
+                    }
+                });
+            }
         }
 
         if (!document.getElementById('session-transfer-modal')) {
@@ -325,15 +392,12 @@
     };
 
     const switchAppFinancialSession = async (targetSession) => {
+        if (isSwitchingSession) return;
         const activeSess = getActiveFinancialSession();
-        if (!targetSession || targetSession === activeSess) return;
+        const cleanTarget = String(targetSession || '').replace(/['"]+/g, '').trim();
+        if (!cleanTarget || cleanTarget === activeSess) return;
 
-        if (!confirm(`Kya aap Session badal kar '${targetSession}' me jana chahte hain?`)) {
-            populateSessionDropdown();
-            return;
-        }
-
-        const cleanTarget = String(targetSession).replace(/['"]+/g, '').trim();
+        isSwitchingSession = true;
         const uId = getEffectiveUserId();
 
         try {
@@ -358,6 +422,7 @@
             }, 250);
         } catch (err) {
             console.error('[SessionSwitch] Error:', err);
+            isSwitchingSession = false;
             window.location.reload();
         }
     };
@@ -366,6 +431,9 @@
         ensureSessionModals();
         const modal = document.getElementById('session-closing-modal');
         if (!modal) return;
+
+        setDeleteStatus('');
+        hideDeleteConfirmBar();
 
         const curDisplay = document.getElementById('session-current-display');
         const cur = getActiveFinancialSession();
@@ -401,6 +469,8 @@
     const closeSessionClosingModal = () => {
         const modal = document.getElementById('session-closing-modal');
         if (!modal) return;
+        setDeleteStatus('');
+        hideDeleteConfirmBar();
         modal.style.display = 'none';
     };
 
@@ -410,14 +480,18 @@
 
         try {
             await new Promise((resolve) => {
-                const req = window.indexedDB.open('SimplicityERP_DB', 2);
+                // Open without hardcoded version so it matches whatever version exists
+                const req = window.indexedDB.open('SimplicityERP_DB');
                 req.onsuccess = (e) => {
                     const dbase = e.target.result;
                     try {
                         const storeNames = [];
                         if (dbase.objectStoreNames.contains('app_store')) storeNames.push('app_store');
                         if (dbase.objectStoreNames.contains('sync_queue')) storeNames.push('sync_queue');
-                        if (!storeNames.length) return resolve();
+                        if (!storeNames.length) {
+                            try { dbase.close(); } catch (_) {}
+                            return resolve();
+                        }
 
                         const tx = dbase.transaction(storeNames, 'readwrite');
 
@@ -451,9 +525,16 @@
                             };
                         }
 
-                        tx.oncomplete = () => resolve();
-                        tx.onerror = () => resolve();
+                        tx.oncomplete = () => {
+                            try { dbase.close(); } catch (_) {}
+                            resolve();
+                        };
+                        tx.onerror = () => {
+                            try { dbase.close(); } catch (_) {}
+                            resolve();
+                        };
                     } catch (_) {
+                        try { dbase.close(); } catch (_) {}
                         resolve();
                     }
                 };
@@ -462,79 +543,60 @@
         } catch (_) {}
     };
 
-    /* ========================================================================
-       🗑️ CLEAN ATOMIC SESSION DELETE (CLOUD RPC + INDEXEDDB + DELTA CURSORS)
-       ======================================================================== */
-    const confirmAndDeleteSessionWithAuth = async () => {
-        const delSel = document.getElementById('session-delete-select');
-        const targetSess = delSel ? delSel.value : '';
-        const uInp = String(document.getElementById('session-del-user-id')?.value || '').trim().toLowerCase();
-        const pInp = String(document.getElementById('session-del-password')?.value || '').trim();
+    const executeConfirmedSessionDelete = async (uId, targetSess) => {
+        if (isDeletingSession) return false;
+        isDeletingSession = true;
 
-        if (!targetSess) return alert('Pehle delete karne ke liye session chunein!');
-        if (!uInp || !pInp) return alert('User ID aur Password daalna zaroori hai!');
-
-        const uId = getEffectiveUserId();
-
-        let authenticated = false;
-        try {
-            const authRaw = localStorage.getItem('app_active_session_auth');
-            if (authRaw) {
-                const s = JSON.parse(authRaw);
-                const matchId = (s.id && String(s.id).toLowerCase() === uInp) || (uInp === uId.toLowerCase());
-                if (matchId && String(s.pass).trim() === pInp) {
-                    authenticated = true;
-                }
-            }
-        } catch (_) {}
-
-        if (!authenticated && (uInp === 'farhan' || uInp === 'admin' || uInp === '10001')) {
-            authenticated = (pInp === '97438090641154' || pInp === '1234');
-        }
-
-        if (!authenticated) {
-            return alert('❌ Galat User ID ya Password! Session delete nahi hoga.');
-        }
-
-        let sessions = getAppSessions();
-        if (sessions.length <= 1) {
-            return alert('❌ Aakhri bacha hua Session delete nahi ho sakta!');
-        }
-
-        if (!confirm(`⚠️ KYA AAP SACH ME '${targetSess}' KA PURA DATA DELETE KARNA CHAHTE HAIN?\nIs saal ka hisab Cloud aur Local dono se hamesha ke liye mit jayega!`)) {
-            return;
+        const yesBtn = document.getElementById('session-del-confirm-yes');
+        if (yesBtn) {
+            yesBtn.disabled = true;
+            yesBtn.textContent = 'Deleting...';
         }
 
         try {
-            if (typeof window.detachSupabaseRealtime === 'function') {
-                window.detachSupabaseRealtime();
-            }
-
-            sessions = sessions.filter((s) => s !== targetSess);
+            let sessions = getAppSessions().filter((s) => s !== targetSess);
             if (sessions.length === 0) sessions = [DEFAULT_BOOTSTRAP_SESSION];
-            localStorage.setItem(`${uId}_app_sessions_list`, JSON.stringify(sessions));
 
             let nextActive = getActiveFinancialSession();
             if (nextActive === targetSess || !sessions.includes(nextActive)) {
                 nextActive = sessions[sessions.length - 1] || DEFAULT_BOOTSTRAP_SESSION;
-                localStorage.setItem(`${uId}_app_active_session`, nextActive);
             }
 
-            localStorage.removeItem(`${uId}_app_deleted_sessions`);
-
+            // 1. Cloud RPC first (if Supabase is active) so local & cloud never desync
             const sb = getSupabase();
-            if (sb && typeof sb.rpc === 'function' && navigator.onLine) {
+            const hasCloudRpc = Boolean(sb && typeof sb.rpc === 'function');
+            if (hasCloudRpc) {
+                if (!navigator.onLine) {
+                    setDeleteStatus('⚠️ Internet band hai! Cloud session delete karne ke liye online hona zaroori hai.', true);
+                    return false;
+                }
+
                 const { data: rpcRes, error: rpcErr } = await sb.rpc('delete_user_session_data', {
                     p_user_id: uId,
                     p_session: targetSess
                 });
                 if (rpcErr || (rpcRes && rpcRes.ok === false)) {
-                    console.warn('[SessionDelete RPC warning]:', rpcErr || rpcRes);
+                    console.error('[SessionDelete RPC Error]:', rpcErr || rpcRes);
+                    setDeleteStatus(`❌ Cloud delete fail hua: ${rpcErr?.message || rpcRes?.error || 'RPC Error'}`, true);
+                    return false;
                 }
+            }
+
+            if (typeof window.detachSupabaseRealtime === 'function') {
+                window.detachSupabaseRealtime();
+            }
+
+            // 2. Update local session lists & sync updated list to Cloud
+            localStorage.setItem(`${uId}_app_sessions_list`, JSON.stringify(sessions));
+            localStorage.setItem(`${uId}_app_active_session`, nextActive);
+            localStorage.removeItem(`${uId}_app_deleted_sessions`);
+
+            if (hasCloudRpc) {
                 await saveToAppStoreSafe(`${uId}_app_sessions_list`, sessions, nextActive);
                 await saveToAppStoreSafe(`${uId}_app_active_session`, nextActive, nextActive);
             }
 
+            // 3. Wipe localStorage session keys & delta cursors
             const keysToRemove = [];
             const sessPrefix = `${uId}_${targetSess}_`;
             const cursorSuffix = `_${uId}_${targetSess}`;
@@ -547,18 +609,96 @@
             }
             keysToRemove.forEach((k) => localStorage.removeItem(k));
 
+            // 4. Wipe IndexedDB session keys
             await clearSessionFromIndexedDB(uId, targetSess);
 
             if (typeof window.clearMemoryCache === 'function') {
                 window.clearMemoryCache();
             }
 
-            alert(`✅ Session '${targetSess}' Cloud aur Local dono se safalata-poorvak delete ho gaya!`);
-            window.location.reload();
+            hideDeleteConfirmBar();
+            setDeleteStatus(`✅ Session '${targetSess}' Cloud aur Local dono se delete ho gaya! Reload ho raha hai...`, false);
+            setTimeout(() => window.location.reload(), 450);
+            return true;
         } catch (err) {
             console.error('[SessionDelete] Error:', err);
-            window.location.reload();
+            setDeleteStatus('❌ Delete ke dauran error aaya. Dobara koshish karein.', true);
+            return false;
+        } finally {
+            isDeletingSession = false;
+            if (yesBtn) {
+                yesBtn.disabled = false;
+                yesBtn.textContent = 'Haan, Delete Karein';
+            }
         }
+    };
+
+    /* ========================================================================
+       🗑️ CLEAN ATOMIC SESSION DELETE (NO BACKDOOR, PWA INLINE CONFIRM, RPC)
+       ======================================================================== */
+    const confirmAndDeleteSessionWithAuth = async () => {
+        if (isDeletingSession) return false;
+
+        const delSel = document.getElementById('session-delete-select');
+        const targetSess = delSel ? delSel.value : '';
+        const uInp = String(document.getElementById('session-del-user-id')?.value || '').trim().toLowerCase();
+        const pInp = String(document.getElementById('session-del-password')?.value || '').trim();
+
+        if (!targetSess) {
+            console.warn('[SessionDelete] Pehle delete karne ke liye session chunein!');
+            setDeleteStatus('⚠️ Pehle delete karne ke liye session chunein!', true);
+            return false;
+        }
+        if (!uInp || !pInp) {
+            console.warn('[SessionDelete] User ID aur Password daalna zaroori hai!');
+            setDeleteStatus('⚠️ User ID aur Password daalna zaroori hai!', true);
+            return false;
+        }
+
+        const uId = getEffectiveUserId();
+
+        // Strict auth via active logged-in session only (no hardcoded backdoors)
+        let authenticated = false;
+        try {
+            const authRaw = localStorage.getItem('app_active_session_auth');
+            if (authRaw) {
+                const s = JSON.parse(authRaw);
+                const matchId = (s.id && String(s.id).toLowerCase() === uInp) || (uInp === uId.toLowerCase());
+                const storedPass = (s.pass !== undefined && s.pass !== null) ? String(s.pass).trim() : '';
+                if (matchId && storedPass !== '' && storedPass === pInp) {
+                    authenticated = true;
+                }
+            }
+        } catch (_) {}
+
+        if (!authenticated) {
+            console.warn('[SessionDelete] Galat User ID ya Password!');
+            setDeleteStatus('❌ Galat User ID ya Password! Session delete nahi hoga.', true);
+            return false;
+        }
+
+        const sessions = getAppSessions();
+        if (sessions.length <= 1) {
+            console.warn('[SessionDelete] Aakhri bacha hua Session delete nahi ho sakta!');
+            setDeleteStatus('❌ Aakhri bacha hua Session delete nahi ho sakta!', true);
+            return false;
+        }
+
+        // PWA-Safe Inline 2-Step Confirmation (replaces native window.confirm)
+        const confirmBar = document.getElementById('session-del-confirm-bar');
+        const confirmTxt = document.getElementById('session-del-confirm-text');
+        const yesBtn = document.getElementById('session-del-confirm-yes');
+
+        if (confirmBar && confirmTxt && yesBtn) {
+            setDeleteStatus('');
+            confirmTxt.textContent = `⚠️ KYA AAP SACH ME '${targetSess}' KA PURA DATA DELETE KARNA CHAHTE HAIN? Cloud aur Local dono se hamesha ke liye mit jayega!`;
+            confirmBar.style.display = 'block';
+            yesBtn.onclick = () => executeConfirmedSessionDelete(uId, targetSess);
+            yesBtn.focus();
+            return true;
+        }
+
+        return await executeConfirmedSessionDelete(uId, targetSess);
     };
 
     const sessionAPI = {
