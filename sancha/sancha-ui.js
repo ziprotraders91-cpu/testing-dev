@@ -1,18 +1,30 @@
 /* ============================================================================
    SIMPLICITY ERP - SANCHA (TANI & CHUKKA) STOCK & PASSBOOK (TALLY WHITE & GOLD)
    File: sancha/sancha-ui.js • Developed by Farhan Jawed
-   (Maker-Wise Stock & Passbook | 2-Option Hub (Tani/Chukka) -> List -> Passbook)
+   (Maker-Wise Stock & Passbook | PWA Confirm Modal | Transactional Locks & Rollback)
 ============================================================================ */
 
 (() => {
     'use strict';
+
+    if (window.__sanchaUILoaded) {
+        console.warn('[SanchaUI] Already loaded — skip duplicate');
+        return;
+    }
+    window.__sanchaUILoaded = true;
 
     window.currentSanchaCategory = 'tani'; // 'tani' | 'chukka'
     window.currentSanchaKarkhanaFilter = 'all';
     window.currentPassbookSanchaItem = '';
     window.currentPassbookSanchaPerson = null; // null = all makers, string = specific maker
 
-    // View State: 'hub' (Tani vs Chukka) | 'list' (Items) | 'passbook' (Inline Ledger)
+    // Transactional Save / Action Locks
+    let isSavingSancha = false;
+    let isSavingSanchaEdit = false;
+    let isTransferringSanchaUI = false;
+    let isDeletingSancha = false;
+
+    // View State: 'hub' (Tani/Chukka) | 'list' (Items) | 'passbook' (Inline Ledger)
     let sanchaViewMode = 'hub';
     let sanchaHubActiveIdx = 0; // 0 = tani, 1 = chukka
     let sanchaOpenedAt = 0;
@@ -28,6 +40,7 @@
     const SANCHA_STOCK_PAGE_SIZE = 15;
     let currentSanchaFilteredRowsCache = [];
     let sanchaListActiveIdx = 0;
+    let searchDebounceTimer = null;
 
     const esc = (s) => {
         if (typeof window.sanitizeHTML === 'function') return window.sanitizeHTML(s);
@@ -39,6 +52,30 @@
     const safeNum = (val, fallback = 0) => {
         const n = parseFloat(val);
         return isNaN(n) || !isFinite(n) ? fallback : n;
+    };
+
+    const safeArr = (val) => (typeof window.safeArray === 'function' ? window.safeArray(val) : (Array.isArray(val) ? val : []));
+
+    const getSanchaEntryAaya = (r) => {
+        if (!r) return 0;
+        if (r.aaya !== undefined && r.aaya !== null && r.aaya !== '') return safeNum(r.aaya);
+        if (safeNum(r.gaya) > 0) return 0;
+        const t = String(r.type || '');
+        if (t.includes('Wapas') || t.includes('Jama') || t.includes('Return') || t.includes('Khareed') || t.includes('Inward') || t.includes('Opening')) {
+            return safeNum(r.qty || r.wazan);
+        }
+        return 0;
+    };
+
+    const getSanchaEntryGaya = (r) => {
+        if (!r) return 0;
+        if (r.gaya !== undefined && r.gaya !== null && r.gaya !== '') return safeNum(r.gaya);
+        if (safeNum(r.aaya) > 0) return 0;
+        const t = String(r.type || '');
+        if (t.includes('Khareed') || t.includes('Inward') || t.includes('Opening') || t.includes('Wapas') || t.includes('Jama') || t.includes('Return')) {
+            return 0;
+        }
+        return safeNum(r.qty || r.wazan);
     };
 
     const normPerson = (p) => {
@@ -354,6 +391,45 @@
                 background: #fffdf5 !important;
                 box-shadow: 0 0 0 2px rgba(242, 183, 29, 0.22);
             }
+            .sancha-modal-btn {
+                background: #ffffff;
+                color: #1f2937;
+                border: 1px solid #d1d5db;
+                border-radius: 5px;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 700;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .sancha-modal-btn:hover {
+                border-color: #d9a425;
+                background: #fef9ea;
+            }
+            .sancha-modal-btn-gold {
+                background: #f2b71d;
+                color: #1f2937;
+                border: 1px solid #d9a425;
+                border-radius: 5px;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 800;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .sancha-modal-btn-gold:hover { background: #e5aa12; }
+            .sancha-modal-btn-danger {
+                background: #dc2626;
+                color: #ffffff;
+                border: 1px solid #b91c1c;
+                border-radius: 5px;
+                padding: 6px 14px;
+                font-size: 12px;
+                font-weight: 800;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .sancha-modal-btn-danger:hover { background: #b91c1c; }
         `;
         document.head.appendChild(style);
     };
@@ -366,7 +442,7 @@
         if (typeof window.getSanchaUniqueStockRows === 'function') {
             rows = window.getSanchaUniqueStockRows(cat, window.currentSanchaKarkhanaFilter);
         } else {
-            const rawStock = (window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [])
+            const rawStock = safeArr(window.getStore?.('sancha_items'))
                 .filter((s) => String(s?.category || 'tani').toLowerCase() === cat);
             const uniqueNames = [...new Set(rawStock.map((s) => (s?.name ? s.name.trim() : '')).filter(Boolean))];
             uniqueNames.forEach((name) => {
@@ -483,6 +559,26 @@
         switchSanchaCategory(cat);
     };
 
+    const updateSanchaModuleHeaderTitle = () => {
+        const sec = document.getElementById('sancha-section');
+        if (!sec) return;
+        const headerTitle = sec.querySelector('.module-header h2');
+        const headerBackBtn = sec.querySelector('.module-header .back-btn');
+        const catTitle = (window.currentSanchaCategory === 'chukka') ? 'Chukka' : 'Tani';
+        const makerSuffix = window.currentPassbookSanchaPerson ? ` · ${window.currentPassbookSanchaPerson}` : '';
+
+        if (headerTitle) {
+            if (sanchaViewMode === 'hub') headerTitle.textContent = 'Sancha Stock (Tani & Chukka)';
+            else if (sanchaViewMode === 'list') headerTitle.textContent = `Sancha Stock: ${catTitle}`;
+            else headerTitle.textContent = `Sancha Passbook: ${window.currentPassbookSanchaItem || ''}${makerSuffix} (${catTitle})`;
+        }
+        if (headerBackBtn) {
+            if (sanchaViewMode === 'hub') headerBackBtn.textContent = window.__slReturnToStockSummary ? '← [Esc] Stock Summary' : '← Dashboard';
+            else if (sanchaViewMode === 'list') headerBackBtn.textContent = '← [Esc] Tani / Chukka';
+            else headerBackBtn.textContent = `← [Esc] ${catTitle} List`;
+        }
+    };
+
     const setSanchaViewMode = (mode) => {
         sanchaViewMode = mode; // 'hub' | 'list' | 'passbook'
         const sec = document.getElementById('sancha-section');
@@ -500,8 +596,6 @@
         const mainPager = document.getElementById('sancha-stock-pagination-controls');
         const mainStrip = document.getElementById('sancha-main-status-strip');
         const passView = document.getElementById('sancha-inline-passbook-view');
-        const headerTitle = sec.querySelector('.module-header h2');
-        const headerBackBtn = sec.querySelector('.module-header .back-btn');
 
         const isHub = (mode === 'hub');
         const isList = (mode === 'list');
@@ -514,22 +608,11 @@
         if (filterPanel) filterPanel.style.display = isList ? 'flex' : 'none';
         if (addForm && !isList) addForm.style.display = 'none';
         if (mainTbl) mainTbl.style.display = isList ? 'block' : 'none';
-        if (mainPager) mainPager.style.display = isList ? 'flex' : 'none';
+        if (mainPager) mainPager.style.display = (isList && currentSanchaFilteredRowsCache.length) ? 'flex' : 'none';
         if (mainStrip) mainStrip.style.display = isList ? 'flex' : 'none';
         if (passView) passView.style.display = isPass ? 'block' : 'none';
 
-        const catTitle = (window.currentSanchaCategory === 'chukka') ? 'Chukka' : 'Tani';
-        const makerSuffix = window.currentPassbookSanchaPerson ? ` · ${window.currentPassbookSanchaPerson}` : '';
-        if (headerTitle) {
-            if (isHub) headerTitle.textContent = 'Sancha Stock (Tani & Chukka)';
-            else if (isList) headerTitle.textContent = `Sancha Stock: ${catTitle}`;
-            else headerTitle.textContent = `Sancha Passbook: ${window.currentPassbookSanchaItem || ''}${makerSuffix} (${catTitle})`;
-        }
-        if (headerBackBtn) {
-            if (isHub) headerBackBtn.textContent = window.__slReturnToStockSummary ? '← [Esc] Stock Summary' : '← Dashboard';
-            else if (isList) headerBackBtn.textContent = '← [Esc] Tani / Chukka';
-            else headerBackBtn.textContent = `← [Esc] ${catTitle} List`;
-        }
+        updateSanchaModuleHeaderTitle();
     };
 
     const handleSanchaBackStep = () => {
@@ -601,7 +684,7 @@
         if (typeof window.getKarkhanasSafe === 'function') {
             karkhanas = window.getKarkhanasSafe();
         } else {
-            karkhanas = window.safeArray ? window.safeArray(window.getStore('karkhana_list')) : [];
+            karkhanas = safeArr(window.getStore?.('karkhana_list'));
         }
         if (!karkhanas.length) {
             karkhanas = [{ id: 'k_main', name: 'Main Godown', isDefault: true }];
@@ -632,7 +715,7 @@
         if (typeof window.getKarkhanasSafe === 'function') {
             karkhanas = window.getKarkhanasSafe();
         } else {
-            karkhanas = window.safeArray ? window.safeArray(window.getStore('karkhana_list')) : [];
+            karkhanas = safeArr(window.getStore?.('karkhana_list'));
         }
         if (!karkhanas.length) karkhanas = [{ id: 'k_main', name: 'Main Godown' }];
 
@@ -647,13 +730,18 @@
         if (searchInp && !searchInp.dataset.bound) {
             searchInp.dataset.bound = 'true';
             searchInp.addEventListener('input', () => {
-                sanchaStockCurrentPage = 1;
-                sanchaListActiveIdx = 0;
-                renderSanchaTable();
+                clearTimeout(searchDebounceTimer);
+                searchDebounceTimer = setTimeout(() => {
+                    sanchaStockCurrentPage = 1;
+                    sanchaListActiveIdx = 0;
+                    renderSanchaTable();
+                }, 100);
             });
             searchInp.addEventListener('keydown', (e) => {
                 if (e.key === 'ArrowDown' || e.key === 'Enter') {
                     e.preventDefault();
+                    clearTimeout(searchDebounceTimer);
+                    renderSanchaTable();
                     searchInp.blur();
                     if (e.key === 'Enter' && currentSanchaFilteredRowsCache.length > 0) {
                         const pageRows = getSanchaCurrentPageRows();
@@ -685,7 +773,7 @@
     };
 
     /* ========================================================================
-       4. INWARD INVENTORY PURCHASE ENGINE (MAKER-WISE SEPARATE)
+       4. INWARD INVENTORY PURCHASE ENGINE (MAKER-WISE + LOCK & ROLLBACK)
        ======================================================================== */
     const toggleAddSanchaForm = () => {
         if (sanchaViewMode !== 'list') {
@@ -707,6 +795,13 @@
             else if (rTani) rTani.checked = true;
 
             toggleSanchaFormOptions();
+
+            const sel = document.getElementById('sancha-select-existing');
+            const rNew = document.getElementById('sancha-type-new');
+            if (sel && sel.options.length === 0 && rNew && !rNew.checked) {
+                rNew.checked = true;
+                toggleSanchaFormOptions();
+            }
 
             setTimeout(() => {
                 const isNew = document.getElementById('sancha-type-new')?.checked;
@@ -737,7 +832,7 @@
 
         sel.innerHTML = '';
         const currentCat = window.currentSanchaCategory || 'tani';
-        const list = (window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [])
+        const list = safeArr(window.getStore?.('sancha_items'))
             .filter((s) => {
                 const cat = s.category || 'tani';
                 return cat.toLowerCase() === currentCat.toLowerCase();
@@ -757,98 +852,125 @@
     };
 
     const saveNewSanchaStock = () => {
-        const isNew = document.getElementById('sancha-type-new')
-            ? document.getElementById('sancha-type-new').checked
-            : true;
+        if (isSavingSancha) return;
+        isSavingSancha = true;
 
-        const nameInp = isNew ? document.getElementById('sancha-new-name') : document.getElementById('sancha-select-existing');
-        const name = String(nameInp?.value || '').trim();
+        try {
+            const isNew = document.getElementById('sancha-type-new')
+                ? document.getElementById('sancha-type-new').checked
+                : true;
 
-        const date = document.getElementById('sancha-date')?.value || getToday();
-        const qtyInp = document.getElementById('sancha-qty');
-        const qty = safeNum(qtyInp?.value);
-        const personRaw = String(document.getElementById('sancha-person')?.value || '').trim();
-        const person = normPerson(personRaw);
+            const nameInp = isNew ? document.getElementById('sancha-new-name') : document.getElementById('sancha-select-existing');
+            const name = String(nameInp?.value || '').trim();
 
-        let category = window.currentSanchaCategory || 'tani';
-        const checkedCatRadio = document.querySelector('input[name="sancha-cat"]:checked');
-        if (checkedCatRadio && checkedCatRadio.value) {
-            category = String(checkedCatRadio.value).toLowerCase() === 'chukka' ? 'chukka' : 'tani';
+            const date = document.getElementById('sancha-date')?.value || getToday();
+            const qtyInp = document.getElementById('sancha-qty');
+            const rawQty = safeNum(qtyInp?.value);
+            const personRaw = String(document.getElementById('sancha-person')?.value || '').trim();
+            const person = normPerson(personRaw);
+
+            let category = window.currentSanchaCategory || 'tani';
+            const checkedCatRadio = document.querySelector('input[name="sancha-cat"]:checked');
+            if (checkedCatRadio && checkedCatRadio.value) {
+                category = String(checkedCatRadio.value).toLowerCase() === 'chukka' ? 'chukka' : 'tani';
+            }
+
+            if (!name) return alert('Sancha Item ka naam zaroori hai!');
+            if (rawQty <= 0) return alert('Wazan (Qty Kg me) daalein!');
+            const qty = Number(rawQty.toFixed(2));
+
+            const targetKid = (window.currentSanchaKarkhanaFilter !== 'all') ? window.currentSanchaKarkhanaFilter : 'k_main';
+
+            const snapStock = JSON.parse(JSON.stringify(safeArr(window.getStore?.('sancha_items'))));
+            const snapHist = JSON.parse(JSON.stringify(safeArr(window.getStore?.('sancha_history'))));
+
+            try {
+                const list = safeArr(window.getStore?.('sancha_items'));
+                const nowTs = Date.now();
+                const uidSuffix = Math.random().toString(36).slice(2, 6);
+
+                // Match Item + Maker (Person) + Category + Godown so each Maker has separate stock
+                const item = list.find((x) => {
+                    if (!x || !x.name) return false;
+                    const cat = x.category || 'tani';
+                    const matchK = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
+                    const xPer = normPerson(x.person).toLowerCase();
+                    return x.name.trim().toLowerCase() === name.toLowerCase() &&
+                           cat.toLowerCase() === category.toLowerCase() &&
+                           matchK &&
+                           xPer === person.toLowerCase();
+                });
+
+                if (item) {
+                    item.aaya = safeNum((safeNum(item.aaya) + qty).toFixed(2));
+                    item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
+                    item.person = person || '-';
+                    item.date = date;
+                } else {
+                    list.push({
+                        id: `sancha_${nowTs}_${uidSuffix}`,
+                        date,
+                        name,
+                        category,
+                        aaya: qty,
+                        gaya: 0,
+                        bacha: qty,
+                        person: person || '-',
+                        karkhanaId: targetKid,
+                        timestamp: nowTs
+                    });
+                }
+
+                if (typeof window.setStore === 'function') {
+                    window.setStore('sancha_items', list);
+                }
+
+                const hist = safeArr(window.getStore?.('sancha_history'));
+                hist.push({
+                    id: `shist_${nowTs}_${uidSuffix}`,
+                    date,
+                    name,
+                    category,
+                    person: person || '-',
+                    kariger: person || 'Factory Inward',
+                    type: `Khareed / Inward (${category === 'tani' ? 'Tani' : 'Chukka'})`,
+                    aaya: qty,
+                    gaya: 0,
+                    karkhanaId: targetKid,
+                    isOpening: false,
+                    timestamp: nowTs
+                });
+
+                if (typeof window.setStore === 'function') {
+                    window.setStore('sancha_history', hist);
+                }
+
+                const newNameEl = document.getElementById('sancha-new-name');
+                if (newNameEl) newNameEl.value = '';
+                if (qtyInp) qtyInp.value = '';
+                const personEl = document.getElementById('sancha-person');
+                if (personEl) personEl.value = '';
+
+                triggerSanchaCacheInvalidation();
+                toggleAddSanchaForm();
+                switchSanchaCategory(category);
+                if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+                alert(`✅ Sancha (${category === 'tani' ? 'Tani' : 'Chukka'})${person ? ` · ${person}` : ''} Stock me jama ho gaya!`);
+            } catch (err) {
+                console.error('[SanchaSave]', err);
+                try {
+                    if (typeof window.setStore === 'function') {
+                        window.setStore('sancha_items', snapStock);
+                        window.setStore('sancha_history', snapHist);
+                    }
+                } catch (rbErr) {
+                    console.error('[SanchaSave Rollback]', rbErr);
+                }
+                alert('❌ Save fail ho gaya — purana stock surakshit hai!');
+            }
+        } finally {
+            isSavingSancha = false;
         }
-
-        if (!name) return alert('Sancha Item ka naam zaroori hai!');
-        if (qty <= 0) return alert('Wazan (Qty Kg me) daalein!');
-
-        const targetKid = (window.currentSanchaKarkhanaFilter !== 'all') ? window.currentSanchaKarkhanaFilter : 'k_main';
-        const list = window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [];
-
-        // Match Item + Maker (Person) + Category + Godown so each Maker has separate stock
-        const item = list.find((x) => {
-            if (!x || !x.name) return false;
-            const cat = x.category || 'tani';
-            const matchK = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-            const xPer = normPerson(x.person).toLowerCase();
-            return x.name.toLowerCase() === name.toLowerCase() &&
-                   cat.toLowerCase() === category.toLowerCase() &&
-                   matchK &&
-                   xPer === person.toLowerCase();
-        });
-
-        if (item) {
-            item.aaya = safeNum((safeNum(item.aaya) + qty).toFixed(2));
-            item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
-            item.person = person || '-';
-            item.date = date;
-        } else {
-            list.push({
-                id: `sancha_${Date.now()}`,
-                date,
-                name,
-                category,
-                aaya: qty,
-                gaya: 0,
-                bacha: qty,
-                person: person || '-',
-                karkhanaId: targetKid,
-                timestamp: Date.now()
-            });
-        }
-
-        if (typeof window.setStore === 'function') {
-            window.setStore('sancha_items', list);
-        }
-
-        const hist = window.safeArray ? window.safeArray(window.getStore('sancha_history')) : [];
-        hist.push({
-            id: `shist_${Date.now()}`,
-            date,
-            name,
-            category,
-            person: person || '-',
-            kariger: person || 'Factory Inward',
-            type: `Khareed / Inward (${category === 'tani' ? 'Tani' : 'Chukka'})`,
-            aaya: qty,
-            gaya: 0,
-            karkhanaId: targetKid,
-            isOpening: false,
-            timestamp: Date.now()
-        });
-
-        if (typeof window.setStore === 'function') {
-            window.setStore('sancha_history', hist);
-        }
-
-        const newNameEl = document.getElementById('sancha-new-name');
-        if (newNameEl) newNameEl.value = '';
-        if (qtyInp) qtyInp.value = '';
-        const personEl = document.getElementById('sancha-person');
-        if (personEl) personEl.value = '';
-
-        triggerSanchaCacheInvalidation();
-        toggleAddSanchaForm();
-        switchSanchaCategory(category);
-        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-        alert(`✅ Sancha (${category === 'tani' ? 'Tani' : 'Chukka'})${person ? ` · ${person}` : ''} Stock me jama ho gaya!`);
     };
 
     /* ========================================================================
@@ -867,7 +989,7 @@
         if (typeof window.getSanchaUniqueStockRows === 'function') {
             rows = window.getSanchaUniqueStockRows(currentCat, window.currentSanchaKarkhanaFilter);
         } else {
-            const rawStock = (window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [])
+            const rawStock = safeArr(window.getStore?.('sancha_items'))
                 .filter((s) => (s.category || 'tani').toLowerCase() === currentCat.toLowerCase());
             const uniqueNames = [...new Set(rawStock.map((s) => (s?.name ? s.name.trim() : '')).filter(Boolean))];
             uniqueNames.forEach((name) => {
@@ -943,7 +1065,10 @@
 
         if (!totalEntries) {
             tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding:22px; color:#6b7280;">Koi ${currentCat === 'tani' ? 'Tani' : 'Chukka'} Stock nahi mila.</td></tr>`;
-            if (pager) pager.innerHTML = '';
+            if (pager) {
+                pager.innerHTML = '';
+                pager.style.display = 'none';
+            }
         } else {
             const totalPages = Math.ceil(totalEntries / SANCHA_STOCK_PAGE_SIZE) || 1;
             if (sanchaStockCurrentPage > totalPages) sanchaStockCurrentPage = totalPages;
@@ -976,6 +1101,7 @@
             tbody.innerHTML = html;
 
             if (pager) {
+                pager.style.display = (sanchaViewMode === 'list') ? 'flex' : 'none';
                 pager.innerHTML = `
                     <div style="font-size:12px; color:#6b7280; font-weight:600;">
                         Showing <strong>${startIndex + 1}</strong> - <strong>${Math.min(startIndex + SANCHA_STOCK_PAGE_SIZE, totalEntries)}</strong> of <strong>${totalEntries}</strong> Items
@@ -1055,14 +1181,11 @@
         const category = decodeURIComponent(safeCat);
         const personName = decodeURIComponent(safePerson || '');
 
-        const existingModal = document.getElementById('sancha-transfer-popup-modal');
-        if (existingModal) existingModal.remove();
-
         let karkhanas = [];
         if (typeof window.getKarkhanasSafe === 'function') {
             karkhanas = window.getKarkhanasSafe();
         } else {
-            karkhanas = window.safeArray ? window.safeArray(window.getStore('karkhana_list')) : [];
+            karkhanas = safeArr(window.getStore?.('karkhana_list'));
         }
 
         const currentKid = (window.currentSanchaKarkhanaFilter !== 'all') ? window.currentSanchaKarkhanaFilter : 'k_main';
@@ -1077,6 +1200,13 @@
             }
         });
 
+        if (!godownOptions) {
+            return alert('Transfer ke liye kam se kam 2 Godam (Karkhana) hone chahiye!');
+        }
+
+        const existingModal = document.getElementById('sancha-transfer-popup-modal');
+        if (existingModal) existingModal.remove();
+
         const today = getToday();
         const catLabel = category === 'chukka' ? 'Chukka' : 'Tani';
 
@@ -1085,7 +1215,7 @@
                 <div class="sancha-modal-card">
                     <div class="sancha-modal-head">
                         <h3>Sancha (${catLabel}) Transfer</h3>
-                        <button type="button" class="sancha-tally-btn" onclick="closeSanchaTransferModal()">&larr; [Esc] Close</button>
+                        <button type="button" id="sancha-tr-close-btn" class="sancha-modal-btn">&larr; [Esc] Close</button>
                     </div>
                     <div style="padding:16px;">
                         <div style="background:#fdf6e2; border:1px solid #e5d5a7; border-radius:6px; padding:10px 12px; margin-bottom:12px; font-size:12.5px;">
@@ -1113,14 +1243,20 @@
                             <input type="text" id="sancha-transfer-note" placeholder="e.g. Khairabad loom ke liye bheji" class="sancha-modal-inp">
                         </div>
                         <div style="display:flex; justify-content:flex-end; gap:8px;">
-                            <button type="button" class="sancha-tally-btn" onclick="closeSanchaTransferModal()">Cancel [Esc]</button>
-                            <button type="button" class="sancha-tally-btn-gold" onclick="submitSanchaTransferForm('${safeName}', '${safeCat}', '${currentKid}', ${availableBacha}, '${safePerson}')">Transfer Confirm [Enter]</button>
+                            <button type="button" id="sancha-tr-cancel-btn" class="sancha-modal-btn">Cancel [Esc]</button>
+                            <button type="button" id="sancha-tr-submit-btn" class="sancha-modal-btn-gold">Transfer Confirm [Enter]</button>
                         </div>
                     </div>
                 </div>
             </div>`;
 
         document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        document.getElementById('sancha-tr-close-btn')?.addEventListener('click', closeSanchaTransferModal);
+        document.getElementById('sancha-tr-cancel-btn')?.addEventListener('click', closeSanchaTransferModal);
+        document.getElementById('sancha-tr-submit-btn')?.addEventListener('click', () => {
+            submitSanchaTransferForm(safeName, safeCat, currentKid, availableBacha, safePerson);
+        });
 
         const order = ['sancha-dest-godam', 'sancha-transfer-qty', 'sancha-transfer-date', 'sancha-transfer-note'];
         order.forEach((fid, i) => {
@@ -1151,6 +1287,8 @@
     };
 
     const submitSanchaTransferForm = (safeName, safeCat, fromKid, maxAvailable, safePerson = '') => {
+        if (isTransferringSanchaUI) return alert('⏳ Transfer pehle se chal raha hai!');
+
         const itemName = decodeURIComponent(safeName);
         const category = decodeURIComponent(safeCat);
         const personName = decodeURIComponent(safePerson || '');
@@ -1163,21 +1301,37 @@
         if (qty <= 0) return alert('Kripya sahi wazan (Kg) bharein!');
         if (qty > maxAvailable) return alert(`Aapke paas sirf ${maxAvailable.toFixed(2)} Kg bachi hai!`);
 
-        let success = false;
-        if (typeof window.transferSanchaStock === 'function') {
-            success = window.transferSanchaStock(d, itemName, category, fromKid, toKid, qty, note, personName);
-        }
-
-        if (success) {
-            triggerSanchaCacheInvalidation();
-            closeSanchaTransferModal();
-            if (sanchaViewMode === 'passbook') {
-                applySanchaPassbookFilters();
-            } else {
-                renderSanchaTable();
+        isTransferringSanchaUI = true;
+        try {
+            let result = { success: false, message: 'Function load nahi hua' };
+            if (typeof window.transferSanchaStock === 'function') {
+                result = window.transferSanchaStock(d, itemName, category, fromKid, toKid, qty, note, personName);
             }
-            if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-            alert(`✅ ${qty.toFixed(2)} Kg Sancha (${category === 'chukka' ? 'Chukka' : 'Tani'}) safalta-poorvak transfer ho gayi!`);
+
+            // Handle new object format OR old boolean format
+            const isSuccess = (typeof result === 'object' && result !== null) ? Boolean(result.success) : Boolean(result);
+            const msg = (typeof result === 'object' && result !== null && result.message)
+                ? result.message
+                : (isSuccess ? '✅ Transfer ho gaya!' : '❌ Transfer fail!');
+
+            if (isSuccess) {
+                triggerSanchaCacheInvalidation();
+                closeSanchaTransferModal();
+                if (sanchaViewMode === 'passbook') {
+                    applySanchaPassbookFilters();
+                } else {
+                    renderSanchaTable();
+                }
+                if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+                alert(msg);
+            } else {
+                alert(msg);
+            }
+        } catch (err) {
+            console.error('[SanchaTransfer UI]', err);
+            alert('❌ Transfer fail ho gaya: ' + (err?.message || err));
+        } finally {
+            isTransferringSanchaUI = false;
         }
     };
 
@@ -1343,13 +1497,13 @@
     };
 
     const applySanchaPassbookFilters = () => {
-        const targetItemLower = window.currentPassbookSanchaItem.toLowerCase();
+        const targetItemLower = window.currentPassbookSanchaItem.trim().toLowerCase();
         const targetCatLower = (window.currentSanchaCategory || 'tani').toLowerCase();
         const filterByPerson = (window.currentPassbookSanchaPerson !== null && window.currentPassbookSanchaPerson !== undefined);
         const targetPersonLower = filterByPerson ? normPerson(window.currentPassbookSanchaPerson).toLowerCase() : '';
 
-        const allHist = window.safeArray ? window.safeArray(window.getStore('sancha_history')) : [];
-        const sItems = window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [];
+        const allHist = safeArr(window.getStore?.('sancha_history'));
+        const sItems = safeArr(window.getStore?.('sancha_items'));
 
         const makersForItem = new Set();
         sItems.forEach((s) => {
@@ -1363,9 +1517,9 @@
             makersForItem.add(normPerson(s.person).toLowerCase());
         });
 
-        let itemHist = allHist.filter((x) => {
+        const itemHist = allHist.filter((x) => {
             if (!x?.name) return false;
-            const nameMatch = x.name.toLowerCase() === targetItemLower;
+            const nameMatch = x.name.trim().toLowerCase() === targetItemLower;
             const catMatch = (x.category || 'tani').toLowerCase() === targetCatLower;
             if (!nameMatch || !catMatch) return false;
 
@@ -1393,18 +1547,17 @@
             return true;
         });
 
-        // Compute Running Closing Balance chronologically
+        // Compute Running Closing Balance chronologically (Date first, Timestamp tie-breaker)
         const chrono = itemHist.slice().sort((a, b) => {
-            const ta = a.timestamp || 0;
-            const tb = b.timestamp || 0;
-            if (ta !== tb) return ta - tb;
-            return String(a.date || '').localeCompare(String(b.date || ''));
+            const dCmp = String(a.date || '').localeCompare(String(b.date || ''));
+            if (dCmp !== 0) return dCmp;
+            return (a.timestamp || 0) - (b.timestamp || 0);
         });
 
         let runningBal = 0;
         const withRunning = chrono.map((r) => {
-            const aayaQty = safeNum(r.aaya);
-            const gayaQty = safeNum(r.gaya !== undefined ? r.gaya : r.qty);
+            const aayaQty = getSanchaEntryAaya(r);
+            const gayaQty = getSanchaEntryGaya(r);
             runningBal = safeNum((runningBal + aayaQty - gayaQty).toFixed(2));
             return { ...r, _runningBal: runningBal };
         });
@@ -1419,12 +1572,15 @@
 
         if (sTxt) {
             filtered = filtered.filter((x) => {
-                const rowString = `${x.date || ''} ${x.type || ''} ${x.kariger || ''} ${x.person || ''} ${x.aaya || x.qty || ''} ${x.gaya || ''}`.toLowerCase();
+                const aayaVal = getSanchaEntryAaya(x);
+                const gayaVal = getSanchaEntryGaya(x);
+                const rowString = `${x.date || ''} ${x.type || ''} ${x.kariger || ''} ${x.person || ''} ${aayaVal || ''} ${gayaVal || ''}`.toLowerCase();
                 return rowString.includes(sTxt);
             });
         }
 
-        filtered.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        // Exact reverse chronological order (newest first)
+        filtered.reverse();
 
         filteredSanchaPassbookCache = filtered;
 
@@ -1444,6 +1600,7 @@
             totEl.textContent = `Aaya: +${safeNum(stats.aaya).toFixed(2)} Kg · Gaya: -${safeNum(stats.gaya).toFixed(2)} Kg · Closing: ${safeNum(stats.bacha).toFixed(2)} Kg`;
         }
 
+        updateSanchaModuleHeaderTitle();
         renderPaginatedSanchaPassbook();
     };
 
@@ -1474,7 +1631,10 @@
         const totalEntries = filteredSanchaPassbookCache.length;
         if (!totalEntries) {
             tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:18px; color:#6b7280;">Koi passbook entry nahi mili.</td></tr>';
-            if (pager) pager.innerHTML = '';
+            if (pager) {
+                pager.innerHTML = '';
+                pager.style.display = 'none';
+            }
             const statusEl = document.getElementById('sancha-passbook-entry-status');
             if (statusEl) statusEl.textContent = '0 Entries';
             return;
@@ -1491,8 +1651,8 @@
 
         let html = '';
         pageRows.forEach((r, idx) => {
-            const aayaQty = safeNum(r.aaya);
-            const gayaQty = safeNum(r.gaya !== undefined ? r.gaya : r.qty);
+            const aayaQty = getSanchaEntryAaya(r);
+            const gayaQty = getSanchaEntryGaya(r);
             const runBal = safeNum(r._runningBal);
 
             const isOpening = (r.isOpening === true) || String(r.type || '').includes('Opening') || String(r.kariger || '').includes('Opening');
@@ -1532,6 +1692,7 @@
         highlightSanchaPassbookRow(sanchaPassbookActiveIdx);
 
         if (pager) {
+            pager.style.display = 'flex';
             pager.innerHTML = `
                 <div style="font-size:12px; color:#6b7280; font-weight:600;">
                     Showing <strong>${startIndex + 1}</strong> - <strong>${Math.min(startIndex + SANCHA_PAGE_SIZE, totalEntries)}</strong> of <strong>${totalEntries}</strong> entries
@@ -1561,6 +1722,19 @@
         const sec = document.getElementById('sancha-section');
         if (!sec || sec.style.display === 'none') return;
         if (isAnyExpressOverlayOpen()) return;
+
+        // 0. Delete Confirm Modal open
+        const delModal = document.getElementById('sancha-delete-confirm-modal');
+        if (delModal) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeSanchaDeleteConfirmModal();
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                document.getElementById('sancha-del-confirm-btn')?.click();
+            }
+            return;
+        }
 
         // 1. Edit Modal open
         const editModal = document.getElementById('sancha-edit-popup-modal');
@@ -1623,6 +1797,9 @@
             return;
         }
 
+        // Never block native browser shortcuts like Ctrl+C, Ctrl+R, Ctrl+T, Ctrl+F, Cmd+R
+        if (e.ctrlKey || e.metaKey) return;
+
         const tag = (document.activeElement && document.activeElement.tagName) || '';
         const isTyping = (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA');
 
@@ -1638,6 +1815,8 @@
             else if (sanchaViewMode === 'list') printSanchaStockReport();
             return;
         }
+
+        if (e.altKey) return;
 
         if (e.key === 'F4' && sanchaViewMode !== 'hub') {
             e.preventDefault();
@@ -1904,8 +2083,8 @@
 
         let rowsHtml = '';
         rows.forEach((r) => {
-            const aaya = safeNum(r.aaya);
-            const gaya = safeNum(r.gaya !== undefined ? r.gaya : r.qty);
+            const aaya = getSanchaEntryAaya(r);
+            const gaya = getSanchaEntryGaya(r);
 
             totalAaya += aaya;
             totalGaya += gaya;
@@ -1994,15 +2173,15 @@
     };
 
     const printSingleSanchaPassbookEntry = (id) => {
-        const hist = window.safeArray ? window.safeArray(window.getStore('sancha_history')) : [];
+        const hist = safeArr(window.getStore?.('sancha_history'));
         const entry = hist.find((x) => x && String(x.id) === String(id));
         if (!entry) return alert('Entry nahi mili!');
 
         const itemName = entry.name || window.currentPassbookSanchaItem || 'Sancha Item';
         const catLabel = (entry.category || window.currentSanchaCategory || 'tani').toUpperCase();
         const kName = getSanchaKarkhanaPrintName(entry.karkhanaId || window.currentSanchaKarkhanaFilter);
-        const aaya = safeNum(entry.aaya);
-        const gaya = safeNum(entry.gaya !== undefined ? entry.gaya : entry.qty);
+        const aaya = getSanchaEntryAaya(entry);
+        const gaya = getSanchaEntryGaya(entry);
         const isAaya = aaya > 0;
         const wazanDisplay = isAaya ? `+${aaya.toFixed(2)} Kg` : `-${gaya.toFixed(2)} Kg`;
 
@@ -2060,90 +2239,182 @@
     };
 
     /* ========================================================================
-       10. DELETE & EDIT ENGINES (MAKER-AWARE & SUPABASE-SAFE)
+       10. DELETE (PWA IN-APP MODAL) & EDIT ENGINES (LOCKED & ROLLBACK SAFE)
        ======================================================================== */
-    const findMatchingSanchaItemForEntry = (list, entry) => {
+    const findMatchingSanchaItemForEntry = (list, entry, overridePerson = null) => {
         const targetKid = entry.karkhanaId || 'k_main';
         const cat = (entry.category || window.currentSanchaCategory || 'tani').toLowerCase();
-        const entryPer = normPerson(entry.person !== undefined ? entry.person : (entry.kariger === 'Factory Inward' ? '' : entry.kariger)).toLowerCase();
+        const entryNameLower = String(entry.name || '').trim().toLowerCase();
+        const entryPer = (overridePerson !== null)
+            ? normPerson(overridePerson).toLowerCase()
+            : normPerson(entry.person !== undefined ? entry.person : (entry.kariger === 'Factory Inward' ? '' : entry.kariger)).toLowerCase();
 
         let item = list.find((x) => {
             if (!x || !x.name) return false;
             const matchK = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
             const xPer = normPerson(x.person).toLowerCase();
-            return x.name.toLowerCase() === entry.name.toLowerCase() &&
+            return x.name.trim().toLowerCase() === entryNameLower &&
                    (x.category || 'tani').toLowerCase() === cat &&
                    matchK &&
                    xPer === entryPer;
         });
 
-        if (!item) {
+        if (!item && overridePerson === null) {
             item = list.find((x) => {
                 const matchK = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-                return x?.name && x.name.toLowerCase() === entry.name.toLowerCase() && (x.category || 'tani').toLowerCase() === cat && matchK;
+                return x?.name && x.name.trim().toLowerCase() === entryNameLower && (x.category || 'tani').toLowerCase() === cat && matchK;
             });
         }
         return item;
     };
 
-    const deleteSanchaHistoryEntry = (id) => {
-        if (!confirm('Kya aap sach me ye Passbook entry DELETE karna chahte hain?\nIsse stock balance wapas sahi settle ho jayega.')) return;
+    const closeSanchaDeleteConfirmModal = () => {
+        const modal = document.getElementById('sancha-delete-confirm-modal');
+        if (modal) modal.remove();
+    };
 
-        let hist = window.safeArray ? window.safeArray(window.getStore('sancha_history')) : [];
+    const executeDeleteSanchaHistoryEntry = (id) => {
+        if (isDeletingSancha) return;
+        isDeletingSancha = true;
+
+        const snapHist = JSON.parse(JSON.stringify(safeArr(window.getStore?.('sancha_history'))));
+        const snapStock = JSON.parse(JSON.stringify(safeArr(window.getStore?.('sancha_items'))));
+        const snapKarkhanaTransfers = JSON.parse(JSON.stringify(safeArr(window.getStore?.('karkhana_transfers'))));
+
+        try {
+            let hist = safeArr(window.getStore?.('sancha_history'));
+            const entry = hist.find((x) => x && String(x.id) === String(id));
+            if (!entry) {
+                closeSanchaDeleteConfirmModal();
+                return alert('Entry nahi mili!');
+            }
+
+            const isTransfer = Boolean(entry.refId || String(entry.type || '').toLowerCase().includes('transfer'));
+            const isPurchase = !isTransfer && (String(entry.type || '').includes('Khareed') || String(entry.type || '').includes('Inward'));
+
+            if (isTransfer && entry.refId) {
+                hist = hist.filter((x) => x && x.refId !== entry.refId);
+                const kTransfers = safeArr(window.getStore?.('karkhana_transfers')).filter((t) => t && t.id !== entry.refId);
+                if (typeof window.setStore === 'function') window.setStore('karkhana_transfers', kTransfers);
+            } else {
+                hist = hist.filter((x) => x && String(x.id) !== String(id));
+            }
+
+            if (typeof window.setStore === 'function') {
+                window.setStore('sancha_history', hist);
+            }
+
+            if (isPurchase) {
+                const qtyToDeduct = getSanchaEntryAaya(entry);
+                const list = safeArr(window.getStore?.('sancha_items'));
+                const item = findMatchingSanchaItemForEntry(list, entry);
+
+                if (item) {
+                    item.aaya = Math.max(0, safeNum((safeNum(item.aaya) - qtyToDeduct).toFixed(2)));
+                    item.bacha = Math.max(0, safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2)));
+                    if (typeof window.setStore === 'function') window.setStore('sancha_items', list);
+                }
+            }
+
+            closeSanchaDeleteConfirmModal();
+            triggerSanchaCacheInvalidation();
+            applySanchaPassbookFilters();
+            renderSanchaTable();
+            if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+            alert('🗑️ Entry safalta-poorvak delete ho gayi!');
+        } catch (err) {
+            console.error('[SanchaDelete]', err);
+            try {
+                if (typeof window.setStore === 'function') {
+                    window.setStore('sancha_history', snapHist);
+                    window.setStore('sancha_items', snapStock);
+                    window.setStore('karkhana_transfers', snapKarkhanaTransfers);
+                }
+            } catch (rbErr) {
+                console.error('[SanchaDelete Rollback]', rbErr);
+            }
+            closeSanchaDeleteConfirmModal();
+            alert('❌ Delete fail ho gaya — Data wapas restore ho gaya!');
+        } finally {
+            isDeletingSancha = false;
+        }
+    };
+
+    const deleteSanchaHistoryEntry = (id) => {
+        if (isDeletingSancha) return;
+        const hist = safeArr(window.getStore?.('sancha_history'));
         const entry = hist.find((x) => x && String(x.id) === String(id));
         if (!entry) return alert('Entry nahi mili!');
 
-        const isPurchase = (String(entry.type || '').includes('Khareed') || String(entry.type || '').includes('Inward'));
-        const isTransfer = (entry.refId || String(entry.type || '').includes('Transfer'));
+        closeSanchaDeleteConfirmModal();
 
-        if (isTransfer && entry.refId) {
-            hist = hist.filter((x) => x.refId !== entry.refId);
-        } else {
-            hist = hist.filter((x) => String(x.id) !== String(id));
-        }
+        const aaya = getSanchaEntryAaya(entry);
+        const gaya = getSanchaEntryGaya(entry);
+        const wazanTxt = aaya > 0 ? `+${aaya.toFixed(2)} Kg (Aaya)` : `-${gaya.toFixed(2)} Kg (Gaya)`;
+        const isTransfer = Boolean(entry.refId || String(entry.type || '').toLowerCase().includes('transfer'));
 
-        if (typeof window.setStore === 'function') {
-            window.setStore('sancha_history', hist);
-        }
+        const modalHtml = `
+            <div id="sancha-delete-confirm-modal" class="sancha-modal-overlay">
+                <div class="sancha-modal-card" style="max-width:400px;">
+                    <div class="sancha-modal-head">
+                        <h3>Sancha Entry Delete Karein?</h3>
+                        <button type="button" id="sancha-del-close-btn" class="sancha-modal-btn">&larr; [Esc] Close</button>
+                    </div>
+                    <div style="padding:16px;">
+                        <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:6px; padding:10px 12px; margin-bottom:12px; font-size:12.5px; color:#7f1d1d;">
+                            <div><strong>Item:</strong> ${esc(entry.name || '-')} (${entry.category === 'chukka' ? 'Chukka' : 'Tani'})</div>
+                            <div><strong>Maker:</strong> ${esc(normPerson(entry.person) || '-')}</div>
+                            <div><strong>Tarikh:</strong> ${esc(entry.date || '-')}</div>
+                            <div><strong>Type:</strong> ${esc(entry.type || '-')}</div>
+                            <div style="font-weight:800; margin-top:4px;">Wazan: ${esc(wazanTxt)}</div>
+                        </div>
+                        <p style="margin:0 0 14px 0; font-size:12.5px; color:#4b5563; line-height:1.45;">
+                            ${isTransfer
+                                ? 'Ye Godown Transfer entry hai — dono godam aur transfer register se delete hogi. Stock balance settle ho jayega.'
+                                : 'Kya aap sach me ye Passbook entry delete karna chahte hain? Stock balance wapas settle ho jayega.'}
+                        </p>
+                        <div style="display:flex; justify-content:flex-end; gap:8px;">
+                            <button type="button" id="sancha-del-cancel-btn" class="sancha-modal-btn">Cancel [Esc]</button>
+                            <button type="button" id="sancha-del-confirm-btn" class="sancha-modal-btn-danger">Haan, Delete Karein [Enter]</button>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
 
-        if (isPurchase) {
-            const qtyToDeduct = safeNum(entry.aaya);
-            const list = window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [];
-            const item = findMatchingSanchaItemForEntry(list, entry);
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
 
-            if (item) {
-                item.aaya = Math.max(0, safeNum((safeNum(item.aaya) - qtyToDeduct).toFixed(2)));
-                item.bacha = Math.max(0, safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2)));
-                if (typeof window.setStore === 'function') window.setStore('sancha_items', list);
-            }
-        }
+        document.getElementById('sancha-del-close-btn')?.addEventListener('click', closeSanchaDeleteConfirmModal);
+        document.getElementById('sancha-del-cancel-btn')?.addEventListener('click', closeSanchaDeleteConfirmModal);
+        document.getElementById('sancha-del-confirm-btn')?.addEventListener('click', () => {
+            executeDeleteSanchaHistoryEntry(id);
+        });
 
-        triggerSanchaCacheInvalidation();
-        applySanchaPassbookFilters();
-        renderSanchaTable();
-        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-        alert('✅ Entry safalta-poorvak delete ho gayi!');
+        setTimeout(() => {
+            document.getElementById('sancha-del-confirm-btn')?.focus();
+        }, 40);
     };
 
     const openSanchaEditModal = (id) => {
-        const hist = window.safeArray ? window.safeArray(window.getStore('sancha_history')) : [];
+        const hist = safeArr(window.getStore?.('sancha_history'));
         const entry = hist.find((x) => x && String(x.id) === String(id));
         if (!entry) return alert('Entry nahi mili!');
 
         const existingModal = document.getElementById('sancha-edit-popup-modal');
         if (existingModal) existingModal.remove();
 
-        const currentQty = safeNum(entry.aaya || entry.gaya || entry.qty);
-        const isAaya = safeNum(entry.aaya) > 0;
+        const aayaVal = getSanchaEntryAaya(entry);
+        const gayaVal = getSanchaEntryGaya(entry);
+        const isAaya = aayaVal > 0;
+        const currentQty = isAaya ? aayaVal : gayaVal;
         const typeLabel = isAaya ? 'Aaya (Inward)' : 'Gaya (Outward)';
-        const displayMaker = normPerson(entry.person) || (entry.kariger && entry.kariger !== 'Factory Inward' ? entry.kariger : '');
+        const displayMaker = normPerson(entry.person) || (entry.kariger && entry.kariger !== 'Factory Inward' && !String(entry.kariger).includes('Godown Transfer') ? entry.kariger : '');
 
         const modalHtml = `
             <div id="sancha-edit-popup-modal" class="sancha-modal-overlay">
                 <div class="sancha-modal-card" style="max-width:420px;">
                     <div class="sancha-modal-head">
                         <h3>Edit Sancha Entry</h3>
-                        <button type="button" class="sancha-tally-btn" onclick="closeSanchaEditModal()">&larr; [Esc] Close</button>
+                        <button type="button" id="sancha-edit-close-btn" class="sancha-modal-btn">&larr; [Esc] Close</button>
                     </div>
                     <div style="padding:16px;">
                         <div style="background:#fdf6e2; border:1px solid #e5d5a7; padding:8px 12px; border-radius:6px; margin-bottom:12px; font-size:12.5px;">
@@ -2152,7 +2423,7 @@
                         </div>
                         <div style="margin-bottom:10px;">
                             <label style="font-size:12px; font-weight:700; color:#374151; display:block; margin-bottom:4px;">Tarikh (Date) :</label>
-                            <input type="date" id="sancha-edit-date" value="${entry.date || ''}" class="sancha-modal-inp">
+                            <input type="date" id="sancha-edit-date" value="${esc(entry.date || '')}" class="sancha-modal-inp">
                         </div>
                         <div style="margin-bottom:10px;">
                             <label style="font-size:12px; font-weight:700; color:#374151; display:block; margin-bottom:4px;">Maker / Person Name :</label>
@@ -2163,14 +2434,20 @@
                             <input type="number" step="0.01" id="sancha-edit-qty" value="${currentQty.toFixed(2)}" class="sancha-modal-inp">
                         </div>
                         <div style="display:flex; justify-content:flex-end; gap:8px;">
-                            <button type="button" class="sancha-tally-btn" onclick="closeSanchaEditModal()">Cancel [Esc]</button>
-                            <button type="button" class="sancha-tally-btn-gold" onclick="saveSanchaHistoryEdit('${esc(id)}')">Update [Enter]</button>
+                            <button type="button" id="sancha-edit-cancel-btn" class="sancha-modal-btn">Cancel [Esc]</button>
+                            <button type="button" id="sancha-edit-save-btn" class="sancha-modal-btn-gold">Update [Enter]</button>
                         </div>
                     </div>
                 </div>
             </div>`;
 
         document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        document.getElementById('sancha-edit-close-btn')?.addEventListener('click', closeSanchaEditModal);
+        document.getElementById('sancha-edit-cancel-btn')?.addEventListener('click', closeSanchaEditModal);
+        document.getElementById('sancha-edit-save-btn')?.addEventListener('click', () => {
+            saveSanchaHistoryEdit(id);
+        });
 
         const order = ['sancha-edit-date', 'sancha-edit-person', 'sancha-edit-qty'];
         order.forEach((fid, i) => {
@@ -2201,69 +2478,163 @@
     };
 
     const saveSanchaHistoryEdit = (id) => {
-        const hist = window.safeArray ? window.safeArray(window.getStore('sancha_history')) : [];
-        const entry = hist.find((x) => x && String(x.id) === String(id));
-        if (!entry) return alert('Entry nahi mili!');
+        if (isSavingSanchaEdit) return;
+        isSavingSanchaEdit = true;
 
-        const newDate = document.getElementById('sancha-edit-date')?.value;
-        const newPersonRaw = String(document.getElementById('sancha-edit-person')?.value || '').trim();
-        const newPerson = normPerson(newPersonRaw);
-        const newQty = safeNum(document.getElementById('sancha-edit-qty')?.value);
+        const snapHist = JSON.parse(JSON.stringify(safeArr(window.getStore?.('sancha_history'))));
+        const snapStock = JSON.parse(JSON.stringify(safeArr(window.getStore?.('sancha_items'))));
+        const snapKarkhanaTransfers = JSON.parse(JSON.stringify(safeArr(window.getStore?.('karkhana_transfers'))));
 
-        if (newQty <= 0) return alert('Kripya sahi wazan (Kg) darj karein!');
+        try {
+            const hist = safeArr(window.getStore?.('sancha_history'));
+            const entry = hist.find((x) => x && String(x.id) === String(id));
+            if (!entry) return alert('Entry nahi mili!');
 
-        const oldAaya = safeNum(entry.aaya);
-        const isPurchase = (String(entry.type || '').includes('Khareed') || String(entry.type || '').includes('Inward'));
-        const isTransfer = (entry.refId || String(entry.type || '').includes('Transfer'));
+            const newDate = document.getElementById('sancha-edit-date')?.value;
+            const newPersonRaw = String(document.getElementById('sancha-edit-person')?.value || '').trim();
+            const newPerson = normPerson(newPersonRaw);
+            const rawNewQty = safeNum(document.getElementById('sancha-edit-qty')?.value);
 
-        const list = window.safeArray ? window.safeArray(window.getStore('sancha_items')) : [];
-        const item = isPurchase ? findMatchingSanchaItemForEntry(list, entry) : null;
+            if (!newDate) return alert('Kripya Tarikh (Date) chunein!');
+            if (rawNewQty <= 0) return alert('Kripya sahi wazan (Kg) darj karein!');
+            const newQty = Number(rawNewQty.toFixed(2));
 
-        entry.date = newDate;
-        entry.kariger = newPerson || (isPurchase ? 'Factory Inward' : '-');
-        if (isPurchase || entry.person !== undefined) {
-            entry.person = newPerson || '-';
-        }
+            const oldAaya = getSanchaEntryAaya(entry);
+            const oldGaya = getSanchaEntryGaya(entry);
+            const oldQty = oldAaya > 0 ? oldAaya : oldGaya;
+            const oldPerson = normPerson(entry.person !== undefined ? entry.person : (entry.kariger === 'Factory Inward' ? '' : entry.kariger));
 
-        if (oldAaya > 0) {
-            const aayaDiff = newQty - oldAaya;
-            entry.aaya = newQty;
+            const isTransfer = Boolean(entry.refId || String(entry.type || '').toLowerCase().includes('transfer'));
+            const isPurchase = !isTransfer && (String(entry.type || '').includes('Khareed') || String(entry.type || '').includes('Inward'));
 
-            if (isPurchase && item) {
-                item.aaya = safeNum((safeNum(item.aaya) + aayaDiff).toFixed(2));
-                item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
-                if (newPerson) item.person = newPerson;
-                if (typeof window.setStore === 'function') window.setStore('sancha_items', list);
+            // Transfer qty badhane par source godown stock limit check karein
+            if (isTransfer && entry.refId && newQty > oldQty) {
+                const kTransfers = safeArr(window.getStore?.('karkhana_transfers'));
+                const kTr = kTransfers.find((t) => t && t.id === entry.refId);
+                const outSide = hist.find((x) => x && x.refId === entry.refId && getSanchaEntryGaya(x) > 0);
+                const sourceKid = kTr?.fromKarkhanaId || outSide?.karkhanaId || 'k_main';
+                const cat = (entry.category || window.currentSanchaCategory || 'tani').toLowerCase();
+                if (typeof window.getSanchaAvailableBalance === 'function') {
+                    const avail = window.getSanchaAvailableBalance(entry.name, cat, sourceKid, oldPerson || null);
+                    const maxAllowed = Number((avail + oldQty).toFixed(2));
+                    if (newQty > maxAllowed) {
+                        return alert(`Bhejne wale godam me kul ${maxAllowed.toFixed(2)} Kg tak hi transfer badhaya ja sakta hai!`);
+                    }
+                }
             }
-        } else {
-            entry.gaya = newQty;
-            entry.qty = newQty;
-        }
 
-        if (isTransfer && entry.refId) {
-            const pair = hist.find((x) => x && x.refId === entry.refId && String(x.id) !== String(id));
-            if (pair) {
-                pair.date = newDate;
-                if (pair.aaya > 0) pair.aaya = newQty;
-                if (pair.gaya > 0) pair.gaya = newQty;
+            const list = safeArr(window.getStore?.('sancha_items'));
+            const oldItem = isPurchase ? findMatchingSanchaItemForEntry(list, entry, oldPerson) : null;
+
+            entry.date = newDate;
+            if (isTransfer) {
+                entry.kariger = newPerson ? `${newPerson} (Transfer)` : 'Godown Transfer';
+                entry.person = newPerson || '-';
+            } else {
+                entry.kariger = newPerson || (isPurchase ? 'Factory Inward' : '-');
+                if (isPurchase || entry.person !== undefined) {
+                    entry.person = newPerson || '-';
+                }
             }
+
+            if (oldAaya > 0) {
+                entry.aaya = newQty;
+
+                if (isPurchase) {
+                    const targetKid = entry.karkhanaId || 'k_main';
+                    const cat = (entry.category || window.currentSanchaCategory || 'tani').toLowerCase();
+
+                    if (oldPerson.toLowerCase() !== newPerson.toLowerCase()) {
+                        // Maker badla gaya hai -> purane maker ke bucket se oldAaya ghatayein aur naye maker me newQty jodein
+                        if (oldItem) {
+                            oldItem.aaya = Math.max(0, safeNum((safeNum(oldItem.aaya) - oldAaya).toFixed(2)));
+                            oldItem.bacha = safeNum((safeNum(oldItem.aaya) - safeNum(oldItem.gaya)).toFixed(2));
+                        }
+                        const targetItem = findMatchingSanchaItemForEntry(list, entry, newPerson);
+                        if (targetItem) {
+                            targetItem.aaya = safeNum((safeNum(targetItem.aaya) + newQty).toFixed(2));
+                            targetItem.bacha = safeNum((safeNum(targetItem.aaya) - safeNum(targetItem.gaya)).toFixed(2));
+                            targetItem.date = newDate;
+                        } else {
+                            const nowTs = Date.now();
+                            const uidSuffix = Math.random().toString(36).slice(2, 6);
+                            list.push({
+                                id: `sancha_${nowTs}_${uidSuffix}`,
+                                date: newDate,
+                                name: entry.name,
+                                category: cat,
+                                aaya: newQty,
+                                gaya: 0,
+                                bacha: newQty,
+                                person: newPerson || '-',
+                                karkhanaId: targetKid,
+                                timestamp: nowTs
+                            });
+                        }
+                        if (typeof window.setStore === 'function') window.setStore('sancha_items', list);
+                    } else if (oldItem) {
+                        const aayaDiff = Number((newQty - oldAaya).toFixed(2));
+                        oldItem.aaya = Math.max(0, safeNum((safeNum(oldItem.aaya) + aayaDiff).toFixed(2)));
+                        oldItem.bacha = safeNum((safeNum(oldItem.aaya) - safeNum(oldItem.gaya)).toFixed(2));
+                        if (typeof window.setStore === 'function') window.setStore('sancha_items', list);
+                    }
+                }
+            } else {
+                entry.gaya = newQty;
+                if (Object.prototype.hasOwnProperty.call(entry, 'qty')) {
+                    delete entry.qty;
+                }
+            }
+
+            if (isTransfer && entry.refId) {
+                const pair = hist.find((x) => x && x.refId === entry.refId && String(x.id) !== String(id));
+                if (pair) {
+                    pair.date = newDate;
+                    pair.kariger = entry.kariger;
+                    pair.person = entry.person;
+                    if (safeNum(pair.aaya) > 0) pair.aaya = newQty;
+                    if (safeNum(pair.gaya) > 0) pair.gaya = newQty;
+                }
+
+                const kTransfers = safeArr(window.getStore?.('karkhana_transfers'));
+                const kTr = kTransfers.find((t) => t && t.id === entry.refId);
+                if (kTr) {
+                    kTr.date = newDate;
+                    kTr.quantity = newQty;
+                    if (typeof window.setStore === 'function') window.setStore('karkhana_transfers', kTransfers);
+                }
+            }
+
+            if (typeof window.setStore === 'function') {
+                window.setStore('sancha_history', hist);
+            }
+
+            if (window.currentPassbookSanchaPerson !== null) {
+                window.currentPassbookSanchaPerson = newPerson;
+            }
+
+            triggerSanchaCacheInvalidation();
+            closeSanchaEditModal();
+            applySanchaPassbookFilters();
+            renderSanchaTable();
+            if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+
+            alert('✅ Sancha entry safalta-poorvak update ho gayi!');
+        } catch (err) {
+            console.error('[SanchaEdit]', err);
+            try {
+                if (typeof window.setStore === 'function') {
+                    window.setStore('sancha_history', snapHist);
+                    window.setStore('sancha_items', snapStock);
+                    window.setStore('karkhana_transfers', snapKarkhanaTransfers);
+                }
+            } catch (rbErr) {
+                console.error('[SanchaEdit Rollback]', rbErr);
+            }
+            alert('❌ Update fail ho gaya — Data restore ho gaya!');
+        } finally {
+            isSavingSanchaEdit = false;
         }
-
-        if (typeof window.setStore === 'function') {
-            window.setStore('sancha_history', hist);
-        }
-
-        if (newPerson && window.currentPassbookSanchaPerson !== null) {
-            window.currentPassbookSanchaPerson = newPerson;
-        }
-
-        triggerSanchaCacheInvalidation();
-        closeSanchaEditModal();
-        applySanchaPassbookFilters();
-        renderSanchaTable();
-        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-
-        alert('✅ Sancha entry safalta-poorvak update ho gayi!');
     };
 
     /* ========================================================================
