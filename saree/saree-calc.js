@@ -2,15 +2,18 @@
    SIMPLICITY ERP - HIGH-PERFORMANCE SAREE INVENTORY & PIPELINE ENGINE
    File: saree/saree-calc.js • Developed by Farhan Jawed
    Stages: Fresh ➔ Cutting ➔ Embroidery ➔ Finished ➔ Lott
+   [SAFE-HARDENED: Stale-Cache Guard, Godown Normalization, Locks & Rollback]
 ============================================================================ */
 
 (() => {
     'use strict';
 
     /* ========================================================================
-       1. GLOBAL STATE & CACHE
+       1. GLOBAL STATE, LOCKS & CACHE
        ======================================================================== */
     const SAREE_TAB_CACHE = new Map();
+    let isTransferringSaree = false;
+    let isMovingSareeStage = false;
 
     const invalidateSareeCalcCache = () => {
         SAREE_TAB_CACHE.clear();
@@ -45,7 +48,16 @@
     const normGodownId = (kid) => {
         if (!kid || kid === 'all') return 'all';
         const clean = String(kid).trim();
-        return (!clean || clean === 'k_main') ? 'k_main' : clean;
+        if (!clean || clean === 'k_main') return 'k_main';
+        if (clean.toLowerCase() === 'all') return 'all';
+        return clean;
+    };
+
+    const normRecordGodownId = (kid) => {
+        if (kid === undefined || kid === null) return 'k_main';
+        const clean = String(kid).trim();
+        if (!clean || clean === 'k_main' || clean.toLowerCase() === 'all') return 'k_main';
+        return clean;
     };
 
     const getToday = () => {
@@ -73,18 +85,19 @@
         const cleanDate = date || getToday();
         const cleanSaree = normText(sareeName, 'GENERAL SAREE');
         const cleanKariger = normText(karigerName, 'KARIGER');
-        const kid = normGodownId(karkhanaId);
+        const kid = normRecordGodownId(karkhanaId);
 
         try {
-            const history = window.safeArray 
-                ? window.safeArray(window.getStore('saree_history')) 
-                : (JSON.parse(localStorage.getItem('saree_history') || '[]'));
+            const history = (window.safeArray
+                ? window.safeArray(window.getStore('saree_history'))
+                : (JSON.parse(localStorage.getItem('saree_history') || '[]'))).slice();
 
             const now = Date.now();
+            const uidSuffix = Math.random().toString(36).slice(2, 6);
 
             if (sQty > 0) {
                 history.push({
-                    id: `saree_in_${now}_f`,
+                    id: `saree_in_${now}_${uidSuffix}_f`,
                     date: cleanDate,
                     sareeName: cleanSaree,
                     karigerName: cleanKariger,
@@ -102,7 +115,7 @@
 
             if (lQty > 0) {
                 history.push({
-                    id: `saree_in_${now + 1}_l`,
+                    id: `saree_in_${now + 1}_${uidSuffix}_l`,
                     date: cleanDate,
                     sareeName: cleanSaree,
                     karigerName: cleanKariger,
@@ -135,8 +148,8 @@
         const targetRef = String(refId).trim();
 
         try {
-            let history = window.safeArray 
-                ? window.safeArray(window.getStore('saree_history')) 
+            let history = window.safeArray
+                ? window.safeArray(window.getStore('saree_history'))
                 : (JSON.parse(localStorage.getItem('saree_history') || '[]'));
 
             history = history.filter((item) => !item || String(item.refId) !== targetRef);
@@ -154,201 +167,259 @@
     };
 
     /* ========================================================================
-       4. INTER-BRANCH SAREE TRANSFER ENGINE
+       4. INTER-BRANCH SAREE TRANSFER ENGINE (LOCKED & ROLLBACK SAFE)
        ======================================================================== */
     const transferSareeBetweenKarkhana = (date, sareeName, karigerName, fromKarkhanaId, toKarkhanaId, pcs, currentTab = 'fresh', note = '') => {
-        const qty = safeInt(pcs);
-        if (qty <= 0) {
-            alert('Valid Saree sankhya (Pcs) darj karein!');
+        if (isTransferringSaree) {
+            alert('⏳ Transfer pehle se chal raha hai!');
             return false;
         }
-
-        const sourceKid = normGodownId(fromKarkhanaId);
-        const targetKid = normGodownId(toKarkhanaId);
-
-        if (sourceKid === targetKid) {
-            alert('Bhejne wala aur Paane wala Godam alag-alag hona chahiye!');
-            return false;
-        }
-
-        const cleanSaree = normText(sareeName);
-        const cleanKariger = normText(karigerName);
-        const sourceTab = normTab(currentTab);
-
-        if (!cleanSaree) {
-            alert('Saree Design ka naam zaroori hai!');
-            return false;
-        }
-
-        const available = getSareeAvailableBalance(cleanSaree, cleanKariger, sourceKid, sourceTab);
-        if (qty > available) {
-            alert(`Stock me sirf ${available} Pcs maujood hain! Aap ${qty} Pcs transfer nahi kar sakte.`);
-            return false;
-        }
+        isTransferringSaree = true;
 
         try {
-            const cleanDate = date || getToday();
-            const fromName = getGodownDisplayName(sourceKid);
-            const toName = getGodownDisplayName(targetKid);
-            const transferRef = `tr_saree_${Date.now()}`;
-            const destinationTab = (targetKid === 'k_main') ? 'fresh' : sourceTab;
-
-            const history = window.safeArray 
-                ? window.safeArray(window.getStore('saree_history')) 
-                : (JSON.parse(localStorage.getItem('saree_history') || '[]'));
-
-            const now = Date.now();
-
-            history.push({
-                id: `saree_out_${now}_tr`,
-                date: cleanDate,
-                sareeName: cleanSaree,
-                karigerName: cleanKariger,
-                kariger: cleanKariger,
-                karkhanaId: sourceKid,
-                type: sourceTab,
-                typeLabel: `Transfer Out ➔ ${toName}${note ? ` (${note})` : ''}`,
-                aai: 0,
-                gai: qty,
-                isOut: true,
-                refId: transferRef,
-                timestamp: now
-            });
-
-            history.push({
-                id: `saree_in_${now + 1}_tr`,
-                date: cleanDate,
-                sareeName: cleanSaree,
-                karigerName: cleanKariger,
-                kariger: cleanKariger,
-                karkhanaId: targetKid,
-                type: destinationTab,
-                typeLabel: `Transfer In ⬅ ${fromName}${destinationTab === 'fresh' ? ' (Fresh Stock)' : ''}${note ? ` (${note})` : ''}`,
-                aai: qty,
-                gai: 0,
-                isOut: false,
-                refId: transferRef,
-                timestamp: now + 1
-            });
-
-            if (typeof window.setStore === 'function') {
-                window.setStore('saree_history', history);
-            } else {
-                localStorage.setItem('saree_history', JSON.stringify(history));
+            const qty = safeInt(pcs);
+            if (qty <= 0) {
+                alert('Valid Saree sankhya (Pcs) darj karein!');
+                return false;
             }
 
-            if (typeof window.recordTransferEntry === 'function') {
-                window.recordTransferEntry({
-                    id: transferRef,
+            const sourceKid = normGodownId(fromKarkhanaId);
+            const targetKid = normGodownId(toKarkhanaId);
+
+            if (!fromKarkhanaId || sourceKid === 'all' || !toKarkhanaId || targetKid === 'all') {
+                alert('Kripya sahi Bhejne wala aur Paane wala Godam chunein!');
+                return false;
+            }
+
+            if (sourceKid === targetKid) {
+                alert('Bhejne wala aur Paane wala Godam alag-alag hona chahiye!');
+                return false;
+            }
+
+            const cleanSaree = normText(sareeName);
+            const cleanKariger = normText(karigerName);
+            const sourceTab = normTab(currentTab);
+
+            if (!cleanSaree) {
+                alert('Saree Design ka naam zaroori hai!');
+                return false;
+            }
+
+            const available = getSareeAvailableBalance(cleanSaree, cleanKariger, sourceKid, sourceTab);
+            if (qty > available) {
+                alert(`Stock me sirf ${available} Pcs maujood hain! Aap ${qty} Pcs transfer nahi kar sakte.`);
+                return false;
+            }
+
+            const rawHist = window.safeArray
+                ? window.safeArray(window.getStore('saree_history'))
+                : (JSON.parse(localStorage.getItem('saree_history') || '[]'));
+            const snapHistory = JSON.parse(JSON.stringify(rawHist));
+            const hasTransferLog = (typeof window.recordTransferEntry === 'function');
+            const snapKarkhanaTransfers = hasTransferLog
+                ? JSON.parse(JSON.stringify(window.safeArray ? window.safeArray(window.getStore('karkhana_transfers')) : []))
+                : null;
+
+            try {
+                const cleanDate = date || getToday();
+                const fromName = getGodownDisplayName(sourceKid);
+                const toName = getGodownDisplayName(targetKid);
+                const now = Date.now();
+                const uidSuffix = Math.random().toString(36).slice(2, 6);
+                const transferRef = `tr_saree_${now}_${uidSuffix}`;
+                const destinationTab = (targetKid === 'k_main') ? 'fresh' : sourceTab;
+
+                const history = rawHist.slice();
+
+                history.push({
+                    id: `saree_out_${now}_${uidSuffix}_tr`,
                     date: cleanDate,
-                    fromKarkhanaId: sourceKid,
-                    toKarkhanaId: targetKid,
-                    type: 'saree',
-                    targetStock: destinationTab,
                     sareeName: cleanSaree,
                     karigerName: cleanKariger,
-                    quantity: qty,
-                    remarks: note || `Saree Transfer: ${fromName} ➔ ${toName}`
+                    kariger: cleanKariger,
+                    karkhanaId: sourceKid,
+                    type: sourceTab,
+                    typeLabel: `Transfer Out ➔ ${toName}${note ? ` (${note})` : ''}`,
+                    aai: 0,
+                    gai: qty,
+                    isOut: true,
+                    refId: transferRef,
+                    timestamp: now
                 });
-            }
 
-            invalidateSareeCalcCache();
-            return true;
-        } catch (err) {
-            console.error('[SareeCalcEngine] transferSareeBetweenKarkhana failure:', err);
-            alert('Transfer record save karne me dikkat aayi.');
-            return false;
+                history.push({
+                    id: `saree_in_${now + 1}_${uidSuffix}_tr`,
+                    date: cleanDate,
+                    sareeName: cleanSaree,
+                    karigerName: cleanKariger,
+                    kariger: cleanKariger,
+                    karkhanaId: targetKid,
+                    type: destinationTab,
+                    typeLabel: `Transfer In ⬅ ${fromName}${destinationTab === 'fresh' ? ' (Fresh Stock)' : ''}${note ? ` (${note})` : ''}`,
+                    aai: qty,
+                    gai: 0,
+                    isOut: false,
+                    refId: transferRef,
+                    timestamp: now + 1
+                });
+
+                if (typeof window.setStore === 'function') {
+                    window.setStore('saree_history', history);
+                } else {
+                    localStorage.setItem('saree_history', JSON.stringify(history));
+                }
+
+                if (hasTransferLog) {
+                    window.recordTransferEntry({
+                        id: transferRef,
+                        date: cleanDate,
+                        fromKarkhanaId: sourceKid,
+                        toKarkhanaId: targetKid,
+                        type: 'saree',
+                        targetStock: destinationTab,
+                        sareeName: cleanSaree,
+                        karigerName: cleanKariger,
+                        quantity: qty,
+                        remarks: note || `Saree Transfer: ${fromName} ➔ ${toName}`
+                    });
+                }
+
+                invalidateSareeCalcCache();
+                return true;
+            } catch (err) {
+                console.error('[SareeCalcEngine] transferSareeBetweenKarkhana failure:', err);
+                try {
+                    if (typeof window.setStore === 'function') {
+                        window.setStore('saree_history', snapHistory);
+                        if (hasTransferLog && snapKarkhanaTransfers !== null) {
+                            window.setStore('karkhana_transfers', snapKarkhanaTransfers);
+                        }
+                    } else {
+                        localStorage.setItem('saree_history', JSON.stringify(snapHistory));
+                    }
+                    invalidateSareeCalcCache();
+                } catch (rbErr) {
+                    console.error('[SareeCalcEngine] transfer rollback failure:', rbErr);
+                }
+                alert('Transfer record save karne me dikkat aayi.');
+                return false;
+            }
+        } finally {
+            isTransferringSaree = false;
         }
     };
 
     /* ========================================================================
-       5. ATOMIC PIPELINE STAGE MOVE
+       5. ATOMIC PIPELINE STAGE MOVE (LOCKED & ROLLBACK SAFE)
        ======================================================================== */
     const moveSareePipelineStage = (date, sareeName, karigerName, karkhanaId, pcs, fromTab, toTab, note = '') => {
-        const qty = safeInt(pcs);
-        if (qty <= 0) {
-            alert('Valid Pcs sankhya darj karein!');
+        if (isMovingSareeStage) {
+            alert('⏳ Stage move pehle se chal raha hai!');
             return false;
         }
-
-        const cleanSaree = normText(sareeName);
-        const cleanKariger = normText(karigerName);
-        const kid = normGodownId(karkhanaId);
-        const sourceTab = normTab(fromTab);
-        const targetTab = normTab(toTab);
-
-        if (sourceTab === targetTab) {
-            alert('Source aur Destination alag hone chahiye!');
-            return false;
-        }
-
-        const available = getSareeAvailableBalance(cleanSaree, cleanKariger, kid, sourceTab);
-        if (qty > available) {
-            alert(`Is stage me sirf ${available} Pcs hain! Aap ${qty} move nahi kar sakte.`);
-            return false;
-        }
+        isMovingSareeStage = true;
 
         try {
-            const cleanDate = date || getToday();
-            const stageRef = `stage_move_${Date.now()}`;
-            const stageNames = {
-                fresh: 'Fresh',
-                cutting: 'Cutting',
-                embroidery: 'Embroidery',
-                finished: 'Finished',
-                lott: 'Lott'
-            };
-
-            const history = window.safeArray 
-                ? window.safeArray(window.getStore('saree_history')) 
-                : (JSON.parse(localStorage.getItem('saree_history') || '[]'));
-
-            const now = Date.now();
-
-            history.push({
-                id: `saree_stage_out_${now}`,
-                date: cleanDate,
-                sareeName: cleanSaree,
-                karigerName: cleanKariger,
-                kariger: cleanKariger,
-                karkhanaId: kid,
-                type: sourceTab,
-                typeLabel: `Moved ➔ ${stageNames[targetTab] || targetTab}${note ? ` (${note})` : ''}`,
-                aai: 0,
-                gai: qty,
-                isOut: true,
-                refId: stageRef,
-                timestamp: now
-            });
-
-            history.push({
-                id: `saree_stage_in_${now + 1}`,
-                date: cleanDate,
-                sareeName: cleanSaree,
-                karigerName: cleanKariger,
-                kariger: cleanKariger,
-                karkhanaId: kid,
-                type: targetTab,
-                typeLabel: `Received ⬅ ${stageNames[sourceTab] || sourceTab}${note ? ` (${note})` : ''}`,
-                aai: qty,
-                gai: 0,
-                isOut: false,
-                refId: stageRef,
-                timestamp: now + 1
-            });
-
-            if (typeof window.setStore === 'function') {
-                window.setStore('saree_history', history);
-            } else {
-                localStorage.setItem('saree_history', JSON.stringify(history));
+            const qty = safeInt(pcs);
+            if (qty <= 0) {
+                alert('Valid Pcs sankhya darj karein!');
+                return false;
             }
 
-            invalidateSareeCalcCache();
-            return true;
-        } catch (err) {
-            console.error('[SareeCalcEngine] moveSareePipelineStage failure:', err);
-            alert('Stage transition update karne me dikkat aayi.');
-            return false;
+            const cleanSaree = normText(sareeName);
+            const cleanKariger = normText(karigerName);
+            const kid = normRecordGodownId(karkhanaId);
+            const sourceTab = normTab(fromTab);
+            const targetTab = normTab(toTab);
+
+            if (sourceTab === targetTab) {
+                alert('Source aur Destination alag hone chahiye!');
+                return false;
+            }
+
+            const available = getSareeAvailableBalance(cleanSaree, cleanKariger, kid, sourceTab);
+            if (qty > available) {
+                alert(`Is stage me sirf ${available} Pcs hain! Aap ${qty} move nahi kar sakte.`);
+                return false;
+            }
+
+            const rawHist = window.safeArray
+                ? window.safeArray(window.getStore('saree_history'))
+                : (JSON.parse(localStorage.getItem('saree_history') || '[]'));
+            const snapHistory = JSON.parse(JSON.stringify(rawHist));
+
+            try {
+                const cleanDate = date || getToday();
+                const now = Date.now();
+                const uidSuffix = Math.random().toString(36).slice(2, 6);
+                const stageRef = `stage_move_${now}_${uidSuffix}`;
+                const stageNames = {
+                    fresh: 'Fresh',
+                    cutting: 'Cutting',
+                    embroidery: 'Embroidery',
+                    finished: 'Finished',
+                    lott: 'Lott'
+                };
+
+                const history = rawHist.slice();
+
+                history.push({
+                    id: `saree_stage_out_${now}_${uidSuffix}`,
+                    date: cleanDate,
+                    sareeName: cleanSaree,
+                    karigerName: cleanKariger,
+                    kariger: cleanKariger,
+                    karkhanaId: kid,
+                    type: sourceTab,
+                    typeLabel: `Moved ➔ ${stageNames[targetTab] || targetTab}${note ? ` (${note})` : ''}`,
+                    aai: 0,
+                    gai: qty,
+                    isOut: true,
+                    refId: stageRef,
+                    timestamp: now
+                });
+
+                history.push({
+                    id: `saree_stage_in_${now + 1}_${uidSuffix}`,
+                    date: cleanDate,
+                    sareeName: cleanSaree,
+                    karigerName: cleanKariger,
+                    kariger: cleanKariger,
+                    karkhanaId: kid,
+                    type: targetTab,
+                    typeLabel: `Received ⬅ ${stageNames[sourceTab] || sourceTab}${note ? ` (${note})` : ''}`,
+                    aai: qty,
+                    gai: 0,
+                    isOut: false,
+                    refId: stageRef,
+                    timestamp: now + 1
+                });
+
+                if (typeof window.setStore === 'function') {
+                    window.setStore('saree_history', history);
+                } else {
+                    localStorage.setItem('saree_history', JSON.stringify(history));
+                }
+
+                invalidateSareeCalcCache();
+                return true;
+            } catch (err) {
+                console.error('[SareeCalcEngine] moveSareePipelineStage failure:', err);
+                try {
+                    if (typeof window.setStore === 'function') {
+                        window.setStore('saree_history', snapHistory);
+                    } else {
+                        localStorage.setItem('saree_history', JSON.stringify(snapHistory));
+                    }
+                    invalidateSareeCalcCache();
+                } catch (rbErr) {
+                    console.error('[SareeCalcEngine] stage rollback failure:', rbErr);
+                }
+                alert('Stage transition update karne me dikkat aayi.');
+                return false;
+            }
+        } finally {
+            isMovingSareeStage = false;
         }
     };
 
@@ -358,43 +429,45 @@
     const getSareeAvailableBalance = (sareeName, karigerName, karkhanaId, tabName = 'fresh') => {
         const targetSaree = normText(sareeName);
         const targetKariger = normText(karigerName);
-        const targetKid = normGodownId(karkhanaId);
+        const targetKid = normRecordGodownId(karkhanaId);
         const targetTab = normTab(tabName);
 
         if (!targetSaree) return 0;
 
-        const historyList = window.safeArray 
-            ? window.safeArray(window.getStore('saree_history')) 
+        const historyList = window.safeArray
+            ? window.safeArray(window.getStore('saree_history'))
             : (JSON.parse(localStorage.getItem('saree_history') || '[]'));
-            
+
         const rows = groupSareeStockByTab(historyList, targetTab, targetKid);
 
-        const found = rows.find((r) => 
-            normText(r.sareeName) === targetSaree && 
-            normText(r.karigerName) === targetKariger && 
-            normGodownId(r.karkhanaId) === targetKid
+        const found = rows.find((r) =>
+            normText(r.sareeName) === targetSaree &&
+            normText(r.karigerName) === targetKariger &&
+            normRecordGodownId(r.karkhanaId) === targetKid
         );
 
         return found ? safeInt(found.bachi) : 0;
     };
 
     /* ========================================================================
-       7. GROUPED SAREE STOCK BY TAB
+       7. GROUPED SAREE STOCK BY TAB (STALE-PROOF CACHE)
        ======================================================================== */
     const groupSareeStockByTab = (historyList, currentTab = 'fresh', karkhanaFilter = 'all') => {
         const targetTab = normTab(currentTab);
         const kId = normGodownId(karkhanaFilter);
 
+        const list = window.safeArray
+            ? window.safeArray(historyList)
+            : (Array.isArray(historyList) ? historyList : []);
+        const len = list.length;
+
         const cacheKey = `${targetTab}___${kId}`;
-        if (SAREE_TAB_CACHE.has(cacheKey)) {
-            return SAREE_TAB_CACHE.get(cacheKey);
+        const cached = SAREE_TAB_CACHE.get(cacheKey);
+        if (cached && cached.listRef === list && cached.listLen === len) {
+            return cached.rows;
         }
 
         const map = new Map();
-        const list = window.safeArray 
-            ? window.safeArray(historyList) 
-            : (Array.isArray(historyList) ? historyList : []);
-        const len = list.length;
 
         for (let i = 0; i < len; i++) {
             const h = list[i];
@@ -403,7 +476,7 @@
             const hType = normTab(h.type);
             if (hType !== targetTab) continue;
 
-            const hKid = normGodownId(h.karkhanaId);
+            const hKid = normRecordGodownId(h.karkhanaId);
             if (kId !== 'all' && hKid !== kId) continue;
 
             const sName = normText(h.sareeName || h.name || h.saree, 'GENERAL SAREE');
@@ -444,7 +517,7 @@
             rows.push(item);
         });
 
-        SAREE_TAB_CACHE.set(cacheKey, rows);
+        SAREE_TAB_CACHE.set(cacheKey, { listRef: list, listLen: len, rows });
         return rows;
     };
 
