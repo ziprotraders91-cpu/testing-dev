@@ -1,17 +1,29 @@
 /* ============================================================================
    SIMPLICITY ERP - SAREE STOCK & 5-STAGE PIPELINE UI (TALLY WHITE & GOLD)
    File: saree/saree-ui.js • Developed by Farhan Jawed
-   (100% Supabase-Safe | 5-Stage Hub -> Items List -> Inline Passbook + Keys)
+   (100% Supabase-Safe | PWA Confirm Modal | Transactional Locks & Rollback)
    Stages: Fresh | Cutting | Embroidery | Finished | Lott
 ============================================================================ */
 
 (() => {
     'use strict';
 
+    if (window.__sanchaUILoaded && false) {} // keep separate module namespace
+    if (window.__sareeUILoaded) {
+        console.warn('[SareeUI] Already loaded — skip duplicate');
+        return;
+    }
+    window.__sareeUILoaded = true;
+
     window.currentSareeTab = 'fresh';
     window.currentSareeKarkhanaFilter = 'all';
     window.currentPassbookSareeKey = '';
     window.currentPassbookSareeTitle = '';
+
+    // Transactional Save / Action Locks
+    let isSavingSaree = false;
+    let isTransferringSareeUI = false;
+    let isDeletingSaree = false;
 
     // View State: 'hub' (5 Stages) | 'list' (Stage Items) | 'passbook' (Inline Ledger)
     let sareeViewMode = 'hub';
@@ -61,6 +73,8 @@
         return isNaN(n) || !isFinite(n) ? fallback : n;
     };
 
+    const safeArr = (val) => (typeof window.safeArray === 'function' ? window.safeArray(val) : (Array.isArray(val) ? val : []));
+
     const setDisplay = (id, val) => {
         if (typeof window.setDisplay === 'function') {
             window.setDisplay(id, val);
@@ -89,7 +103,15 @@
     const normGodownId = (kid) => {
         if (!kid || kid === 'all') return 'all';
         const clean = String(kid).trim();
-        return (!clean || clean === 'k_main') ? 'k_main' : clean;
+        if (!clean || clean.toLowerCase() === 'all') return 'all';
+        return clean === 'k_main' ? 'k_main' : clean;
+    };
+
+    const normRecordGodownId = (kid) => {
+        if (kid === undefined || kid === null) return 'k_main';
+        const clean = String(kid).trim();
+        if (!clean || clean === 'k_main' || clean.toLowerCase() === 'all') return 'k_main';
+        return clean;
     };
 
     const normTabName = (t) => {
@@ -391,6 +413,45 @@
                 background: #fffdf5 !important;
                 box-shadow: 0 0 0 2px rgba(242, 183, 29, 0.22);
             }
+            .saree-modal-btn {
+                background: #ffffff;
+                color: #1f2937;
+                border: 1px solid #d1d5db;
+                border-radius: 5px;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 700;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .saree-modal-btn:hover {
+                border-color: #d9a425;
+                background: #fef9ea;
+            }
+            .saree-modal-btn-gold {
+                background: #f2b71d;
+                color: #1f2937;
+                border: 1px solid #d9a425;
+                border-radius: 5px;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 800;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .saree-modal-btn-gold:hover { background: #e5aa12; }
+            .saree-modal-btn-danger {
+                background: #dc2626;
+                color: #ffffff;
+                border: 1px solid #b91c1c;
+                border-radius: 5px;
+                padding: 6px 14px;
+                font-size: 12px;
+                font-weight: 800;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .saree-modal-btn-danger:hover { background: #b91c1c; }
         `;
         document.head.appendChild(style);
     };
@@ -463,7 +524,7 @@
 
     const renderSareeHubTotals = () => {
         ensureSareeHubView();
-        const history = window.safeArray ? window.safeArray(window.getStore('saree_history')) : [];
+        const history = safeArr(window.getStore?.('saree_history'));
         let grandTotalBachi = 0;
 
         STAGE_LIST.forEach((st) => {
@@ -531,7 +592,7 @@
         if (filterPanel) filterPanel.style.display = isList ? 'flex' : 'none';
         if (addForm && !isList) addForm.style.display = 'none';
         if (mainTbl) mainTbl.style.display = isList ? 'block' : 'none';
-        if (mainPager) mainPager.style.display = isList ? 'flex' : 'none';
+        if (mainPager) mainPager.style.display = (isList && currentSareeFilteredRowsCache.length) ? 'flex' : 'none';
         if (mainStrip) mainStrip.style.display = isList ? 'flex' : 'none';
         if (passView) passView.style.display = isPass ? 'block' : 'none';
 
@@ -617,7 +678,7 @@
         if (typeof window.getKarkhanasSafe === 'function') {
             karkhanas = window.getKarkhanasSafe();
         } else {
-            karkhanas = window.safeArray ? window.safeArray(window.getStore('karkhana_list')) : [];
+            karkhanas = safeArr(window.getStore?.('karkhana_list'));
         }
         if (!karkhanas.length) {
             karkhanas = [{ id: 'k_main', name: 'Main Godown', isDefault: true }];
@@ -647,7 +708,7 @@
         if (typeof window.getKarkhanasSafe === 'function') {
             karkhanas = window.getKarkhanasSafe();
         } else {
-            karkhanas = window.safeArray ? window.safeArray(window.getStore('karkhana_list')) : [];
+            karkhanas = safeArr(window.getStore?.('karkhana_list'));
         }
         if (!karkhanas.length) karkhanas = [{ id: 'k_main', name: 'Main Godown' }];
 
@@ -667,11 +728,15 @@
                     sareeStockCurrentPage = 1;
                     sareeListActiveIdx = 0;
                     renderSareeTable();
-                }, 150);
+                }, 120);
             });
             searchInput.addEventListener('keydown', (e) => {
                 if (e.key === 'ArrowDown' || e.key === 'Enter') {
                     e.preventDefault();
+                    clearTimeout(sareeSearchDebounceTimer);
+                    sareeStockCurrentPage = 1;
+                    sareeListActiveIdx = 0;
+                    renderSareeTable();
                     searchInput.blur();
                     if (e.key === 'Enter' && currentSareeFilteredRowsCache.length > 0) {
                         const pageRows = getSareeCurrentPageRows();
@@ -709,7 +774,7 @@
     };
 
     /* ========================================================================
-       5. DIRECT MANUAL INWARD ENGINE (100% SUPABASE SAFE)
+       5. DIRECT MANUAL INWARD ENGINE (100% SUPABASE SAFE + LOCK & ROLLBACK)
        ======================================================================== */
     const toggleSareeForm = () => {
         if (sareeViewMode !== 'list') {
@@ -729,55 +794,79 @@
     };
 
     const saveNewSareeStock = () => {
-        const d = document.getElementById('saree-date')?.value || getToday();
-        const name = normText(document.getElementById('saree-name')?.value);
-        const source = normText(document.getElementById('saree-kariger')?.value, 'DIRECT INWARD');
-        const pcs = safeInt(document.getElementById('saree-pcs')?.value);
+        if (isSavingSaree) return;
+        isSavingSaree = true;
 
-        if (!name || pcs <= 0) return alert('Saree ka naam aur Sahi Pcs bharein!');
+        try {
+            const d = document.getElementById('saree-date')?.value || getToday();
+            const name = normText(document.getElementById('saree-name')?.value);
+            const source = normText(document.getElementById('saree-kariger')?.value, 'DIRECT INWARD');
+            const pcs = safeInt(document.getElementById('saree-pcs')?.value);
 
-        const targetKid = (window.currentSareeKarkhanaFilter !== 'all') ? window.currentSareeKarkhanaFilter : 'k_main';
+            if (!name || pcs <= 0) return alert('Saree ka naam aur Sahi Pcs bharein!');
 
-        const history = (window.safeArray ? window.safeArray(window.getStore('saree_history')) : []).slice();
-        history.push({
-            id: `saree_man_${Date.now()}`,
-            date: d,
-            sareeName: name,
-            karigerName: source,
-            kariger: source,
-            partyName: source,
-            karkhanaId: targetKid,
-            type: window.currentSareeTab,
-            typeLabel: `Direct Godown Inward (${window.currentSareeTab.toUpperCase()})`,
-            aai: pcs,
-            gai: 0,
-            isOut: false,
-            isOpening: false,
-            note: 'Direct Entry',
-            timestamp: Date.now()
-        });
+            const targetKid = (window.currentSareeKarkhanaFilter !== 'all') ? normRecordGodownId(window.currentSareeKarkhanaFilter) : 'k_main';
+            const snapHistory = JSON.parse(JSON.stringify(safeArr(window.getStore?.('saree_history'))));
 
-        if (typeof window.setStore === 'function') {
-            window.setStore('saree_history', history);
+            try {
+                const nowTs = Date.now();
+                const uidSuffix = Math.random().toString(36).slice(2, 6);
+                const history = safeArr(window.getStore?.('saree_history')).slice();
+
+                history.push({
+                    id: `saree_man_${nowTs}_${uidSuffix}`,
+                    date: d,
+                    sareeName: name,
+                    karigerName: source,
+                    kariger: source,
+                    partyName: source,
+                    karkhanaId: targetKid,
+                    type: window.currentSareeTab,
+                    typeLabel: `Direct Godown Inward (${window.currentSareeTab.toUpperCase()})`,
+                    aai: pcs,
+                    gai: 0,
+                    isOut: false,
+                    isOpening: false,
+                    note: 'Direct Entry',
+                    timestamp: nowTs
+                });
+
+                if (typeof window.setStore === 'function') {
+                    window.setStore('saree_history', history);
+                }
+
+                triggerSareeCacheInvalidation();
+                toggleSareeForm();
+
+                const sNameEl = document.getElementById('saree-name');
+                const sKarEl = document.getElementById('saree-kariger');
+                const sPcsEl = document.getElementById('saree-pcs');
+                if (sNameEl) sNameEl.value = '';
+                if (sKarEl) sKarEl.value = '';
+                if (sPcsEl) sPcsEl.value = '';
+
+                renderSareeTable();
+
+                if (typeof window.updateDashboardBadgeTotals === 'function') {
+                    window.updateDashboardBadgeTotals();
+                }
+
+                alert(`✅ ${pcs} Pcs Saree Stock me jama ho gayi!`);
+            } catch (err) {
+                console.error('[SareeSave]', err);
+                try {
+                    if (typeof window.setStore === 'function') {
+                        window.setStore('saree_history', snapHistory);
+                    }
+                    triggerSareeCacheInvalidation();
+                } catch (rbErr) {
+                    console.error('[SareeSave Rollback]', rbErr);
+                }
+                alert('❌ Saree entry save fail ho gayi — Purana stock surakshit hai!');
+            }
+        } finally {
+            isSavingSaree = false;
         }
-
-        triggerSareeCacheInvalidation();
-        toggleSareeForm();
-
-        const sNameEl = document.getElementById('saree-name');
-        const sKarEl = document.getElementById('saree-kariger');
-        const sPcsEl = document.getElementById('saree-pcs');
-        if (sNameEl) sNameEl.value = '';
-        if (sKarEl) sKarEl.value = '';
-        if (sPcsEl) sPcsEl.value = '';
-
-        renderSareeTable();
-
-        if (typeof window.updateDashboardBadgeTotals === 'function') {
-            window.updateDashboardBadgeTotals();
-        }
-
-        alert(`✅ ${pcs} Pcs Saree Stock me jama ho gayi!`);
     };
 
     /* ========================================================================
@@ -810,7 +899,7 @@
                 <th style="text-align:right;">Action</th>
             </tr>`;
 
-        const history = window.safeArray ? window.safeArray(window.getStore('saree_history')) : [];
+        const history = safeArr(window.getStore?.('saree_history'));
 
         let allStageRows = [];
         if (typeof window.groupSareeStockByTab === 'function') {
@@ -900,7 +989,10 @@
 
         if (!totalEntries) {
             tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding:22px; color:#6b7280;">Koi ${esc(tabTitle)} Stock nahi mila.</td></tr>`;
-            if (pager) pager.innerHTML = '';
+            if (pager) {
+                pager.innerHTML = '';
+                pager.style.display = 'none';
+            }
         } else {
             const totalPages = Math.ceil(totalEntries / SAREE_STOCK_PAGE_SIZE) || 1;
             if (sareeStockCurrentPage > totalPages) sareeStockCurrentPage = totalPages;
@@ -934,6 +1026,7 @@
             tbody.innerHTML = html;
 
             if (pager) {
+                pager.style.display = (sareeViewMode === 'list') ? 'flex' : 'none';
                 pager.innerHTML = `
                     <div style="font-size:12px; color:#6b7280; font-weight:600;">
                         Showing <strong>${startIndex + 1}</strong> - <strong>${Math.min(startIndex + SAREE_STOCK_PAGE_SIZE, totalEntries)}</strong> of <strong>${totalEntries}</strong> Items
@@ -991,12 +1084,12 @@
     };
 
     /* ========================================================================
-       7. TRANSFER MODAL (TALLY WHITE & GOLD + ENTER CHAINING)
+       7. TRANSFER MODAL (TALLY WHITE & GOLD + ENTER CHAINING + 1-GODOWN SAFE)
        ======================================================================== */
     const openSareeTransferModal = (safeSaree, safeKariger, safeKid, availableBachi) => {
         const sName = decodeURIComponent(safeSaree);
         const kName = decodeURIComponent(safeKariger);
-        const currentKid = decodeURIComponent(safeKid);
+        const currentKid = normRecordGodownId(decodeURIComponent(safeKid));
 
         const existingModal = document.getElementById('saree-transfer-popup-modal');
         if (existingModal) existingModal.remove();
@@ -1005,20 +1098,21 @@
         if (typeof window.getKarkhanasSafe === 'function') {
             karkhanas = window.getKarkhanasSafe();
         } else {
-            karkhanas = window.safeArray ? window.safeArray(window.getStore('karkhana_list')) : [];
+            karkhanas = safeArr(window.getStore?.('karkhana_list'));
         }
 
         const currentGodamName = (typeof window.getKarkhanaNameById === 'function')
             ? window.getKarkhanaNameById(currentKid)
             : currentKid;
 
+        const destKarkhanas = karkhanas.filter((k) => k && String(k.id) !== String(currentKid));
+        const hasOtherGodown = destKarkhanas.length > 0;
+
         let godownOptions = '';
-        karkhanas.forEach((k) => {
-            if (String(k.id) !== String(currentKid)) {
-                const isMain = (k.id === 'k_main' || k.isDefault);
-                const selected = (isMain || currentKid !== 'k_main') ? 'selected' : '';
-                godownOptions += `<option value="${esc(k.id)}" ${selected}>${esc(k.name)}</option>`;
-            }
+        destKarkhanas.forEach((k, idx) => {
+            const isMain = (k.id === 'k_main' || k.isDefault);
+            const shouldSelect = (currentKid !== 'k_main') ? isMain : (idx === 0);
+            godownOptions += `<option value="${esc(k.id)}" ${shouldSelect ? 'selected' : ''}>${esc(k.name)}</option>`;
         });
 
         const today = getToday();
@@ -1028,7 +1122,7 @@
                 <div class="saree-modal-card">
                     <div class="saree-modal-head">
                         <h3>Saree Transfer / Stage Move</h3>
-                        <button type="button" class="saree-tally-btn" onclick="closeSareeTransferModal()">&larr; [Esc] Close</button>
+                        <button type="button" id="saree-tr-close-btn" class="saree-modal-btn">&larr; [Esc] Close</button>
                     </div>
 
                     <div style="padding:16px;">
@@ -1041,19 +1135,19 @@
 
                         <div style="margin-bottom:10px;">
                             <label style="font-size:12px; font-weight:700; color:#374151; display:block; margin-bottom:4px;">Action Type :</label>
-                            <select id="saree-transfer-action-type" onchange="toggleSareeTransferFields()" class="saree-modal-inp">
-                                <option value="godown_transfer">Doosre Godam / Main Godown Bhejein (Fresh Stock)</option>
-                                <option value="stage_move">Agli Process me Bhejein (Cutting / Embroidery / Finished)</option>
+                            <select id="saree-transfer-action-type" class="saree-modal-inp">
+                                ${hasOtherGodown ? '<option value="godown_transfer">Doosre Godam / Main Godown Bhejein (Fresh Stock)</option>' : ''}
+                                <option value="stage_move" ${!hasOtherGodown ? 'selected' : ''}>Agli Process me Bhejein (Cutting / Embroidery / Finished)</option>
                             </select>
                         </div>
 
-                        <div id="box-godown-transfer" style="display:block; margin-bottom:10px;">
+                        <div id="box-godown-transfer" style="display:${hasOtherGodown ? 'block' : 'none'}; margin-bottom:10px;">
                             <label style="font-size:12px; font-weight:700; color:#374151; display:block; margin-bottom:4px;">Destination Godam :</label>
                             <select id="saree-dest-godam" class="saree-modal-inp">${godownOptions}</select>
                             <div style="font-size:11px; color:#6b7280; margin-top:4px;">Note: Main Godown jane par ye saree automatic Fresh Saree me jama hogi.</div>
                         </div>
 
-                        <div id="box-stage-move" style="display:none; margin-bottom:10px;">
+                        <div id="box-stage-move" style="display:${hasOtherGodown ? 'none' : 'block'}; margin-bottom:10px;">
                             <label style="font-size:12px; font-weight:700; color:#374151; display:block; margin-bottom:4px;">Destination Stage :</label>
                             <select id="saree-dest-stage" class="saree-modal-inp">
                                 ${window.currentSareeTab !== 'cutting' ? '<option value="cutting">Cutting Saree</option>' : ''}
@@ -1081,14 +1175,21 @@
                         </div>
 
                         <div style="display:flex; justify-content:flex-end; gap:8px;">
-                            <button type="button" class="saree-tally-btn" onclick="closeSareeTransferModal()">Cancel [Esc]</button>
-                            <button type="button" class="saree-tally-btn-gold" onclick="submitSareeTransferForm('${safeSaree}', '${safeKariger}', '${safeKid}', ${availableBachi})">Transfer Confirm [Enter]</button>
+                            <button type="button" id="saree-tr-cancel-btn" class="saree-modal-btn">Cancel [Esc]</button>
+                            <button type="button" id="saree-tr-submit-btn" class="saree-modal-btn-gold">Transfer Confirm [Enter]</button>
                         </div>
                     </div>
                 </div>
             </div>`;
 
         document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        document.getElementById('saree-tr-close-btn')?.addEventListener('click', closeSareeTransferModal);
+        document.getElementById('saree-tr-cancel-btn')?.addEventListener('click', closeSareeTransferModal);
+        document.getElementById('saree-transfer-action-type')?.addEventListener('change', toggleSareeTransferFields);
+        document.getElementById('saree-tr-submit-btn')?.addEventListener('click', () => {
+            submitSareeTransferForm(safeSaree, safeKariger, encodeURIComponent(currentKid), availableBachi);
+        });
 
         const bindChain = (id, getNextId) => {
             const el = document.getElementById(id);
@@ -1098,7 +1199,7 @@
                     e.preventDefault();
                     const nxtId = getNextId();
                     if (!nxtId) {
-                        submitSareeTransferForm(safeSaree, safeKariger, safeKid, availableBachi);
+                        submitSareeTransferForm(safeSaree, safeKariger, encodeURIComponent(currentKid), availableBachi);
                     } else {
                         const nxt = document.getElementById(nxtId);
                         if (nxt) { nxt.focus(); if (nxt.select) nxt.select(); }
@@ -1144,9 +1245,11 @@
     };
 
     const submitSareeTransferForm = (safeSaree, safeKariger, safeKid, maxAvailable) => {
+        if (isTransferringSareeUI) return alert('⏳ Transfer pehle se chal raha hai!');
+
         const sName = decodeURIComponent(safeSaree);
         const kName = decodeURIComponent(safeKariger);
-        const fromKid = decodeURIComponent(safeKid);
+        const fromKid = normRecordGodownId(decodeURIComponent(safeKid));
 
         const actionType = document.getElementById('saree-transfer-action-type')?.value;
         const qty = safeInt(document.getElementById('saree-transfer-qty')?.value);
@@ -1156,38 +1259,55 @@
         if (qty <= 0) return alert('Kripya sahi Saree sankhya (Pcs) bharein!');
         if (qty > maxAvailable) return alert(`Aapke paas sirf ${maxAvailable} Pcs hain!`);
 
-        let success = false;
-
         if (actionType === 'godown_transfer') {
             const toKid = document.getElementById('saree-dest-godam')?.value;
             if (!toKid) return alert('Kripya Destination Godam chunein!');
-
-            if (typeof window.transferSareeBetweenKarkhana === 'function') {
-                success = window.transferSareeBetweenKarkhana(d, sName, kName, fromKid, toKid, qty, window.currentSareeTab, note);
-            }
         } else {
             const toStage = document.getElementById('saree-dest-stage')?.value;
             if (!toStage) return alert('Kripya Agli Stage chunein!');
-
-            if (typeof window.moveSareePipelineStage === 'function') {
-                success = window.moveSareePipelineStage(d, sName, kName, fromKid, qty, window.currentSareeTab, toStage, note);
-            }
         }
 
-        if (success) {
-            triggerSareeCacheInvalidation();
-            closeSareeTransferModal();
-            if (sareeViewMode === 'passbook') {
-                applySareePassbookFilters();
+        isTransferringSareeUI = true;
+        try {
+            let result = false;
+
+            if (actionType === 'godown_transfer') {
+                const toKid = document.getElementById('saree-dest-godam')?.value;
+                if (typeof window.transferSareeBetweenKarkhana === 'function') {
+                    result = window.transferSareeBetweenKarkhana(d, sName, kName, fromKid, toKid, qty, window.currentSareeTab, note);
+                }
             } else {
-                renderSareeTable();
+                const toStage = document.getElementById('saree-dest-stage')?.value;
+                if (typeof window.moveSareePipelineStage === 'function') {
+                    result = window.moveSareePipelineStage(d, sName, kName, fromKid, qty, window.currentSareeTab, toStage, note);
+                }
             }
 
-            if (typeof window.updateDashboardBadgeTotals === 'function') {
-                window.updateDashboardBadgeTotals();
-            }
+            const isSuccess = (typeof result === 'object' && result !== null) ? Boolean(result.success) : Boolean(result);
+            const customMsg = (typeof result === 'object' && result !== null && result.message) ? result.message : '';
 
-            alert('✅ Saree safalta-poorvak transfer ho gayi!');
+            if (isSuccess) {
+                triggerSareeCacheInvalidation();
+                closeSareeTransferModal();
+                if (sareeViewMode === 'passbook') {
+                    applySareePassbookFilters();
+                } else {
+                    renderSareeTable();
+                }
+
+                if (typeof window.updateDashboardBadgeTotals === 'function') {
+                    window.updateDashboardBadgeTotals();
+                }
+
+                alert(customMsg || '✅ Saree safalta-poorvak transfer ho gayi!');
+            } else if (customMsg) {
+                alert(customMsg);
+            }
+        } catch (err) {
+            console.error('[SareeTransfer UI]', err);
+            alert('❌ Transfer fail ho gaya: ' + (err?.message || err));
+        } finally {
+            isTransferringSareeUI = false;
         }
     };
 
@@ -1300,10 +1420,14 @@
     window.__sareeTransferFromPass = triggerSelectedSareeTransfer;
 
     const isSareeEntryLocked = (r) => {
-        const isGai = (r.isOut === true) || (safeNum(r.gai) > 0) || String(r.typeLabel || '').includes('➔') || String(r.typeLabel || '').includes('Bheja') || String(r.note || '').includes('bheja');
-        const isOpening = (r.isOpening === true) || String(r.typeLabel || '').includes('Opening');
-        const isKarigerSheet = Boolean((r.refId && String(r.refId).startsWith('tani_')) || String(r.typeLabel || '').includes('Kariger Sheet'));
+        const ref = String(r.refId || '');
+        const label = String(r.typeLabel || '');
+        const isGai = (r.isOut === true) || (safeNum(r.gai) > 0) || label.includes('➔') || label.includes('Bheja') || String(r.note || '').includes('bheja');
+        const isOpening = (r.isOpening === true) || label.includes('Opening');
+        const isKarigerSheet = Boolean(ref.startsWith('tani_') || label.includes('Kariger Sheet'));
+        const isTransferOrStage = Boolean(ref.startsWith('tr_saree_') || ref.startsWith('stage_move_') || label.includes('⬅'));
         if (isOpening) return 'Opening Stock';
+        if (isTransferOrStage) return 'Transfer / Stage Move';
         if (isGai) return 'Outward / Dispatch';
         if (isKarigerSheet) return 'Tani Sheet';
         return '';
@@ -1336,10 +1460,10 @@
 
         const sName = decodeURIComponent(safeSaree);
         const kName = decodeURIComponent(safeKariger);
-        const kId = decodeURIComponent(safeKid);
+        const kId = normRecordGodownId(decodeURIComponent(safeKid));
 
         activePassbookMeta = { sareeName: sName, karigerName: kName, karkhanaId: kId };
-        window.currentPassbookSareeKey = `${normText(sName)}___${normText(kName)}___${normGodownId(kId)}`.toLowerCase();
+        window.currentPassbookSareeKey = `${normText(sName)}___${normText(kName)}___${kId}`.toLowerCase();
         window.currentPassbookSareeTitle = `${sName} (${kName})`;
         sareePassbookCurrentPage = 1;
         sareePassbookActiveIdx = 0;
@@ -1363,25 +1487,24 @@
     };
 
     const applySareePassbookFilters = () => {
-        const history = window.safeArray ? window.safeArray(window.getStore('saree_history')) : [];
+        const history = safeArr(window.getStore?.('saree_history'));
 
         const itemHist = history.filter((r) => {
             if (!r) return false;
             const sName = normText(r.sareeName || r.name, 'GENERAL SAREE');
             const kName = normText(r.karigerName || r.kariger, 'KARKHANA');
-            const kid = normGodownId(r.karkhanaId);
+            const kid = normRecordGodownId(r.karkhanaId);
             const key = `${sName}___${kName}___${kid}`.toLowerCase();
             const t = normTabName(r.type);
 
             return key === window.currentPassbookSareeKey && t === window.currentSareeTab.toLowerCase();
         });
 
-        // Compute chronological Running Closing Balance
+        // Compute chronological Running Closing Balance (Date first, Timestamp tie-breaker)
         const chrono = itemHist.slice().sort((a, b) => {
-            const ta = a.timestamp || 0;
-            const tb = b.timestamp || 0;
-            if (ta !== tb) return ta - tb;
-            return String(a.date || '').localeCompare(String(b.date || ''));
+            const dCmp = String(a.date || '').localeCompare(String(b.date || ''));
+            if (dCmp !== 0) return dCmp;
+            return (a.timestamp || 0) - (b.timestamp || 0);
         });
 
         let runningBal = 0;
@@ -1412,7 +1535,8 @@
             });
         }
 
-        filtered.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        // Exact reverse chronological order (newest first)
+        filtered.reverse();
 
         filteredSareePassbookCache = filtered;
 
@@ -1452,7 +1576,10 @@
         const totalEntries = filteredSareePassbookCache.length;
         if (!totalEntries) {
             tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:18px; color:#6b7280;">Is Stage par abhi koi len-den nahi hua hai.</td></tr>';
-            if (pager) pager.innerHTML = '';
+            if (pager) {
+                pager.innerHTML = '';
+                pager.style.display = 'none';
+            }
             const statusEl = document.getElementById('saree-passbook-entry-status');
             if (statusEl) statusEl.textContent = '0 Entries';
             return;
@@ -1512,6 +1639,7 @@
         highlightSareePassbookRow(sareePassbookActiveIdx);
 
         if (pager) {
+            pager.style.display = 'flex';
             pager.innerHTML = `
                 <div style="font-size:12px; color:#6b7280; font-weight:600;">
                     Showing <strong>${startIndex + 1}</strong> - <strong>${Math.min(startIndex + SAREE_PAGE_SIZE, totalEntries)}</strong> of <strong>${totalEntries}</strong> entries
@@ -1534,25 +1662,97 @@
         renderPaginatedSareePassbook();
     };
 
+    const closeSareeDeleteConfirmModal = () => {
+        const modal = document.getElementById('saree-delete-confirm-modal');
+        if (modal) modal.remove();
+    };
+
+    const executeDeleteManualSareeEntry = (id) => {
+        if (isDeletingSaree) return;
+        isDeletingSaree = true;
+
+        const snapHistory = JSON.parse(JSON.stringify(safeArr(window.getStore?.('saree_history'))));
+
+        try {
+            let history = safeArr(window.getStore?.('saree_history'));
+            history = history.filter((x) => x && String(x.id) !== String(id));
+
+            if (typeof window.setStore === 'function') {
+                window.setStore('saree_history', history);
+            }
+
+            closeSareeDeleteConfirmModal();
+            triggerSareeCacheInvalidation();
+            applySareePassbookFilters();
+            renderSareeTable();
+
+            if (typeof window.updateDashboardBadgeTotals === 'function') {
+                window.updateDashboardBadgeTotals();
+            }
+
+            alert('🗑️ Entry delete ho gayi!');
+        } catch (err) {
+            console.error('[SareeDelete]', err);
+            try {
+                if (typeof window.setStore === 'function') {
+                    window.setStore('saree_history', snapHistory);
+                }
+                triggerSareeCacheInvalidation();
+            } catch (rbErr) {
+                console.error('[SareeDelete Rollback]', rbErr);
+            }
+            closeSareeDeleteConfirmModal();
+            alert('❌ Delete fail ho gaya — Purana data restore ho gaya!');
+        } finally {
+            isDeletingSaree = false;
+        }
+    };
+
     const deleteManualSareeEntry = (id) => {
-        if (!confirm('Kya aap sach me ye manual entry delete karna chahte hain?')) return;
+        if (isDeletingSaree) return;
+        const history = safeArr(window.getStore?.('saree_history'));
+        const entry = history.find((x) => x && String(x.id) === String(id));
+        if (!entry) return alert('Entry nahi mili!');
 
-        let history = window.safeArray ? window.safeArray(window.getStore('saree_history')) : [];
-        history = history.filter((x) => x && String(x.id) !== String(id));
+        closeSareeDeleteConfirmModal();
 
-        if (typeof window.setStore === 'function') {
-            window.setStore('saree_history', history);
-        }
+        const pcs = safeInt(entry.aai !== undefined ? entry.aai : entry.pcs);
+        const modalHtml = `
+            <div id="saree-delete-confirm-modal" class="saree-modal-overlay">
+                <div class="saree-modal-card" style="max-width:400px;">
+                    <div class="saree-modal-head">
+                        <h3>Manual Entry Delete Karein?</h3>
+                        <button type="button" id="saree-del-close-btn" class="saree-modal-btn">&larr; [Esc] Close</button>
+                    </div>
+                    <div style="padding:16px;">
+                        <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:6px; padding:10px 12px; margin-bottom:12px; font-size:12.5px; color:#7f1d1d;">
+                            <div><strong>Saree:</strong> ${esc(entry.sareeName || entry.name || '-')}</div>
+                            <div><strong>Tarikh:</strong> ${esc(formatDisplay(entry.date))}</div>
+                            <div><strong>Detail:</strong> ${esc(entry.typeLabel || entry.type || '-')}</div>
+                            <div style="font-weight:800; margin-top:4px;">Sankhya: +${pcs} Pcs</div>
+                        </div>
+                        <p style="margin:0 0 14px 0; font-size:12.5px; color:#4b5563; line-height:1.45;">
+                            Kya aap sach me ye manual entry delete karna chahte hain? Stock balance wapas settle ho jayega.
+                        </p>
+                        <div style="display:flex; justify-content:flex-end; gap:8px;">
+                            <button type="button" id="saree-del-cancel-btn" class="saree-modal-btn">Cancel [Esc]</button>
+                            <button type="button" id="saree-del-confirm-btn" class="saree-modal-btn-danger">Haan, Delete Karein [Enter]</button>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
 
-        triggerSareeCacheInvalidation();
-        applySareePassbookFilters();
-        renderSareeTable();
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
 
-        if (typeof window.updateDashboardBadgeTotals === 'function') {
-            window.updateDashboardBadgeTotals();
-        }
+        document.getElementById('saree-del-close-btn')?.addEventListener('click', closeSareeDeleteConfirmModal);
+        document.getElementById('saree-del-cancel-btn')?.addEventListener('click', closeSareeDeleteConfirmModal);
+        document.getElementById('saree-del-confirm-btn')?.addEventListener('click', () => {
+            executeDeleteManualSareeEntry(id);
+        });
 
-        alert('✅ Entry delete ho gayi!');
+        setTimeout(() => {
+            document.getElementById('saree-del-confirm-btn')?.focus();
+        }, 40);
     };
 
     /* ========================================================================
@@ -1562,6 +1762,19 @@
         const sec = document.getElementById('saree-section');
         if (!sec || sec.style.display === 'none') return;
         if (isAnyExpressOverlayOpen()) return;
+
+        // 0. Delete Confirm Modal open
+        const delModal = document.getElementById('saree-delete-confirm-modal');
+        if (delModal) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeSareeDeleteConfirmModal();
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                document.getElementById('saree-del-confirm-btn')?.click();
+            }
+            return;
+        }
 
         // 1. Transfer Modal open
         const trModal = document.getElementById('saree-transfer-popup-modal');
@@ -1591,6 +1804,9 @@
             return;
         }
 
+        // Never block native browser shortcuts like Ctrl+C, Ctrl+R, Ctrl+T, Ctrl+F, Cmd+R
+        if (e.ctrlKey || e.metaKey) return;
+
         const tag = (document.activeElement && document.activeElement.tagName) || '';
         const isTyping = (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA');
 
@@ -1606,6 +1822,8 @@
             else if (sareeViewMode === 'list') printSareeStockReport();
             return;
         }
+
+        if (e.altKey) return;
 
         if (e.key === 'F4' && sareeViewMode !== 'hub') {
             e.preventDefault();
@@ -1652,7 +1870,7 @@
             } else if (e.key === '+') {
                 e.preventDefault();
                 toggleSareeForm();
-            } else if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
+            } else if (e.key.length === 1) {
                 const k = e.key.toLowerCase();
                 const found = STAGE_LIST.find(s => s.shortcut.toLowerCase() === k || s.num === k);
                 if (found) {
@@ -1966,7 +2184,7 @@
     };
 
     const printSingleSareePassbookEntry = (id) => {
-        const history = window.safeArray ? window.safeArray(window.getStore('saree_history')) : [];
+        const history = safeArr(window.getStore?.('saree_history'));
         const entry = history.find(x => x && String(x.id) === String(id));
         if (!entry) return alert('Entry nahi mili!');
 
