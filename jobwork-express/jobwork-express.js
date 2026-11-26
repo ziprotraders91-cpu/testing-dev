@@ -886,7 +886,7 @@
             const idx = jwPickerItems.findIndex((x) => x.data === activeCategory);
             jwPickerActiveIdx = idx >= 0 ? idx : 0;
         } else if (mode === 'movement') {
-            if (titleEl) titleEl.textContent = 'Select Len-Den (Click Again / F5 to Toggle)';
+            if (titleEl) titleEl.textContent = 'Select Len-Den';
             if (hintEl) hintEl.textContent = '↑↓ + Enter';
             jwPickerItems = [
                 { label: `${grpLabel(activeCategory)} Out (Bhejein)`, sub: 'Godam ➔ Worker', data: 'gayi' },
@@ -989,6 +989,8 @@
                     focusFirstField('jw-exp-worker-input');
                 };
                 if (!confirmClearBatchIfNeeded('Len-Den', applyMove)) return;
+                applyMove();
+                return;
             }
             focusFirstField('jw-exp-worker-input');
         } else if (jwPickerMode === 'worker') {
@@ -1116,7 +1118,6 @@
     };
 
     window.askSaveMasterJobWorkExpress = () => {
-        // Agar user ne Kariger + Stage + Pcs bhara hai aur seedha Save dabaa diya (bina + Add ke), toh auto-add karein
         const pendingQty = safeInt(document.getElementById('jw-exp-qty-input')?.value);
         if (selectedBatchKey && pendingQty > 0) {
             const prevLen = expressBatchItems.length;
@@ -1369,7 +1370,7 @@
                 e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress(''); return;
             }
             if (e.key === 'Enter' && acceptBar.contains(document.activeElement)) {
-                return; // Let the currently focused accept button execute its own onclick
+                return;
             }
         }
 
@@ -1441,7 +1442,6 @@
             if (!confirmClearBatchIfNeeded('Process', () => switchJobWorkCategory(cat, advanceFocus))) return false;
             const prevCat = activeCategory;
             activeCategory = cat;
-            // Work groups ke beech switch par user ka In/Out mode preserve rakhein; sirf dukan <-> group par reset karein
             if (cat === 'dukan' || prevCat === 'dukan') {
                 movementType = 'gayi';
             }
@@ -1521,7 +1521,7 @@
                 const tEl = document.getElementById('jw-exp-trans');
                 const lEl = document.getElementById('jw-exp-lr');
                 const nEl = document.getElementById('jw-exp-design');
-                if (fEl) fEl.value = `${firm.name}${firm.gst ? ` (GST: ${esc(firm.gst)})` : ''}`;
+                if (fEl) fEl.value = `${firm.name}${firm.gst ? ` (GST: ${firm.gst})` : ''}`;
                 if (!expMeta.jwNo) expMeta.jwNo = getNextChallanNo();
                 if (jEl) jEl.value = expMeta.jwNo;
                 if (tEl) tEl.value = expMeta.transport;
