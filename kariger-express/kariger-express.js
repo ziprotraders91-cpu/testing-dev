@@ -15,6 +15,12 @@
 (() => {
     'use strict';
 
+    if (window.__karigerExpressLoaded) {
+        console.warn('[KarigerExpress] Already loaded — skip duplicate');
+        return;
+    }
+    window.__karigerExpressLoaded = true;
+
     let selectedKariger = null;
     let currentActiveSheet = null;
     let activeSheetIndex = 0;
@@ -387,9 +393,11 @@
             setToStore('sancha_items', sList);
         }
 
-        let sHist = toArray(getFromStore('sancha_history'));
+        const sHist = toArray(getFromStore('sancha_history'));
+        const nowTs = Date.now();
+        const uidSuffix = Math.random().toString(36).slice(2, 6);
         sHist.push({
-            id: `shist_${Date.now()}_${catLower.charAt(0)}_${Math.floor(Math.random() * 1000)}`,
+            id: `shist_${nowTs}_${catLower.charAt(0)}_${uidSuffix}`,
             refId: refKey,
             date: getToday(),
             category: catLower,
@@ -401,7 +409,7 @@
             aaya: 0,
             gaya: safeNum(wazan),
             karkhanaId: kGodown,
-            timestamp: Date.now()
+            timestamp: nowTs
         });
         setToStore('sancha_history', sHist);
 
@@ -836,7 +844,7 @@
         let html = '';
         pickerItems.forEach((item, idx) => {
             const cls = idx === pickerActiveIdx ? 'kexp-picker-item active' : 'kexp-picker-item';
-            html += `<div class="${cls}" data-pidx="${idx}" onmousedown="event.preventDefault(); window.__kexpPickItem(${idx})">
+            html += `<div class="${cls}" data-pidx="${idx}" onmousedown="event.preventDefault()" onclick="window.__kexpPickItem(${idx})">
                 <span>${esc(item.label)}</span>
                 <span class="kexp-picker-sub">${esc(item.sub)}</span>
             </div>`;
@@ -1224,7 +1232,7 @@
             const cls = isHighlighted ? 'kexp-picker-item active' : 'kexp-picker-item';
             const actionAttr = item.readOnly
                 ? ''
-                : `onmousedown="event.preventDefault(); window.__altcPickItem(${idx})"`;
+                : `onmousedown="event.preventDefault()" onclick="window.__altcPickItem(${idx})"`;
 
             html += `<div class="${cls}" ${actionAttr}>
                 <span>${esc(item.label)}</span>
@@ -1580,12 +1588,8 @@
                         return;
                     }
 
-                    if (fid === 'altc-kar-godown' && altcPickerArrowUsed && altcPickerItems.length && el.value.trim() !== '') {
-                        window.__altcPickItem(altcPickerActiveIdx);
-                        return;
-                    }
-
                     if ((
+                        fid === 'altc-kar-godown' ||
                         fid === 'altc-kar-saree' ||
                         fid === 'altc-tani-item' ||
                         fid === 'altc-tani-sancha' ||
@@ -1747,10 +1751,15 @@
             }, 100);
         } catch (err) {
             console.error('[Alt+C Save Failed]', err);
-            setToStore('kariger_list', snapKarigers);
-            setToStore('sancha_items', snapSanchaItems);
-            setToStore('sancha_history', snapSanchaHist);
-            try { localStorage.removeItem(`kariger_sheets_${newKarigerId}`); } catch (_) {}
+            try {
+                setToStore('kariger_list', snapKarigers);
+                setToStore('sancha_items', snapSanchaItems);
+                setToStore('sancha_history', snapSanchaHist);
+                if (typeof window.saveKarigerSheets === 'function') {
+                    window.saveKarigerSheets(newKarigerId, []);
+                }
+                localStorage.removeItem(`kariger_sheets_${newKarigerId}`);
+            } catch (_) {}
             if (typeof window.invalidateSanchaCalcCache === 'function') window.invalidateSanchaCalcCache();
             setModalStatus('altc-status-msg', '❌ Save fail hua — data rollback kar diya gaya!', true);
         } finally {
@@ -1847,7 +1856,7 @@
         let html = '';
         ntaniPickerItems.forEach((item, idx) => {
             const cls = idx === ntaniPickerActiveIdx ? 'kexp-picker-item active' : 'kexp-picker-item';
-            html += `<div class="${cls}" onmousedown="event.preventDefault(); window.__ntaniPickItem(${idx})">
+            html += `<div class="${cls}" onmousedown="event.preventDefault()" onclick="window.__ntaniPickItem(${idx})">
                 <span>${esc(item.label)}</span>
                 <span class="kexp-picker-sub">${esc(item.sub)}</span>
             </div>`;
@@ -2134,13 +2143,15 @@
             console.log(`✅ Tani ${nextNum} safalta-poorvak shuru ho gayi! Pichla hisab carry-forward ho gaya.`);
         } catch (err) {
             console.error('[New Tani Save Failed]', err);
-            if (typeof window.saveKarigerSheets === 'function') {
-                window.saveKarigerSheets(kId, snapSheets);
-            } else {
-                setToStore(`kariger_sheets_${kId}`, snapSheets);
-            }
-            setToStore('sancha_items', snapSanchaItems);
-            setToStore('sancha_history', snapSanchaHist);
+            try {
+                if (typeof window.saveKarigerSheets === 'function') {
+                    window.saveKarigerSheets(kId, snapSheets);
+                } else {
+                    setToStore(`kariger_sheets_${kId}`, snapSheets);
+                }
+                setToStore('sancha_items', snapSanchaItems);
+                setToStore('sancha_history', snapSanchaHist);
+            } catch (_) {}
             if (typeof window.invalidateSanchaCalcCache === 'function') window.invalidateSanchaCalcCache();
             setModalStatus('ntani-status-msg', '❌ Save fail hua — data rollback kar diya gaya!', true);
         } finally {
@@ -2307,7 +2318,7 @@
                         }
                     }
 
-                    if ((fid === 'kexp-bana-name' || fid === 'kexp-zari-name') && pickerArrowUsed && pickerItems.length && el.value.trim() !== '') {
+                    if ((fid === 'kexp-bana-name' || fid === 'kexp-zari-name') && pickerArrowUsed && pickerItems.length) {
                         window.__kexpPickItem(pickerActiveIdx);
                         return;
                     }
@@ -2514,16 +2525,16 @@
         const kGodown = selectedKariger.karkhanaId || 'k_main';
         const date = document.getElementById('kexp-date')?.value || getToday();
 
-        const bCone = safeNum(document.getElementById('kexp-bana-cone')?.value);
-        const bLess = safeNum(document.getElementById('kexp-bana-lesstp')?.value);
-        const zQty = safeNum(document.getElementById('kexp-zari-qty')?.value);
-        const topi = safeNum(document.getElementById('kexp-zari-topi')?.value);
+        const bCone = Math.max(0, safeNum(document.getElementById('kexp-bana-cone')?.value));
+        const bLess = Math.max(0, safeNum(document.getElementById('kexp-bana-lesstp')?.value));
+        const zQty = Math.max(0, safeNum(document.getElementById('kexp-zari-qty')?.value));
+        const topi = Math.max(0, safeNum(document.getElementById('kexp-zari-topi')?.value));
 
-        const saree = safeNum(document.getElementById('kexp-saree-qty')?.value);
-        const lott = safeNum(document.getElementById('kexp-saree-lott')?.value);
-        const paid = safeNum(document.getElementById('kexp-paid-amount')?.value);
-        const retB = safeNum(document.getElementById('kexp-ret-bana')?.value);
-        const retZ = safeNum(document.getElementById('kexp-ret-zari')?.value);
+        const saree = Math.max(0, safeNum(document.getElementById('kexp-saree-qty')?.value));
+        const lott = Math.max(0, safeNum(document.getElementById('kexp-saree-lott')?.value));
+        const paid = Math.max(0, safeNum(document.getElementById('kexp-paid-amount')?.value));
+        const retB = Math.max(0, safeNum(document.getElementById('kexp-ret-bana')?.value));
+        const retZ = Math.max(0, safeNum(document.getElementById('kexp-ret-zari')?.value));
 
         const banaItemName = String(document.getElementById('kexp-bana-name')?.value || '').trim();
         const zariItemName = String(document.getElementById('kexp-zari-name')?.value || '').trim();
@@ -2548,7 +2559,9 @@
         try {
             const nBana = Math.max(0, bCone - bLess);
             const nZari = Math.max(0, zQty - topi);
-            const rowId = `row_${Date.now()}`;
+            const nowTs = Date.now();
+            const uidSuffix = Math.random().toString(36).slice(2, 6);
+            const rowId = `row_${nowTs}_${uidSuffix}`;
 
             let sheets = (typeof window.getKarigerSheets === 'function') ? window.getKarigerSheets(kId) : [];
             if (!sheets || !sheets.length) {
@@ -2595,11 +2608,11 @@
             }
 
             const freshSaree = Math.max(0, saree - lott);
-            let sHist = toArray(getFromStore('saree_history'));
+            const sHist = toArray(getFromStore('saree_history'));
 
             if (freshSaree > 0) {
                 sHist.push({
-                    id: `saree_${Date.now()}_f`,
+                    id: `saree_${nowTs}_${uidSuffix}_f`,
                     refId: rowId,
                     date: date,
                     sareeName: sDesign,
@@ -2612,12 +2625,12 @@
                     aai: freshSaree,
                     gai: 0,
                     isOut: false,
-                    timestamp: Date.now()
+                    timestamp: nowTs
                 });
             }
             if (lott > 0) {
                 sHist.push({
-                    id: `saree_${Date.now()}_l`,
+                    id: `saree_${nowTs + 1}_${uidSuffix}_l`,
                     refId: rowId,
                     date: date,
                     sareeName: sDesign,
@@ -2630,7 +2643,7 @@
                     aai: lott,
                     gai: 0,
                     isOut: false,
-                    timestamp: Date.now() + 1
+                    timestamp: nowTs + 1
                 });
             }
             setToStore('saree_history', sHist);
@@ -2638,7 +2651,7 @@
             if (banaItemName && (nBana > 0 || retB > 0)) {
                 const bHist = toArray(getFromStore('bana_history'));
                 bHist.push({
-                    id: `bhist_${Date.now()}`,
+                    id: `bhist_${nowTs}_${uidSuffix}`,
                     refId: rowId,
                     date: date,
                     name: banaItemName,
@@ -2647,7 +2660,7 @@
                     aaya: retB > 0 ? retB : 0,
                     gaya: nBana > 0 ? nBana : 0,
                     karkhanaId: kGodown,
-                    timestamp: Date.now()
+                    timestamp: nowTs
                 });
                 setToStore('bana_history', bHist);
             }
@@ -2655,7 +2668,7 @@
             if (zariItemName && (nZari > 0 || retZ > 0)) {
                 const zHist = toArray(getFromStore('zari_history'));
                 zHist.push({
-                    id: `zhist_${Date.now()}`,
+                    id: `zhist_${nowTs}_${uidSuffix}`,
                     refId: rowId,
                     date: date,
                     name: zariItemName,
@@ -2664,7 +2677,7 @@
                     aaya: retZ > 0 ? retZ : 0,
                     gaya: nZari > 0 ? nZari : 0,
                     karkhanaId: kGodown,
-                    timestamp: Date.now()
+                    timestamp: nowTs
                 });
                 setToStore('zari_history', zHist);
             }
@@ -2672,13 +2685,13 @@
             if (paid > 0) {
                 const payList = toArray(getFromStore('payment_history'));
                 payList.push({
-                    id: `pay_${Date.now()}`,
+                    id: `pay_${nowTs}_${uidSuffix}`,
                     date: date,
                     party: kName,
                     type: 'कारीगर मजदूरी',
                     amount: paid,
                     mode: 'Cash',
-                    timestamp: Date.now()
+                    timestamp: nowTs
                 });
                 setToStore('payment_history', payList);
             }
@@ -2693,7 +2706,7 @@
 
             // AUTO-TANI COMPLETE & ROLLOVER TRIGGER (ONLY ON LATEST SHEET)
             let isTaniCompleted = false;
-            let completedTaniTitle = activeSheet.title;
+            const completedTaniTitle = activeSheet.title;
             let nextTaniTitle = '';
             let pBana = 0, pZari = 0, pBani = 0;
 
