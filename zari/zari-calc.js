@@ -1,13 +1,14 @@
 /* ========================================================
    SIMPLICITY ERP - ACCURATE ZARI STOCK CALCULATION ENGINE
    File: zari/zari-calc.js • Developed by Farhan Jawed
-   (Purana Accurate Calculation + Ignore 0-Kg Dead Rows)
+   (Accurate Calculation + Save Lock, Rollback & Fast Stats)
 ======================================================== */
 
 (() => {
     'use strict';
 
     window.currentZariKarkhanaFilter = "all";
+    let isTransferringZari = false;
 
     const roundWeight = (val) => {
         const num = parseFloat(val);
@@ -22,7 +23,20 @@
     const normalizeGodownId = (id) => {
         if (!id || id === 'all') return 'all';
         const clean = String(id).trim();
-        return (!clean || clean === 'k_main') ? 'k_main' : clean;
+        if (!clean || clean.toLowerCase() === 'all') return 'all';
+        return clean === 'k_main' ? 'k_main' : clean;
+    };
+
+    const normalizeRecordGodownId = (id) => {
+        if (id === undefined || id === null) return 'k_main';
+        const clean = String(id).trim();
+        if (!clean || clean === 'k_main') return 'k_main';
+        if (clean.toLowerCase() === 'all') return 'all';
+        return clean;
+    };
+
+    const invalidateZariCalcCache = () => {
+        // Reserved hook for BackupEngine & StorageEngine cache invalidation
     };
 
     /**
@@ -64,11 +78,11 @@
             }
         });
 
-        // Helper match rule: Item name strictly match hona chahiye
+        // Helper match rule: Item name strictly match hona chahiye; blank fallback sirf tab jab wahi ek active item ho
         const isItemMatch = function(rowItemName) {
-            const rN = (rowItemName || "").trim().toLowerCase();
+            const rN = String(rowItemName || "").trim().toLowerCase();
             if (rN === nameLower) return true;
-            if (!rN && uniqueItemCount <= 1) return true;
+            if (!rN && uniqueItemCount === 1 && seenNames[0] === nameLower) return true;
             return false;
         };
 
@@ -99,74 +113,28 @@
             });
         }
 
-        // --- CASE 2: MAIN GODOWN ONLY ---
-        else if (kId === "k_main") {
-            zStock.forEach(function(z) {
-                const matchK = (!z.karkhanaId || z.karkhanaId === "k_main");
-                if (z && matchK && z.name && z.name.trim().toLowerCase() === nameLower) {
-                    totalAaya += safeNum(z.aaya !== undefined ? z.aaya : (z.qty || z.totalQty));
-                    if (z.date && (!lastDate || z.date > lastDate)) lastDate = z.date;
-                }
-            });
-
-            transfers.forEach(function(t) {
-                const fromK = normalizeGodownId(t.fromKarkhanaId);
-                if (fromK === "k_main" && t.itemName && t.itemName.trim().toLowerCase() === nameLower) {
-                    totalGaya += safeNum(t.qty || t.quantity);
-                    if (t.date && (!lastDate || t.date > lastDate)) lastDate = t.date;
-                }
-            });
-
-            transfers.forEach(function(t) {
-                const toK = normalizeGodownId(t.toKarkhanaId);
-                if (toK === "k_main" && t.itemName && t.itemName.trim().toLowerCase() === nameLower) {
-                    totalAaya += safeNum(t.qty || t.quantity);
-                    if (t.date && (!lastDate || t.date > lastDate)) lastDate = t.date;
-                }
-            });
-
-            allKarigers.forEach(function(k) {
-                const sheets = (typeof window.getKarigerSheets === "function") ? window.getKarigerSheets(k.id) : [];
-                sheets.forEach(function(sh) {
-                    const defaultSheetItem = (sh.zariItem || '').trim();
-                    const rows = window.safeArray ? window.safeArray(sh.rows) : [];
-                    rows.forEach(function(r) {
-                        if (!r) return;
-                        const rowKarkhana = normalizeGodownId(r.karkhanaId || k.karkhanaId || "k_main");
-                        if (rowKarkhana === "k_main") {
-                            const item = r.zariItemName || r.zariItem || defaultSheetItem;
-                            if (isItemMatch(item)) {
-                                totalGaya += safeNum(r.netZari);
-                                totalAaya += safeNum(r.retZari);
-                                if (r.date && (!lastDate || r.date > lastDate)) lastDate = r.date;
-                            }
-                        }
-                    });
-                });
-            });
-        }
-
-        // --- CASE 3: BRANCH GODOWN ---
+        // --- CASE 2 & 3: MAIN GODOWN YA SPECIFIC BRANCH GODOWN ---
         else {
             zStock.forEach(function(z) {
-                if (z && String(z.karkhanaId) === String(kId) && z.name && z.name.trim().toLowerCase() === nameLower) {
+                const itemKid = normalizeRecordGodownId(z && z.karkhanaId ? z.karkhanaId : "k_main");
+                if (z && itemKid === kId && z.name && z.name.trim().toLowerCase() === nameLower) {
                     totalAaya += safeNum(z.aaya !== undefined ? z.aaya : (z.qty || z.totalQty));
                     if (z.date && (!lastDate || z.date > lastDate)) lastDate = z.date;
                 }
             });
 
             transfers.forEach(function(t) {
-                const toK = normalizeGodownId(t.toKarkhanaId);
-                if (String(toK) === String(kId) && t.itemName && t.itemName.trim().toLowerCase() === nameLower) {
-                    totalAaya += safeNum(t.qty || t.quantity);
+                const fromK = normalizeRecordGodownId(t.fromKarkhanaId);
+                if (fromK === kId && t.itemName && t.itemName.trim().toLowerCase() === nameLower) {
+                    totalGaya += safeNum(t.qty || t.quantity);
                     if (t.date && (!lastDate || t.date > lastDate)) lastDate = t.date;
                 }
             });
 
             transfers.forEach(function(t) {
-                const fromK = normalizeGodownId(t.fromKarkhanaId);
-                if (String(fromK) === String(kId) && t.itemName && t.itemName.trim().toLowerCase() === nameLower) {
-                    totalGaya += safeNum(t.qty || t.quantity);
+                const toK = normalizeRecordGodownId(t.toKarkhanaId);
+                if (toK === kId && t.itemName && t.itemName.trim().toLowerCase() === nameLower) {
+                    totalAaya += safeNum(t.qty || t.quantity);
                     if (t.date && (!lastDate || t.date > lastDate)) lastDate = t.date;
                 }
             });
@@ -178,8 +146,8 @@
                     const rows = window.safeArray ? window.safeArray(sh.rows) : [];
                     rows.forEach(function(r) {
                         if (!r) return;
-                        const rowKarkhana = normalizeGodownId(r.karkhanaId || k.karkhanaId || "k_main");
-                        if (String(rowKarkhana) === String(kId)) {
+                        const rowKarkhana = normalizeRecordGodownId(r.karkhanaId || sh.karkhanaId || k.karkhanaId || "k_main");
+                        if (rowKarkhana === kId) {
                             const item = r.zariItemName || r.zariItem || defaultSheetItem;
                             if (isItemMatch(item)) {
                                 totalGaya += safeNum(r.netZari);
@@ -204,6 +172,118 @@
     };
 
     /**
+     * 1B. Single-Pass Batch Stats (1,000+ Karigers par fast table render ke liye)
+     */
+    const getAllZariStats = (targetKarkhanaId) => {
+        const kId = normalizeGodownId(targetKarkhanaId || window.currentZariKarkhanaFilter || "all");
+        const zStock = window.safeArray ? window.safeArray(window.getStore("zari_stock")) : [];
+        const transfers = (window.safeArray ? window.safeArray(window.getStore("material_transfers")) : []).filter(function(t) {
+            return t && t.type === "zari";
+        });
+        const allKarigers = (typeof window.sanitizeKarigerList === "function")
+            ? window.sanitizeKarigerList()
+            : (window.safeArray ? window.safeArray(window.getStore("kariger_list")) : []);
+
+        const statsMap = {};
+        const orderList = [];
+        const activeNames = [];
+
+        const ensureItem = (rawName) => {
+            const clean = String(rawName || '').trim();
+            if (!clean) return null;
+            const lower = clean.toLowerCase();
+            if (!statsMap[lower]) {
+                statsMap[lower] = { name: clean, date: '', aaya: 0, gaya: 0 };
+                orderList.push(lower);
+            }
+            return statsMap[lower];
+        };
+
+        zStock.forEach(function(z) {
+            if (!z || !z.name) return;
+            const entry = ensureItem(z.name);
+            if (!entry) return;
+
+            const qtyVal = safeNum(z.aaya !== undefined ? z.aaya : (z.qty || z.totalQty));
+            const lower = entry.name.toLowerCase();
+            if (qtyVal > 0 && activeNames.indexOf(lower) === -1) {
+                activeNames.push(lower);
+            }
+
+            const itemKid = normalizeRecordGodownId(z.karkhanaId || "k_main");
+            if (kId === "all" || itemKid === kId) {
+                entry.aaya += qtyVal;
+                if (z.date && (!entry.date || z.date > entry.date)) entry.date = z.date;
+            }
+        });
+
+        if (kId !== "all") {
+            transfers.forEach(function(t) {
+                if (!t.itemName) return;
+                const entry = ensureItem(t.itemName);
+                if (!entry) return;
+                const fromK = normalizeRecordGodownId(t.fromKarkhanaId);
+                const toK = normalizeRecordGodownId(t.toKarkhanaId);
+                const q = safeNum(t.qty || t.quantity);
+                if (fromK === kId) {
+                    entry.gaya += q;
+                    if (t.date && (!entry.date || t.date > entry.date)) entry.date = t.date;
+                }
+                if (toK === kId) {
+                    entry.aaya += q;
+                    if (t.date && (!entry.date || t.date > entry.date)) entry.date = t.date;
+                }
+            });
+        }
+
+        const singleActiveLower = (activeNames.length === 1) ? activeNames[0] : "";
+
+        allKarigers.forEach(function(k) {
+            const sheets = (typeof window.getKarigerSheets === "function") ? window.getKarigerSheets(k.id) : [];
+            sheets.forEach(function(sh) {
+                const defaultSheetItem = (sh.zariItem || '').trim();
+                const rows = window.safeArray ? window.safeArray(sh.rows) : [];
+                rows.forEach(function(r) {
+                    if (!r) return;
+                    if (kId !== "all") {
+                        const rowKarkhana = normalizeRecordGodownId(r.karkhanaId || sh.karkhanaId || k.karkhanaId || "k_main");
+                        if (rowKarkhana !== kId) return;
+                    }
+                    const rawItem = String(r.zariItemName || r.zariItem || defaultSheetItem || '').trim();
+                    const targetLower = rawItem ? rawItem.toLowerCase() : singleActiveLower;
+                    if (!targetLower || !statsMap[targetLower]) return;
+
+                    const entry = statsMap[targetLower];
+                    entry.gaya += safeNum(r.netZari);
+                    entry.aaya += safeNum(r.retZari);
+                    if (r.date && (!entry.date || r.date > entry.date)) entry.date = r.date;
+                });
+            });
+        });
+
+        const todayFallback = (typeof window.getTodayDate === "function" ? window.getTodayDate() : "");
+        const result = [];
+        orderList.forEach(function(lower) {
+            const e = statsMap[lower];
+            const bacha = Math.max(0, e.aaya - e.gaya);
+            const aayaRounded = roundWeight(e.aaya);
+            const gayaRounded = roundWeight(e.gaya);
+            const bachaRounded = roundWeight(bacha);
+            if (aayaRounded > 0 || gayaRounded > 0 || bachaRounded > 0) {
+                result.push({
+                    name: e.name,
+                    date: e.date || todayFallback,
+                    aaya: aayaRounded,
+                    gaya: gayaRounded,
+                    bacha: bachaRounded
+                });
+            }
+        });
+
+        return result;
+    };
+
+    /**
      * 2. Zari Available Balance Checker
      */
     const getZariAvailableBalance = (itemName, karkhanaId) => {
@@ -212,103 +292,146 @@
     };
 
     /**
-     * 3. Inter-Karkhana Zari Transfer Engine
+     * 3. Inter-Karkhana Zari Transfer Engine (Locked & Rollback Safe)
      */
     const transferZariStock = (date, itemName, fromKarkhanaId, toKarkhanaId, qty, note) => {
-        const weight = safeNum(qty);
-        if (weight <= 0) {
-            alert("Kripya sahi wazan (Qty) darj karein!");
+        if (isTransferringZari) {
+            alert("⏳ Transfer pehle se chal raha hai!");
             return false;
         }
+        isTransferringZari = true;
 
-        const sourceKid = normalizeGodownId(fromKarkhanaId);
-        const targetKid = normalizeGodownId(toKarkhanaId);
+        try {
+            const weight = roundWeight(qty);
+            if (weight <= 0) {
+                alert("Kripya sahi wazan (Qty) darj karein!");
+                return false;
+            }
 
-        if (sourceKid === targetKid) {
-            alert("Bhejne wala aur Paane wala Godam alag-alag hona chahiye!");
-            return false;
+            const sourceKid = normalizeGodownId(fromKarkhanaId);
+            const targetKid = normalizeGodownId(toKarkhanaId);
+
+            if (!fromKarkhanaId || sourceKid === 'all' || !toKarkhanaId || targetKid === 'all') {
+                alert("Kripya sahi Bhejne wala aur Paane wala Godam chunein!");
+                return false;
+            }
+
+            if (sourceKid === targetKid) {
+                alert("Bhejne wala aur Paane wala Godam alag-alag hona chahiye!");
+                return false;
+            }
+
+            const cleanName = String(itemName || "").trim();
+            if (!cleanName) {
+                alert("Zari Item ka naam chunein!");
+                return false;
+            }
+
+            const available = getZariAvailableBalance(cleanName, sourceKid);
+            if (weight > available) {
+                alert("Bhejne wale godam me sirf " + available.toFixed(2) + " Kg Zari bachi hai! Aap " + weight.toFixed(2) + " Kg transfer nahi kar sakte.");
+                return false;
+            }
+
+            const cleanDate = date || (typeof window.getTodayDate === "function" ? window.getTodayDate() : new Date().toISOString().split("T")[0]);
+            const fromName = (typeof window.getKarkhanaNameById === "function") ? window.getKarkhanaNameById(sourceKid) : sourceKid;
+            const toName = (typeof window.getKarkhanaNameById === "function") ? window.getKarkhanaNameById(targetKid) : targetKid;
+            const nowTs = Date.now();
+            const uidSuffix = Math.random().toString(36).slice(2, 6);
+            const transferRef = "tr_zari_" + nowTs + "_" + uidSuffix;
+
+            const snapTransfers = JSON.parse(JSON.stringify(window.safeArray ? window.safeArray(window.getStore("material_transfers")) : []));
+            const snapZariHist = JSON.parse(JSON.stringify(window.safeArray ? window.safeArray(window.getStore("zari_history")) : []));
+            const hasTransferLog = (typeof window.recordTransferEntry === "function");
+            const snapKarkhanaTransfers = hasTransferLog
+                ? JSON.parse(JSON.stringify(window.safeArray ? window.safeArray(window.getStore("karkhana_transfers")) : []))
+                : null;
+
+            try {
+                const transfers = window.safeArray ? window.safeArray(window.getStore("material_transfers")) : [];
+                transfers.push({
+                    id: transferRef,
+                    date: cleanDate,
+                    type: "zari",
+                    itemName: cleanName,
+                    fromKarkhanaId: sourceKid,
+                    toKarkhanaId: targetKid,
+                    qty: weight,
+                    quantity: weight,
+                    note: note || ("Transfer: " + fromName + " ➔ " + toName),
+                    timestamp: nowTs
+                });
+                if (typeof window.setStore === "function") window.setStore("material_transfers", transfers);
+
+                const hist = window.safeArray ? window.safeArray(window.getStore("zari_history")) : [];
+                hist.push({
+                    id: "zhist_out_" + nowTs + "_" + uidSuffix,
+                    date: cleanDate,
+                    name: cleanName,
+                    kariger: "Godown Transfer",
+                    type: "Transfer Out ➔ " + toName + (note ? " (" + note + ")" : ""),
+                    aaya: 0,
+                    gaya: weight,
+                    karkhanaId: sourceKid,
+                    refId: transferRef,
+                    timestamp: nowTs
+                });
+
+                hist.push({
+                    id: "zhist_in_" + (nowTs + 1) + "_" + uidSuffix,
+                    date: cleanDate,
+                    name: cleanName,
+                    kariger: "Godown Transfer",
+                    type: "Transfer In ⬅ " + fromName + (note ? " (" + note + ")" : ""),
+                    aaya: weight,
+                    gaya: 0,
+                    karkhanaId: targetKid,
+                    refId: transferRef,
+                    timestamp: nowTs + 1
+                });
+                if (typeof window.setStore === "function") window.setStore("zari_history", hist);
+
+                if (hasTransferLog) {
+                    window.recordTransferEntry({
+                        id: transferRef,
+                        date: cleanDate,
+                        fromKarkhanaId: sourceKid,
+                        toKarkhanaId: targetKid,
+                        type: "zari",
+                        itemName: cleanName,
+                        quantity: weight,
+                        remarks: note || ("Zari Transfer: " + fromName + " ➔ " + toName)
+                    });
+                }
+
+                return true;
+            } catch (err) {
+                console.error('[ZariTransfer Failed]', err);
+                try {
+                    if (typeof window.setStore === "function") {
+                        window.setStore("material_transfers", snapTransfers);
+                        window.setStore("zari_history", snapZariHist);
+                        if (hasTransferLog && snapKarkhanaTransfers !== null) {
+                            window.setStore("karkhana_transfers", snapKarkhanaTransfers);
+                        }
+                    }
+                } catch (rbErr) {
+                    console.error('[ZariTransfer Rollback Error]', rbErr);
+                }
+                alert("❌ Transfer save karne me dikkat aayi — purana data surakshit hai!");
+                return false;
+            }
+        } finally {
+            isTransferringZari = false;
         }
-
-        const cleanName = (itemName || "").trim();
-        if (!cleanName) {
-            alert("Zari Item ka naam chunein!");
-            return false;
-        }
-
-        const available = getZariAvailableBalance(cleanName, sourceKid);
-        if (weight > available) {
-            alert("Bhejne wale godam me sirf " + available.toFixed(2) + " Kg Zari bachi hai! Aap " + weight.toFixed(2) + " Kg transfer nahi kar sakte.");
-            return false;
-        }
-
-        const cleanDate = date || (typeof window.getTodayDate === "function" ? window.getTodayDate() : new Date().toISOString().split("T")[0]);
-        const fromName = (typeof window.getKarkhanaNameById === "function") ? window.getKarkhanaNameById(sourceKid) : sourceKid;
-        const toName = (typeof window.getKarkhanaNameById === "function") ? window.getKarkhanaNameById(targetKid) : targetKid;
-        const transferRef = "tr_zari_" + Date.now();
-
-        const transfers = window.safeArray ? window.safeArray(window.getStore("material_transfers")) : [];
-        transfers.push({
-            id: transferRef,
-            date: cleanDate,
-            type: "zari",
-            itemName: cleanName,
-            fromKarkhanaId: sourceKid,
-            toKarkhanaId: targetKid,
-            qty: weight,
-            quantity: weight,
-            note: note || ("Transfer: " + fromName + " ➔ " + toName),
-            timestamp: Date.now()
-        });
-        if (typeof window.setStore === "function") window.setStore("material_transfers", transfers);
-
-        const hist = window.safeArray ? window.safeArray(window.getStore("zari_history")) : [];
-        hist.push({
-            id: "zhist_out_" + Date.now(),
-            date: cleanDate,
-            name: cleanName,
-            kariger: "Godown Transfer",
-            type: "Transfer Out ➔ " + toName + (note ? " (" + note + ")" : ""),
-            aaya: 0,
-            gaya: weight,
-            karkhanaId: sourceKid,
-            refId: transferRef,
-            timestamp: Date.now()
-        });
-
-        hist.push({
-            id: "zhist_in_" + (Date.now() + 1),
-            date: cleanDate,
-            name: cleanName,
-            kariger: "Godown Transfer",
-            type: "Transfer In ⬅ " + fromName + (note ? " (" + note + ")" : ""),
-            aaya: weight,
-            gaya: 0,
-            karkhanaId: targetKid,
-            refId: transferRef,
-            timestamp: Date.now() + 1
-        });
-        if (typeof window.setStore === "function") window.setStore("zari_history", hist);
-
-        if (typeof window.recordTransferEntry === "function") {
-            window.recordTransferEntry({
-                id: transferRef,
-                date: cleanDate,
-                fromKarkhanaId: sourceKid,
-                toKarkhanaId: targetKid,
-                type: "zari",
-                itemName: cleanName,
-                quantity: weight,
-                remarks: note || ("Zari Transfer: " + fromName + " ➔ " + toName)
-            });
-        }
-
-        return true;
     };
 
     const zariCalcAPI = {
         getZariItemStats,
+        getAllZariStats,
         getZariAvailableBalance,
         transferZariStock,
+        invalidateZariCalcCache,
         roundWeight
     };
 
