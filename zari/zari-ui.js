@@ -1,14 +1,26 @@
 /* ============================================================================
    SIMPLICITY ERP - ZARI STOCK & PASSBOOK ENGINE (TALLYPRIME WHITE & GOLD)
    File: zari/zari-ui.js • Developed by Farhan Jawed
-   (100% Supabase-Safe | Zero Row Clutter | Inline Drill-Down Passbook + Keys)
+   (100% Supabase-Safe | PWA Confirm Modal | Transactional Locks & Rollback)
 ============================================================================ */
 
 (() => {
     'use strict';
 
+    if (window.__zariUILoaded) {
+        console.warn('[ZariUI] Already loaded — skip duplicate');
+        return;
+    }
+    window.__zariUILoaded = true;
+
     window.currentZariKarkhanaFilter = 'all';
     window.currentPassbookZariItem = '';
+
+    // Transactional Save / Action Locks
+    let isSavingZari = false;
+    let isSavingZariEdit = false;
+    let isTransferringZariUI = false;
+    let isDeletingZari = false;
 
     // Pagination & Keyboard Cursor State - Passbook
     let zariPassbookCurrentPage = 1;
@@ -23,6 +35,7 @@
     let currentZariFilteredRowsCache = [];
     let zariListActiveIdx = 0;
     let zariOpenedAt = 0;
+    let searchDebounceTimer = null;
 
     const esc = (s) => {
         if (typeof window.sanitizeHTML === 'function') return window.sanitizeHTML(s);
@@ -34,6 +47,15 @@
     const safeNum = (val, fallback = 0) => {
         const n = parseFloat(val);
         return isNaN(n) || !isFinite(n) ? fallback : n;
+    };
+
+    const safeArr = (val) => (typeof window.safeArray === 'function' ? window.safeArray(val) : (Array.isArray(val) ? val : []));
+
+    const getEntryAaya = (r) => {
+        if (!r) return 0;
+        if (r.aaya !== undefined && r.aaya !== null && r.aaya !== '') return safeNum(r.aaya);
+        if (safeNum(r.gaya) > 0) return 0;
+        return safeNum(r.qty);
     };
 
     const setDisplay = (id, val) => {
@@ -309,6 +331,45 @@
                 background: #fffdf5 !important;
                 box-shadow: 0 0 0 2px rgba(242, 183, 29, 0.22);
             }
+            .zari-modal-btn {
+                background: #ffffff;
+                color: #1f2937;
+                border: 1px solid #d1d5db;
+                border-radius: 5px;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 700;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .zari-modal-btn:hover {
+                border-color: #d9a425;
+                background: #fef9ea;
+            }
+            .zari-modal-btn-gold {
+                background: #f2b71d;
+                color: #1f2937;
+                border: 1px solid #d9a425;
+                border-radius: 5px;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 800;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .zari-modal-btn-gold:hover { background: #e5aa12; }
+            .zari-modal-btn-danger {
+                background: #dc2626;
+                color: #ffffff;
+                border: 1px solid #b91c1c;
+                border-radius: 5px;
+                padding: 6px 14px;
+                font-size: 12px;
+                font-weight: 800;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .zari-modal-btn-danger:hover { background: #b91c1c; }
         `;
         document.head.appendChild(style);
     };
@@ -337,7 +398,7 @@
         if (filterPanel) filterPanel.style.display = showPassbook ? 'none' : 'flex';
         if (addForm && showPassbook) addForm.style.display = 'none';
         if (mainTbl) mainTbl.style.display = listDisp;
-        if (mainPager) mainPager.style.display = showPassbook ? 'none' : 'flex';
+        if (mainPager) mainPager.style.display = showPassbook ? 'none' : (currentZariFilteredRowsCache.length ? 'flex' : 'none');
         if (mainStatus) mainStatus.style.display = showPassbook ? 'none' : 'flex';
         if (passView) passView.style.display = showPassbook ? 'block' : 'none';
 
@@ -394,7 +455,7 @@
         if (typeof window.getKarkhanasSafe === 'function') {
             karkhanas = window.getKarkhanasSafe();
         } else {
-            karkhanas = window.safeArray ? window.safeArray(window.getStore('karkhana_list')) : [];
+            karkhanas = safeArr(window.getStore?.('karkhana_list'));
         }
         if (!karkhanas.length) {
             karkhanas = [{ id: 'k_main', name: 'Main Godown', isDefault: true }];
@@ -425,7 +486,7 @@
         if (typeof window.getKarkhanasSafe === 'function') {
             karkhanas = window.getKarkhanasSafe();
         } else {
-            karkhanas = window.safeArray ? window.safeArray(window.getStore('karkhana_list')) : [];
+            karkhanas = safeArr(window.getStore?.('karkhana_list'));
         }
         if (!karkhanas.length) karkhanas = [{ id: 'k_main', name: 'Main Godown' }];
 
@@ -436,7 +497,7 @@
     };
 
     /* ========================================================================
-       4. INWARD PURCHASE ENGINE (100% SUPABASE SAFE)
+       4. INWARD PURCHASE ENGINE (100% SUPABASE SAFE + LOCK & ROLLBACK)
        ======================================================================== */
     const toggleZariForm = () => {
         if (isZariPassbookViewOpen) setZariSubViewMode(false);
@@ -449,6 +510,13 @@
             const dInp = document.getElementById('zari-date');
             if (dInp) dInp.value = getToday();
             populateZariExistingDropdown();
+
+            const sel = document.getElementById('zari-select-existing');
+            const rNew = document.getElementById('zari-type-new');
+            if (sel && sel.options.length === 0 && rNew) {
+                rNew.checked = true;
+            }
+
             toggleZariItemType();
             setTimeout(() => {
                 const isNew = document.getElementById('zari-type-new')?.checked;
@@ -470,7 +538,7 @@
         const sel = document.getElementById('zari-select-existing');
         if (!sel) return;
         sel.innerHTML = '';
-        const list = window.safeArray ? window.safeArray(window.getStore('zari_stock')) : [];
+        const list = safeArr(window.getStore?.('zari_stock'));
         const unique = [];
 
         list.forEach((z) => {
@@ -486,70 +554,97 @@
     };
 
     const saveNewZari = () => {
-        const isNew = document.getElementById('zari-type-new')
-            ? document.getElementById('zari-type-new').checked
-            : true;
+        if (isSavingZari) return;
+        isSavingZari = true;
 
-        const nameInp = isNew ? document.getElementById('zari-new-name') : document.getElementById('zari-select-existing');
-        const name = String(nameInp?.value || '').trim();
+        try {
+            const isNew = document.getElementById('zari-type-new')
+                ? document.getElementById('zari-type-new').checked
+                : true;
 
-        const date = document.getElementById('zari-date')?.value || getToday();
-        const qtyInp = document.getElementById('zari-aaya');
-        const qty = safeNum(qtyInp?.value);
+            const nameInp = isNew ? document.getElementById('zari-new-name') : document.getElementById('zari-select-existing');
+            const name = String(nameInp?.value || '').trim();
 
-        if (!name) return alert('Zari Item ka naam zaroori hai!');
-        if (qty <= 0) return alert('Wazan (Qty) daalein!');
+            const date = document.getElementById('zari-date')?.value || getToday();
+            const qtyInp = document.getElementById('zari-aaya');
+            const qty = safeNum(qtyInp?.value);
 
-        const targetKid = (window.currentZariKarkhanaFilter !== 'all') ? window.currentZariKarkhanaFilter : 'k_main';
-        const list = window.safeArray ? window.safeArray(window.getStore('zari_stock')) : [];
+            if (!name) return alert('Zari Item ka naam zaroori hai!');
+            if (qty <= 0) return alert('Wazan (Qty) daalein!');
 
-        const item = list.find((x) => {
-            const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-            return x?.name && x.name.toLowerCase() === name.toLowerCase() && matchKid;
-        });
+            const roundedQty = Number(qty.toFixed(2));
+            const targetKid = (window.currentZariKarkhanaFilter !== 'all') ? window.currentZariKarkhanaFilter : 'k_main';
 
-        if (item) {
-            item.aaya = safeNum((safeNum(item.aaya) + qty).toFixed(2));
-            item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
-            item.date = date;
-        } else {
-            list.push({
-                id: `zari_${Date.now()}`,
-                date,
-                name,
-                aaya: qty,
-                gaya: 0,
-                bacha: qty,
-                karkhanaId: targetKid,
-                timestamp: Date.now()
-            });
+            const snapStock = JSON.parse(JSON.stringify(safeArr(window.getStore?.('zari_stock'))));
+            const snapHist = JSON.parse(JSON.stringify(safeArr(window.getStore?.('zari_history'))));
+
+            try {
+                const list = safeArr(window.getStore?.('zari_stock'));
+                const nowTs = Date.now();
+                const uidSuffix = Math.random().toString(36).slice(2, 6);
+
+                const item = list.find((x) => {
+                    const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
+                    return x?.name && x.name.trim().toLowerCase() === name.toLowerCase() && matchKid;
+                });
+
+                if (item) {
+                    item.aaya = safeNum((safeNum(item.aaya) + roundedQty).toFixed(2));
+                    item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
+                    item.date = date;
+                } else {
+                    list.push({
+                        id: `zari_${nowTs}_${uidSuffix}`,
+                        date,
+                        name,
+                        aaya: roundedQty,
+                        gaya: 0,
+                        bacha: roundedQty,
+                        karkhanaId: targetKid,
+                        timestamp: nowTs
+                    });
+                }
+                if (typeof window.setStore === 'function') window.setStore('zari_stock', list);
+
+                const hist = safeArr(window.getStore?.('zari_history'));
+                hist.push({
+                    id: `zhist_${nowTs}_${uidSuffix}`,
+                    date,
+                    name,
+                    kariger: 'Godown Purchase',
+                    type: 'Khareed (Inward)',
+                    aaya: roundedQty,
+                    gaya: 0,
+                    karkhanaId: targetKid,
+                    timestamp: nowTs
+                });
+                if (typeof window.setStore === 'function') window.setStore('zari_history', hist);
+
+                const newNameEl = document.getElementById('zari-new-name');
+                if (newNameEl) newNameEl.value = '';
+                if (qtyInp) qtyInp.value = '';
+
+                toggleZariForm();
+                populateZariExistingDropdown();
+                renderZariTable();
+
+                if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+                alert(`✅ ${roundedQty.toFixed(2)} Kg Zari Stock me jama ho gayi!`);
+            } catch (err) {
+                console.error('[ZariSave]', err);
+                try {
+                    if (typeof window.setStore === 'function') {
+                        window.setStore('zari_stock', snapStock);
+                        window.setStore('zari_history', snapHist);
+                    }
+                } catch (rbErr) {
+                    console.error('[ZariSave Rollback]', rbErr);
+                }
+                alert('❌ Save fail ho gaya — purana stock surakshit hai!');
+            }
+        } finally {
+            isSavingZari = false;
         }
-        if (typeof window.setStore === 'function') window.setStore('zari_stock', list);
-
-        const hist = window.safeArray ? window.safeArray(window.getStore('zari_history')) : [];
-        hist.push({
-            id: `zhist_${Date.now()}`,
-            date,
-            name,
-            kariger: 'Godown Purchase',
-            type: 'Khareed (Inward)',
-            aaya: qty,
-            gaya: 0,
-            karkhanaId: targetKid,
-            timestamp: Date.now()
-        });
-        if (typeof window.setStore === 'function') window.setStore('zari_history', hist);
-
-        const newNameEl = document.getElementById('zari-new-name');
-        if (newNameEl) newNameEl.value = '';
-        if (qtyInp) qtyInp.value = '';
-
-        toggleZariForm();
-        populateZariExistingDropdown();
-        renderZariTable();
-
-        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-        alert(`✅ ${qty.toFixed(2)} Kg Zari Stock me jama ho gayi!`);
     };
 
     const bindZariSearchInput = () => {
@@ -557,13 +652,18 @@
         if (searchInp && !searchInp.dataset.bound) {
             searchInp.dataset.bound = 'true';
             searchInp.addEventListener('input', () => {
-                zariStockCurrentPage = 1;
-                zariListActiveIdx = 0;
-                renderZariTable();
+                clearTimeout(searchDebounceTimer);
+                searchDebounceTimer = setTimeout(() => {
+                    zariStockCurrentPage = 1;
+                    zariListActiveIdx = 0;
+                    renderZariTable();
+                }, 100);
             });
             searchInp.addEventListener('keydown', (e) => {
                 if (e.key === 'ArrowDown' || e.key === 'Enter') {
                     e.preventDefault();
+                    clearTimeout(searchDebounceTimer);
+                    renderZariTable();
                     searchInp.blur();
                     if (e.key === 'Enter' && currentZariFilteredRowsCache.length > 0) {
                         const pageRows = getZariCurrentPageRows();
@@ -605,26 +705,30 @@
         if (!tbody) return;
         tbody.innerHTML = '';
 
-        const rawStock = window.safeArray ? window.safeArray(window.getStore('zari_stock')) : [];
-        const uniqueNames = [];
+        let rows = [];
+        if (typeof window.getAllZariStats === 'function') {
+            rows = window.getAllZariStats(window.currentZariKarkhanaFilter);
+        } else {
+            const rawStock = safeArr(window.getStore?.('zari_stock'));
+            const uniqueNames = [];
 
-        rawStock.forEach((z) => {
-            if (!z || !z.name) return;
-            const n = z.name.trim();
-            if (uniqueNames.map(x => x.toLowerCase()).indexOf(n.toLowerCase()) === -1) {
-                uniqueNames.push(n);
-            }
-        });
-
-        const rows = [];
-        uniqueNames.forEach((name) => {
-            if (typeof window.getZariItemStats === 'function') {
-                const stats = window.getZariItemStats(name, window.currentZariKarkhanaFilter);
-                if (stats.aaya > 0 || stats.gaya > 0 || stats.bacha > 0) {
-                    rows.push(stats);
+            rawStock.forEach((z) => {
+                if (!z || !z.name) return;
+                const n = z.name.trim();
+                if (uniqueNames.map(x => x.toLowerCase()).indexOf(n.toLowerCase()) === -1) {
+                    uniqueNames.push(n);
                 }
-            }
-        });
+            });
+
+            uniqueNames.forEach((name) => {
+                if (typeof window.getZariItemStats === 'function') {
+                    const stats = window.getZariItemStats(name, window.currentZariKarkhanaFilter);
+                    if (stats.aaya > 0 || stats.gaya > 0 || stats.bacha > 0) {
+                        rows.push(stats);
+                    }
+                }
+            });
+        }
 
         const searchInp = document.getElementById('search-zari-input');
         const txt = searchInp ? searchInp.value.toLowerCase().trim() : '';
@@ -692,7 +796,10 @@
 
         if (!totalEntries) {
             tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:22px; color:#6b7280;'>Koi Zari Stock nahi mila.</td></tr>";
-            if (pager) pager.innerHTML = '';
+            if (pager) {
+                pager.innerHTML = '';
+                pager.style.display = 'none';
+            }
         } else {
             const totalPages = Math.ceil(totalEntries / ZARI_STOCK_PAGE_SIZE) || 1;
             if (zariStockCurrentPage > totalPages) zariStockCurrentPage = totalPages;
@@ -721,6 +828,7 @@
             tbody.innerHTML = html;
 
             if (pager) {
+                pager.style.display = isZariPassbookViewOpen ? 'none' : 'flex';
                 pager.innerHTML = `
                     <div style="font-size:12px; color:#6b7280; font-weight:600;">
                         Showing <strong>${startIndex + 1}</strong> - <strong>${Math.min(startIndex + ZARI_STOCK_PAGE_SIZE, totalEntries)}</strong> of <strong>${totalEntries}</strong> Items
@@ -784,12 +892,10 @@
        ======================================================================== */
     const openZariTransferModal = (safeName, availableBacha) => {
         const itemName = decodeURIComponent(safeName);
-        const existingModal = document.getElementById('zari-transfer-popup-modal');
-        if (existingModal) existingModal.remove();
 
         let karkhanas = (typeof window.getKarkhanasSafe === 'function')
             ? window.getKarkhanasSafe()
-            : (window.safeArray ? window.safeArray(window.getStore('karkhana_list')) : []);
+            : safeArr(window.getStore?.('karkhana_list'));
 
         const currentKid = (window.currentZariKarkhanaFilter !== 'all') ? window.currentZariKarkhanaFilter : 'k_main';
         const currentGodamName = (typeof window.getKarkhanaNameById === 'function')
@@ -803,6 +909,13 @@
             }
         });
 
+        if (!godownOptions) {
+            return alert('Transfer ke liye kam se kam 2 Godam (Karkhana) hone chahiye!');
+        }
+
+        const existingModal = document.getElementById('zari-transfer-popup-modal');
+        if (existingModal) existingModal.remove();
+
         const today = getToday();
 
         const modalHtml = `
@@ -810,7 +923,7 @@
                 <div class="zari-modal-card">
                     <div class="zari-modal-head">
                         <h3>Zari Stock Transfer</h3>
-                        <button type="button" class="zari-tally-btn" onclick="closeZariTransferModal()">&larr; [Esc] Close</button>
+                        <button type="button" id="zari-tr-close-btn" class="zari-modal-btn">&larr; [Esc] Close</button>
                     </div>
                     <div style="padding:16px;">
                         <div style="background:#fdf6e2; border:1px solid #e5d5a7; border-radius:6px; padding:10px 12px; margin-bottom:12px; font-size:12.5px;">
@@ -837,14 +950,20 @@
                             <input type="text" id="zari-transfer-note" placeholder="e.g. Mubarakpur unit ke liye bheja" class="zari-modal-inp">
                         </div>
                         <div style="display:flex; justify-content:flex-end; gap:8px;">
-                            <button type="button" class="zari-tally-btn" onclick="closeZariTransferModal()">Cancel [Esc]</button>
-                            <button type="button" class="zari-tally-btn-gold" onclick="submitZariTransferForm('${safeName}', '${currentKid}', ${availableBacha})">Transfer Confirm [Enter]</button>
+                            <button type="button" id="zari-tr-cancel-btn" class="zari-modal-btn">Cancel [Esc]</button>
+                            <button type="button" id="zari-tr-submit-btn" class="zari-modal-btn-gold">Transfer Confirm [Enter]</button>
                         </div>
                     </div>
                 </div>
             </div>`;
 
         document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        document.getElementById('zari-tr-close-btn')?.addEventListener('click', closeZariTransferModal);
+        document.getElementById('zari-tr-cancel-btn')?.addEventListener('click', closeZariTransferModal);
+        document.getElementById('zari-tr-submit-btn')?.addEventListener('click', () => {
+            submitZariTransferForm(safeName, currentKid, availableBacha);
+        });
 
         const order = ['zari-dest-godam', 'zari-transfer-qty', 'zari-transfer-date', 'zari-transfer-note'];
         order.forEach((fid, i) => {
@@ -875,6 +994,8 @@
     };
 
     const submitZariTransferForm = (safeName, fromKid, maxAvailable) => {
+        if (isTransferringZariUI) return alert('⏳ Transfer pehle se chal raha hai!');
+
         const itemName = decodeURIComponent(safeName);
         const toKid = document.getElementById('zari-dest-godam')?.value;
         const qty = safeNum(document.getElementById('zari-transfer-qty')?.value);
@@ -885,20 +1006,33 @@
         if (qty <= 0) return alert('Kripya sahi wazan (Kg) bharein!');
         if (qty > maxAvailable) return alert(`Aapke paas sirf ${maxAvailable.toFixed(2)} Kg bachi hai!`);
 
-        let success = false;
-        if (typeof window.transferZariStock === 'function') {
-            success = window.transferZariStock(d, itemName, fromKid, toKid, qty, note);
-        }
-
-        if (success) {
-            closeZariTransferModal();
-            if (isZariPassbookViewOpen) {
-                applyZariPassbookFilters();
-            } else {
-                renderZariTable();
+        isTransferringZariUI = true;
+        try {
+            let result = false;
+            if (typeof window.transferZariStock === 'function') {
+                result = window.transferZariStock(d, itemName, fromKid, toKid, qty, note);
             }
-            if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-            alert(`✅ ${qty.toFixed(2)} Kg Zari safalta-poorvak transfer ho gayi!`);
+
+            const isSuccess = (typeof result === 'object' && result !== null) ? Boolean(result.success) : Boolean(result);
+            const customMsg = (typeof result === 'object' && result !== null && result.message) ? result.message : '';
+
+            if (isSuccess) {
+                closeZariTransferModal();
+                if (isZariPassbookViewOpen) {
+                    applyZariPassbookFilters();
+                } else {
+                    renderZariTable();
+                }
+                if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+                alert(customMsg || `✅ ${qty.toFixed(2)} Kg Zari safalta-poorvak transfer ho gayi!`);
+            } else if (customMsg) {
+                alert(customMsg);
+            }
+        } catch (err) {
+            console.error('[ZariTransfer UI]', err);
+            alert('❌ Transfer fail ho gaya: ' + (err?.message || err));
+        } finally {
+            isTransferringZariUI = false;
         }
     };
 
@@ -1058,12 +1192,12 @@
     };
 
     const applyZariPassbookFilters = () => {
-        const targetItemLower = window.currentPassbookZariItem.toLowerCase();
-        const allHist = window.safeArray ? window.safeArray(window.getStore('zari_history')) : [];
+        const targetItemLower = window.currentPassbookZariItem.trim().toLowerCase();
+        const allHist = safeArr(window.getStore?.('zari_history'));
 
-        let itemHist = allHist.filter((x) => {
+        const itemHist = allHist.filter((x) => {
             if (!x?.name) return false;
-            if (x.name.toLowerCase() !== targetItemLower) return false;
+            if (x.name.trim().toLowerCase() !== targetItemLower) return false;
 
             if (window.currentZariKarkhanaFilter !== 'all') {
                 const rowKid = x.karkhanaId || 'k_main';
@@ -1072,17 +1206,16 @@
             return true;
         });
 
-        // Compute Running Closing Balance chronologically (without mutating original store objects)
+        // Compute Running Closing Balance chronologically (Date first, Timestamp tie-breaker)
         const chrono = itemHist.slice().sort((a, b) => {
-            const ta = a.timestamp || 0;
-            const tb = b.timestamp || 0;
-            if (ta !== tb) return ta - tb;
-            return String(a.date || '').localeCompare(String(b.date || ''));
+            const dCmp = String(a.date || '').localeCompare(String(b.date || ''));
+            if (dCmp !== 0) return dCmp;
+            return (a.timestamp || 0) - (b.timestamp || 0);
         });
 
         let runningBal = 0;
         const withRunning = chrono.map((r) => {
-            const aayaQty = safeNum(r.aaya || r.qty);
+            const aayaQty = getEntryAaya(r);
             const gayaQty = safeNum(r.gaya);
             runningBal = safeNum((runningBal + aayaQty - gayaQty).toFixed(2));
             return { ...r, _runningBal: runningBal };
@@ -1098,12 +1231,14 @@
 
         if (sTxt) {
             filtered = filtered.filter((x) => {
-                const rowString = `${x.date || ''} ${x.type || ''} ${x.kariger || ''} ${x.aaya || x.qty || ''} ${x.gaya || ''}`.toLowerCase();
+                const aayaStr = getEntryAaya(x);
+                const rowString = `${x.date || ''} ${x.type || ''} ${x.kariger || ''} ${aayaStr || ''} ${x.gaya || ''}`.toLowerCase();
                 return rowString.includes(sTxt);
             });
         }
 
-        filtered.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        // Exact reverse chronological order (newest first)
+        filtered.reverse();
 
         filteredZariPassbookCache = filtered;
 
@@ -1152,7 +1287,10 @@
         const totalEntries = filteredZariPassbookCache.length;
         if (!totalEntries) {
             tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:18px; color:#6b7280;'>Koi passbook entry nahi mili.</td></tr>";
-            if (pager) pager.innerHTML = '';
+            if (pager) {
+                pager.innerHTML = '';
+                pager.style.display = 'none';
+            }
             const statusEl = document.getElementById('zari-passbook-entry-status');
             if (statusEl) statusEl.textContent = '0 Entries';
             return;
@@ -1169,7 +1307,7 @@
 
         let html = '';
         pageRows.forEach((r, idx) => {
-            const aayaQty = safeNum(r.aaya || r.qty);
+            const aayaQty = getEntryAaya(r);
             const gayaQty = safeNum(r.gaya);
             const runBal = safeNum(r._runningBal);
 
@@ -1204,6 +1342,7 @@
         highlightZariPassbookRow(zariPassbookActiveIdx);
 
         if (pager) {
+            pager.style.display = 'flex';
             pager.innerHTML = `
                 <div style="font-size:12px; color:#6b7280; font-weight:600;">
                     Showing <strong>${startIndex + 1}</strong> - <strong>${Math.min(startIndex + ZARI_PAGE_SIZE, totalEntries)}</strong> of <strong>${totalEntries}</strong> entries
@@ -1233,6 +1372,19 @@
         const sec = document.getElementById('zari-section');
         if (!sec || sec.style.display === 'none') return;
         if (isAnyExpressOverlayOpen()) return;
+
+        // 0. Delete Confirm Modal open
+        const delModal = document.getElementById('zari-delete-confirm-modal');
+        if (delModal) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeZariDeleteConfirmModal();
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                document.getElementById('zari-del-confirm-btn')?.click();
+            }
+            return;
+        }
 
         // 1. Edit Modal open
         const editModal = document.getElementById('zari-edit-popup-modal');
@@ -1293,6 +1445,9 @@
             return;
         }
 
+        // Never block native browser shortcuts like Ctrl+R, Ctrl+T, Ctrl+F, Cmd+R
+        if (e.ctrlKey || e.metaKey) return;
+
         const tag = (document.activeElement && document.activeElement.tagName) || '';
         const isTyping = (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA');
 
@@ -1308,6 +1463,8 @@
             else printZariStockReport();
             return;
         }
+
+        if (e.altKey) return;
 
         if (e.key === 'F4') {
             e.preventDefault();
@@ -1419,7 +1576,7 @@
     };
 
     /* ========================================================================
-       9. A6 PAPER & THERMAL PRINTER PRINT ENGINES (UNCHANGED)
+       9. A6 PAPER & THERMAL PRINTER PRINT ENGINES
        ======================================================================== */
     const getZariKarkhanaPrintName = (kId) => {
         if (!kId || kId === 'all') return 'Sabhi Karkhane (All Units)';
@@ -1547,7 +1704,7 @@
 
         let rowsHtml = '';
         rows.forEach((r) => {
-            const aaya = safeNum(r.aaya || r.qty);
+            const aaya = getEntryAaya(r);
             const gaya = safeNum(r.gaya);
 
             totalAaya += aaya;
@@ -1636,13 +1793,13 @@
     };
 
     const printSingleZariPassbookEntry = (id) => {
-        const hist = window.safeArray ? window.safeArray(window.getStore('zari_history')) : [];
+        const hist = safeArr(window.getStore?.('zari_history'));
         const entry = hist.find(x => x && String(x.id) === String(id));
         if (!entry) return alert('Entry nahi mili!');
 
         const itemName = entry.name || window.currentPassbookZariItem || 'Zari Item';
         const kName = getZariKarkhanaPrintName(entry.karkhanaId || window.currentZariKarkhanaFilter);
-        const aaya = safeNum(entry.aaya || entry.qty);
+        const aaya = getEntryAaya(entry);
         const gaya = safeNum(entry.gaya);
         const isAaya = aaya > 0;
         const wazanDisplay = isAaya ? `+${aaya.toFixed(2)} Kg` : `-${gaya.toFixed(2)} Kg`;
@@ -1700,70 +1857,172 @@
     };
 
     /* ========================================================================
-       10. DELETE & EDIT ENGINES (100% SUPABASE-SAFE & TALLY WHITE & GOLD)
+       10. DELETE (PWA IN-APP MODAL) & EDIT ENGINES (LOCKED & ROLLBACK SAFE)
        ======================================================================== */
-    const deleteZariHistoryEntry = (histId) => {
-        if (!confirm('Kya aap sach me ye entry DELETE karna chahte hain?\nStock balance wapas sahi settle ho jayega.')) return;
+    const closeZariDeleteConfirmModal = () => {
+        const modal = document.getElementById('zari-delete-confirm-modal');
+        if (modal) modal.remove();
+    };
 
-        let hist = window.safeArray ? window.safeArray(window.getStore('zari_history')) : [];
+    const executeDeleteZariHistoryEntry = (histId) => {
+        if (isDeletingZari) return;
+        isDeletingZari = true;
+
+        const snapHist = JSON.parse(JSON.stringify(safeArr(window.getStore?.('zari_history'))));
+        const snapStock = JSON.parse(JSON.stringify(safeArr(window.getStore?.('zari_stock'))));
+        const snapTransfers = JSON.parse(JSON.stringify(safeArr(window.getStore?.('material_transfers'))));
+        const snapKarkhanaTransfers = JSON.parse(JSON.stringify(safeArr(window.getStore?.('karkhana_transfers'))));
+
+        try {
+            let hist = safeArr(window.getStore?.('zari_history'));
+            const entry = hist.find(x => x && String(x.id) === String(histId));
+            if (!entry) {
+                closeZariDeleteConfirmModal();
+                return alert('Entry nahi mili!');
+            }
+
+            const isTransfer = (entry.refId && String(entry.refId).includes('tr_zari')) ||
+                               (entry.type && entry.type.toLowerCase().includes('transfer'));
+            const isPurchase = !isTransfer && (entry.type && (entry.type.toLowerCase().includes('khareed') || entry.type.toLowerCase().includes('inward')));
+
+            if (isTransfer && entry.refId) {
+                hist = hist.filter(x => x && x.refId !== entry.refId);
+                const transfers = safeArr(window.getStore?.('material_transfers')).filter(t => t && t.id !== entry.refId);
+                if (typeof window.setStore === 'function') window.setStore('material_transfers', transfers);
+
+                const kTransfers = safeArr(window.getStore?.('karkhana_transfers')).filter(t => t && t.id !== entry.refId);
+                if (typeof window.setStore === 'function') window.setStore('karkhana_transfers', kTransfers);
+            } else {
+                hist = hist.filter(x => x && String(x.id) !== String(histId));
+            }
+
+            if (typeof window.setStore === 'function') window.setStore('zari_history', hist);
+
+            if (isPurchase) {
+                let remainingToSub = getEntryAaya(entry);
+                const list = safeArr(window.getStore?.('zari_stock'));
+                const targetKid = entry.karkhanaId || 'k_main';
+                const entryNameLower = String(entry.name || '').trim().toLowerCase();
+
+                let changed = false;
+                for (let i = 0; i < list.length && remainingToSub > 0; i++) {
+                    const x = list[i];
+                    if (!x || !x.name) continue;
+                    const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
+                    if (x.name.trim().toLowerCase() === entryNameLower && matchKid) {
+                        const curAaya = safeNum(x.aaya);
+                        if (curAaya > 0) {
+                            const deduct = Math.min(curAaya, remainingToSub);
+                            x.aaya = safeNum((curAaya - deduct).toFixed(2));
+                            x.bacha = safeNum((safeNum(x.aaya) - safeNum(x.gaya)).toFixed(2));
+                            remainingToSub = safeNum((remainingToSub - deduct).toFixed(2));
+                            changed = true;
+                        }
+                    }
+                }
+                if (changed && typeof window.setStore === 'function') {
+                    window.setStore('zari_stock', list);
+                }
+            }
+
+            closeZariDeleteConfirmModal();
+            applyZariPassbookFilters();
+            renderZariTable();
+            if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+            alert('🗑️ Entry safalta-poorvak delete ho gayi!');
+        } catch (err) {
+            console.error('[ZariDelete]', err);
+            try {
+                if (typeof window.setStore === 'function') {
+                    window.setStore('zari_history', snapHist);
+                    window.setStore('zari_stock', snapStock);
+                    window.setStore('material_transfers', snapTransfers);
+                    window.setStore('karkhana_transfers', snapKarkhanaTransfers);
+                }
+            } catch (rbErr) {
+                console.error('[ZariDelete Rollback]', rbErr);
+            }
+            closeZariDeleteConfirmModal();
+            alert('❌ Delete fail ho gaya — Data wapas restore ho gaya!');
+        } finally {
+            isDeletingZari = false;
+        }
+    };
+
+    const deleteZariHistoryEntry = (histId) => {
+        if (isDeletingZari) return;
+        const hist = safeArr(window.getStore?.('zari_history'));
         const entry = hist.find(x => x && String(x.id) === String(histId));
         if (!entry) return alert('Entry nahi mili!');
 
+        closeZariDeleteConfirmModal();
+
+        const aaya = getEntryAaya(entry);
+        const gaya = safeNum(entry.gaya);
+        const wazanTxt = aaya > 0 ? `+${aaya.toFixed(2)} Kg (Aayi)` : `-${gaya.toFixed(2)} Kg (Gayi)`;
         const isTransfer = (entry.refId && String(entry.refId).includes('tr_zari')) ||
                            (entry.type && entry.type.toLowerCase().includes('transfer'));
-        const isPurchase = !isTransfer && (entry.type && (entry.type.toLowerCase().includes('khareed') || entry.type.toLowerCase().includes('inward')));
 
-        if (isTransfer && entry.refId) {
-            hist = hist.filter(x => x.refId !== entry.refId);
-            const transfers = (window.safeArray ? window.safeArray(window.getStore('material_transfers')) : []).filter(t => t.id !== entry.refId);
-            if (typeof window.setStore === 'function') window.setStore('material_transfers', transfers);
-        } else {
-            hist = hist.filter(x => String(x.id) !== String(histId));
-        }
+        const modalHtml = `
+            <div id="zari-delete-confirm-modal" class="zari-modal-overlay">
+                <div class="zari-modal-card" style="max-width:400px;">
+                    <div class="zari-modal-head">
+                        <h3>Zari Entry Delete Karein?</h3>
+                        <button type="button" id="zari-del-close-btn" class="zari-modal-btn">&larr; [Esc] Close</button>
+                    </div>
+                    <div style="padding:16px;">
+                        <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:6px; padding:10px 12px; margin-bottom:12px; font-size:12.5px; color:#7f1d1d;">
+                            <div><strong>Item:</strong> ${esc(entry.name || '-')}</div>
+                            <div><strong>Tarikh:</strong> ${esc(entry.date || '-')}</div>
+                            <div><strong>Type:</strong> ${esc(entry.type || '-')}</div>
+                            <div style="font-weight:800; margin-top:4px;">Wazan: ${esc(wazanTxt)}</div>
+                        </div>
+                        <p style="margin:0 0 14px 0; font-size:12.5px; color:#4b5563; line-height:1.45;">
+                            ${isTransfer
+                                ? 'Ye Godown Transfer entry hai — dono godam aur transfer register se delete hogi. Stock balance settle ho jayega.'
+                                : 'Kya aap sach me ye entry delete karna chahte hain? Stock balance wapas settle ho jayega.'}
+                        </p>
+                        <div style="display:flex; justify-content:flex-end; gap:8px;">
+                            <button type="button" id="zari-del-cancel-btn" class="zari-modal-btn">Cancel [Esc]</button>
+                            <button type="button" id="zari-del-confirm-btn" class="zari-modal-btn-danger">Haan, Delete Karein [Enter]</button>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
 
-        if (typeof window.setStore === 'function') window.setStore('zari_history', hist);
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
 
-        if (isPurchase) {
-            const qty = safeNum(entry.aaya || entry.qty);
-            const list = window.safeArray ? window.safeArray(window.getStore('zari_stock')) : [];
-            const targetKid = entry.karkhanaId || 'k_main';
+        document.getElementById('zari-del-close-btn')?.addEventListener('click', closeZariDeleteConfirmModal);
+        document.getElementById('zari-del-cancel-btn')?.addEventListener('click', closeZariDeleteConfirmModal);
+        document.getElementById('zari-del-confirm-btn')?.addEventListener('click', () => {
+            executeDeleteZariHistoryEntry(histId);
+        });
 
-            const item = list.find((x) => {
-                const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-                return x?.name && x.name.toLowerCase() === entry.name.toLowerCase() && matchKid;
-            });
-
-            if (item) {
-                item.aaya = Math.max(0, safeNum((safeNum(item.aaya) - qty).toFixed(2)));
-                item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
-                if (typeof window.setStore === 'function') window.setStore('zari_stock', list);
-            }
-        }
-
-        applyZariPassbookFilters();
-        renderZariTable();
-        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-        alert('🗑️ Entry safalta-poorvak delete ho gayi!');
+        setTimeout(() => {
+            document.getElementById('zari-del-confirm-btn')?.focus();
+        }, 40);
     };
 
     const openZariEditModal = (id) => {
-        const hist = window.safeArray ? window.safeArray(window.getStore('zari_history')) : [];
+        const hist = safeArr(window.getStore?.('zari_history'));
         const entry = hist.find(x => x && String(x.id) === String(id));
         if (!entry) return alert('Entry nahi mili!');
 
         const existingModal = document.getElementById('zari-edit-popup-modal');
         if (existingModal) existingModal.remove();
 
-        const currentQty = safeNum(entry.aaya || entry.gaya || entry.qty);
-        const isAaya = safeNum(entry.aaya) > 0;
-        const typeLabel = isAaya ? 'Aaya (Inward)' : 'Gaya (Outward)';
+        const aayaVal = getEntryAaya(entry);
+        const gayaVal = safeNum(entry.gaya);
+        const isAaya = aayaVal > 0;
+        const currentQty = isAaya ? aayaVal : gayaVal;
+        const typeLabel = isAaya ? 'Aayi (Inward)' : 'Gayi (Outward)';
 
         const modalHtml = `
             <div id="zari-edit-popup-modal" class="zari-modal-overlay">
                 <div class="zari-modal-card" style="max-width:420px;">
                     <div class="zari-modal-head">
                         <h3>Edit Zari Entry</h3>
-                        <button type="button" class="zari-tally-btn" onclick="closeZariEditModal()">&larr; [Esc] Close</button>
+                        <button type="button" id="zari-edit-close-btn" class="zari-modal-btn">&larr; [Esc] Close</button>
                     </div>
                     <div style="padding:16px;">
                         <div style="background:#fdf6e2; border:1px solid #e5d5a7; padding:8px 12px; border-radius:6px; margin-bottom:12px; font-size:12.5px;">
@@ -1772,7 +2031,7 @@
                         </div>
                         <div style="margin-bottom:10px;">
                             <label style="font-size:12px; font-weight:700; color:#374151; display:block; margin-bottom:4px;">Tarikh (Date) :</label>
-                            <input type="date" id="zari-edit-date" value="${entry.date || ''}" class="zari-modal-inp">
+                            <input type="date" id="zari-edit-date" value="${esc(entry.date || '')}" class="zari-modal-inp">
                         </div>
                         <div style="margin-bottom:10px;">
                             <label style="font-size:12px; font-weight:700; color:#374151; display:block; margin-bottom:4px;">Party / Source / Note :</label>
@@ -1783,14 +2042,20 @@
                             <input type="number" step="0.01" id="zari-edit-qty" value="${currentQty.toFixed(2)}" class="zari-modal-inp">
                         </div>
                         <div style="display:flex; justify-content:flex-end; gap:8px;">
-                            <button type="button" class="zari-tally-btn" onclick="closeZariEditModal()">Cancel [Esc]</button>
-                            <button type="button" class="zari-tally-btn-gold" onclick="saveZariHistoryEdit('${esc(id)}')">Update [Enter]</button>
+                            <button type="button" id="zari-edit-cancel-btn" class="zari-modal-btn">Cancel [Esc]</button>
+                            <button type="button" id="zari-edit-save-btn" class="zari-modal-btn-gold">Update [Enter]</button>
                         </div>
                     </div>
                 </div>
             </div>`;
 
         document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        document.getElementById('zari-edit-close-btn')?.addEventListener('click', closeZariEditModal);
+        document.getElementById('zari-edit-cancel-btn')?.addEventListener('click', closeZariEditModal);
+        document.getElementById('zari-edit-save-btn')?.addEventListener('click', () => {
+            saveZariHistoryEdit(id);
+        });
 
         const order = ['zari-edit-date', 'zari-edit-kariger', 'zari-edit-qty'];
         order.forEach((fid, i) => {
@@ -1821,74 +2086,130 @@
     };
 
     const saveZariHistoryEdit = (id) => {
-        const hist = window.safeArray ? window.safeArray(window.getStore('zari_history')) : [];
-        const entry = hist.find(x => x && String(x.id) === String(id));
-        if (!entry) return alert('Entry nahi mili!');
+        if (isSavingZariEdit) return;
+        isSavingZariEdit = true;
 
-        const newDate = document.getElementById('zari-edit-date')?.value;
-        const newKariger = String(document.getElementById('zari-edit-kariger')?.value || '').trim();
-        const newQty = safeNum(document.getElementById('zari-edit-qty')?.value);
+        const snapHist = JSON.parse(JSON.stringify(safeArr(window.getStore?.('zari_history'))));
+        const snapStock = JSON.parse(JSON.stringify(safeArr(window.getStore?.('zari_stock'))));
+        const snapTransfers = JSON.parse(JSON.stringify(safeArr(window.getStore?.('material_transfers'))));
+        const snapKarkhanaTransfers = JSON.parse(JSON.stringify(safeArr(window.getStore?.('karkhana_transfers'))));
 
-        if (newQty <= 0) return alert('Kripya sahi wazan (Kg) darj karein!');
+        try {
+            const hist = safeArr(window.getStore?.('zari_history'));
+            const entry = hist.find(x => x && String(x.id) === String(id));
+            if (!entry) return alert('Entry nahi mili!');
 
-        const oldAaya = safeNum(entry.aaya);
-        const isTransfer = (entry.refId && String(entry.refId).includes('tr_zari')) ||
-                           (entry.type && entry.type.toLowerCase().includes('transfer'));
-        const isPurchase = !isTransfer && (entry.type && (entry.type.toLowerCase().includes('khareed') || entry.type.toLowerCase().includes('inward')));
+            const newDate = document.getElementById('zari-edit-date')?.value;
+            const newKariger = String(document.getElementById('zari-edit-kariger')?.value || '').trim();
+            const rawNewQty = safeNum(document.getElementById('zari-edit-qty')?.value);
 
-        entry.date = newDate;
-        entry.kariger = newKariger || 'Godown Purchase';
+            if (!newDate) return alert('Kripya Tarikh (Date) chunein!');
+            if (rawNewQty <= 0) return alert('Kripya sahi wazan (Kg) darj karein!');
+            const newQty = Number(rawNewQty.toFixed(2));
 
-        if (oldAaya > 0) {
-            const aayaDiff = newQty - oldAaya;
-            entry.aaya = newQty;
+            const oldAaya = getEntryAaya(entry);
+            const oldGaya = safeNum(entry.gaya);
+            const oldQty = oldAaya > 0 ? oldAaya : oldGaya;
 
-            if (isPurchase) {
-                const list = window.safeArray ? window.safeArray(window.getStore('zari_stock')) : [];
-                const targetKid = entry.karkhanaId || 'k_main';
+            const isTransfer = (entry.refId && String(entry.refId).includes('tr_zari')) ||
+                               (entry.type && entry.type.toLowerCase().includes('transfer'));
+            const isPurchase = !isTransfer && (entry.type && (entry.type.toLowerCase().includes('khareed') || entry.type.toLowerCase().includes('inward')));
 
-                const item = list.find((x) => {
-                    const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
-                    return x?.name && x.name.toLowerCase() === entry.name.toLowerCase() && matchKid;
-                });
-
-                if (item) {
-                    item.aaya = safeNum((safeNum(item.aaya) + aayaDiff).toFixed(2));
-                    item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
-                    if (typeof window.setStore === 'function') window.setStore('zari_stock', list);
+            // Transfer qty badhane par source godown stock limit check karein
+            if (isTransfer && entry.refId && newQty > oldQty) {
+                const transfers = safeArr(window.getStore?.('material_transfers'));
+                const tr = transfers.find(t => t && t.id === entry.refId);
+                if (tr && typeof window.getZariAvailableBalance === 'function') {
+                    const sourceKid = tr.fromKarkhanaId || 'k_main';
+                    const avail = window.getZariAvailableBalance(tr.itemName || entry.name, sourceKid);
+                    const maxAllowed = Number((avail + oldQty).toFixed(2));
+                    if (newQty > maxAllowed) {
+                        return alert(`Bhejne wale godam me kul ${maxAllowed.toFixed(2)} Kg tak hi transfer badhaya ja sakta hai!`);
+                    }
                 }
             }
-        } else {
-            entry.gaya = newQty;
-            entry.qty = newQty;
-        }
 
-        if (isTransfer && entry.refId) {
-            const pair = hist.find(x => x && x.refId === entry.refId && String(x.id) !== String(id));
-            if (pair) {
-                pair.date = newDate;
-                if (pair.aaya > 0) pair.aaya = newQty;
-                if (pair.gaya > 0) pair.gaya = newQty;
+            entry.date = newDate;
+            entry.kariger = newKariger || (isTransfer ? 'Godown Transfer' : 'Godown Purchase');
+
+            if (oldAaya > 0) {
+                const aayaDiff = Number((newQty - oldAaya).toFixed(2));
+                entry.aaya = newQty;
+
+                if (isPurchase) {
+                    const list = safeArr(window.getStore?.('zari_stock'));
+                    const targetKid = entry.karkhanaId || 'k_main';
+                    const entryNameLower = String(entry.name || '').trim().toLowerCase();
+
+                    const item = list.find((x) => {
+                        const matchKid = (!x.karkhanaId && targetKid === 'k_main') || String(x.karkhanaId) === String(targetKid);
+                        return x?.name && x.name.trim().toLowerCase() === entryNameLower && matchKid;
+                    });
+
+                    if (item) {
+                        item.aaya = Math.max(0, safeNum((safeNum(item.aaya) + aayaDiff).toFixed(2)));
+                        item.bacha = safeNum((safeNum(item.aaya) - safeNum(item.gaya)).toFixed(2));
+                        if (typeof window.setStore === 'function') window.setStore('zari_stock', list);
+                    }
+                }
+            } else {
+                entry.gaya = newQty;
+                if (Object.prototype.hasOwnProperty.call(entry, 'qty')) {
+                    delete entry.qty;
+                }
             }
 
-            const transfers = window.safeArray ? window.safeArray(window.getStore('material_transfers')) : [];
-            const tr = transfers.find(t => t && t.id === entry.refId);
-            if (tr) {
-                tr.date = newDate;
-                tr.qty = newQty;
-                tr.quantity = newQty;
-                if (typeof window.setStore === 'function') window.setStore('material_transfers', transfers);
+            if (isTransfer && entry.refId) {
+                const pair = hist.find(x => x && x.refId === entry.refId && String(x.id) !== String(id));
+                if (pair) {
+                    pair.date = newDate;
+                    pair.kariger = entry.kariger;
+                    if (safeNum(pair.aaya) > 0) pair.aaya = newQty;
+                    if (safeNum(pair.gaya) > 0) pair.gaya = newQty;
+                }
+
+                const transfers = safeArr(window.getStore?.('material_transfers'));
+                const tr = transfers.find(t => t && t.id === entry.refId);
+                if (tr) {
+                    tr.date = newDate;
+                    tr.qty = newQty;
+                    tr.quantity = newQty;
+                    if (typeof window.setStore === 'function') window.setStore('material_transfers', transfers);
+                }
+
+                const kTransfers = safeArr(window.getStore?.('karkhana_transfers'));
+                const kTr = kTransfers.find(t => t && t.id === entry.refId);
+                if (kTr) {
+                    kTr.date = newDate;
+                    kTr.quantity = newQty;
+                    if (typeof window.setStore === 'function') window.setStore('karkhana_transfers', kTransfers);
+                }
             }
+
+            if (typeof window.setStore === 'function') window.setStore('zari_history', hist);
+
+            closeZariEditModal();
+            applyZariPassbookFilters();
+            renderZariTable();
+
+            if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
+            alert('✅ Zari entry safalta-poorvak update ho gayi!');
+        } catch (err) {
+            console.error('[ZariEdit]', err);
+            try {
+                if (typeof window.setStore === 'function') {
+                    window.setStore('zari_history', snapHist);
+                    window.setStore('zari_stock', snapStock);
+                    window.setStore('material_transfers', snapTransfers);
+                    window.setStore('karkhana_transfers', snapKarkhanaTransfers);
+                }
+            } catch (rbErr) {
+                console.error('[ZariEdit Rollback]', rbErr);
+            }
+            alert('❌ Update fail ho gaya — Purana data restore ho gaya!');
+        } finally {
+            isSavingZariEdit = false;
         }
-
-        if (typeof window.setStore === 'function') window.setStore('zari_history', hist);
-
-        closeZariEditModal();
-        applyZariPassbookFilters();
-        renderZariTable();
-
-        if (typeof window.updateDashboardBadgeTotals === 'function') window.updateDashboardBadgeTotals();
-        alert('✅ Zari entry safalta-poorvak update ho gayi!');
     };
 
     /* ========================================================================
