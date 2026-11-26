@@ -1,6 +1,6 @@
 /* ============================================================================
    SIMPLICITY ERP - JOBWORK EXPRESS VOUCHER (UNIFIED TRAIL & DYNAMIC GROUPS)
-   File: jobwork-express/jobwork-express.js (v3.5 - Final Out = Finished Stock)
+   File: jobwork-express/jobwork-express.js (v3.6 - Zero-Bug In/Out & Trail Sync)
    100% Synced with: jobwork-trail, saree_history, jobwork_workers,
    jobwork_groups, dukan_firms, jobwork_firm_profile, jw_challan_seq,
    jobwork_sheets_*, dukan_transfer_history
@@ -132,7 +132,7 @@
     const normGodamId = (kid) => {
         const clean = String(kid || '').trim();
         if (!clean || clean === 'k_main') return 'k_main';
-        if (clean === 'all') return 'all';
+        if (clean.toLowerCase() === 'all') return 'all';
         return clean;
     };
 
@@ -423,7 +423,7 @@
             if (rem > 0 && mN) {
                 for (const ex of pMap.values()) {
                     if (rem <= 0) break;
-                    if (ex.pcs > 0 && ex.maker === mN && (!sN || ex.saree === sN)) {
+                    if (ex.pcs > 0 && ex.maker === mN && (!sN || ex.saree === sN) && (!kId || ex.karkhanaId === kId)) {
                         const t = Math.min(ex.pcs, rem); ex.pcs -= t; rem -= t;
                     }
                 }
@@ -431,7 +431,9 @@
             if (rem > 0) {
                 for (const ex of pMap.values()) {
                     if (rem <= 0) break;
-                    if (ex.pcs > 0) { const t = Math.min(ex.pcs, rem); ex.pcs -= t; rem -= t; }
+                    if (ex.pcs > 0 && (!kId || ex.karkhanaId === kId)) {
+                        const t = Math.min(ex.pcs, rem); ex.pcs -= t; rem -= t;
+                    }
                 }
             }
         };
@@ -449,13 +451,17 @@
                         const sN = normText(it.saree || meta.saree, 'GENERAL SAREE');
                         const kid = normGodamId(it.karkhanaId || meta.karkhanaId || 'k_main');
                         const st = Array.isArray(it.doneStages) ? it.doneStages : inferStages({ type: it.source || r.stockSource || 'fresh' });
-                        diya += q;
-                        if (activeFilter === 'all' || kid === activeFilter) addP(sN, mN, kid, st, q);
+                        if (activeFilter === 'all' || kid === activeFilter) {
+                            diya += q;
+                            addP(sN, mN, kid, st, q);
+                        }
                     });
                 } else if (safeInt(r.gayiQty) > 0) {
                     const q = safeInt(r.gayiQty);
-                    diya += q;
-                    if (activeFilter === 'all' || activeFilter === 'k_main') addP('GENERAL SAREE', 'KARKHANA', 'k_main', [], q);
+                    if (activeFilter === 'all' || activeFilter === 'k_main') {
+                        diya += q;
+                        addP('GENERAL SAREE', 'KARKHANA', 'k_main', [], q);
+                    }
                 }
 
                 const aItems = safeArr(r.aayiItems);
@@ -463,28 +469,37 @@
                     aItems.forEach((it) => {
                         const q = safeInt(it.qty);
                         if (q <= 0) return;
-                        aai += q;
                         const mN = it.karigar || it.maker ? normText(it.karigar || it.maker) : null;
                         const sN = it.saree ? normText(it.saree) : null;
                         const kid = it.karkhanaId ? normGodamId(it.karkhanaId) : null;
-                        if (activeFilter === 'all' || !kid || kid === activeFilter) dedP(sN, mN, kid, it.prevStages, q);
+                        const matchFilter = (activeFilter === 'all') || (kid ? kid === activeFilter : activeFilter === 'k_main');
+                        if (matchFilter) {
+                            aai += q;
+                            dedP(sN, mN, kid || (activeFilter === 'all' ? null : activeFilter), it.prevStages, q);
+                        }
                     });
                     if (safeInt(r.damagePcs) > 0 && !aItems.some((it) => it.isDamage)) {
-                        const dq = safeInt(r.damagePcs); aai += dq; dedP(null, null, null, null, dq);
+                        const dq = safeInt(r.damagePcs);
+                        if (activeFilter === 'all' || activeFilter === 'k_main') {
+                            aai += dq;
+                            dedP(null, null, activeFilter === 'all' ? null : 'k_main', null, dq);
+                        }
                     }
                 } else {
                     const aq = safeInt(r.aayiQty), dq = safeInt(r.damagePcs);
-                    if (aq > 0) { aai += aq; dedP(null, null, null, null, aq); }
-                    if (dq > 0) { aai += dq; dedP(null, null, null, null, dq); }
+                    if (activeFilter === 'all' || activeFilter === 'k_main') {
+                        if (aq > 0) { aai += aq; dedP(null, null, activeFilter === 'all' ? null : 'k_main', null, aq); }
+                        if (dq > 0) { aai += dq; dedP(null, null, activeFilter === 'all' ? null : 'k_main', null, dq); }
+                    }
                 }
             });
         });
 
-        if (openingPend > 0) {
+        if (openingPend > 0 && (activeFilter === 'all' || activeFilter === 'k_main')) {
             diya += openingPend;
             const curSum = Array.from(pMap.values()).reduce((s, x) => s + x.pcs, 0);
             const net = Math.max(0, diya - aai);
-            if (net > curSum && (activeFilter === 'all' || activeFilter === 'k_main')) {
+            if (net > curSum) {
                 addP('OPENING SAREE', 'PICHLA BAKI', 'k_main', [], net - curSum);
             }
         }
@@ -871,7 +886,7 @@
             const idx = jwPickerItems.findIndex((x) => x.data === activeCategory);
             jwPickerActiveIdx = idx >= 0 ? idx : 0;
         } else if (mode === 'movement') {
-            if (titleEl) titleEl.textContent = 'Select Len-Den';
+            if (titleEl) titleEl.textContent = 'Select Len-Den (Click Again / F5 to Toggle)';
             if (hintEl) hintEl.textContent = '↑↓ + Enter';
             jwPickerItems = [
                 { label: `${grpLabel(activeCategory)} Out (Bhejein)`, sub: 'Godam ➔ Worker', data: 'gayi' },
@@ -993,8 +1008,13 @@
             applyWorker();
         } else if (jwPickerMode === 'kariger') {
             selectedMaker = item.data;
+            selectedBatchKey = null;
             const mInp = document.getElementById('jw-exp-maker-input');
+            const sInp = document.getElementById('jw-exp-stage-input');
+            const qInp = document.getElementById('jw-exp-qty-input');
             if (mInp) mInp.value = item.data;
+            if (sInp) sInp.value = '';
+            if (qInp) qInp.value = '';
             jwPickerActiveIdx = 0;
             focusFirstField('jw-exp-stage-input');
         } else if (jwPickerMode === 'stage') {
@@ -1052,7 +1072,11 @@
         `;
         bar.style.display = 'flex';
         bar.scrollIntoView({ block: 'nearest' });
-        setTimeout(() => document.getElementById('jw-exp-accept-yes')?.focus(), 20);
+        const yesBtn = document.getElementById('jw-exp-accept-yes');
+        if (yesBtn) {
+            yesBtn.focus();
+            setTimeout(() => document.getElementById('jw-exp-accept-yes')?.focus(), 0);
+        }
     };
 
     const showJwAcceptPrompt = (show) => {
@@ -1084,10 +1108,22 @@
         `;
         bar.style.display = 'flex';
         bar.scrollIntoView({ block: 'nearest' });
-        setTimeout(() => document.getElementById('jw-exp-accept-yes')?.focus(), 20);
+        const yesBtn = document.getElementById('jw-exp-accept-yes');
+        if (yesBtn) {
+            yesBtn.focus();
+            setTimeout(() => document.getElementById('jw-exp-accept-yes')?.focus(), 0);
+        }
     };
 
     window.askSaveMasterJobWorkExpress = () => {
+        // Agar user ne Kariger + Stage + Pcs bhara hai aur seedha Save dabaa diya (bina + Add ke), toh auto-add karein
+        const pendingQty = safeInt(document.getElementById('jw-exp-qty-input')?.value);
+        if (selectedBatchKey && pendingQty > 0) {
+            const prevLen = expressBatchItems.length;
+            window.addExpressBatchRow();
+            if (expressBatchItems.length === prevLen) return;
+        }
+
         if (!expressBatchItems.length) {
             showExpStatus('⚠️ Batch me kam se kam 1 Saree jodein!', true);
             focusFirstField('jw-exp-maker-input');
@@ -1129,6 +1165,19 @@
         const destSel = document.getElementById('jw-exp-dest-select');
         const qtyInp = document.getElementById('jw-exp-qty-input');
 
+        let movWasFocusedBeforeDown = false;
+        if (movInp) {
+            movInp.addEventListener('mousedown', () => {
+                movWasFocusedBeforeDown = (document.activeElement === movInp);
+            });
+            movInp.addEventListener('click', () => {
+                if (movWasFocusedBeforeDown) {
+                    toggleMovementType(false);
+                    showJwRightPicker('movement', '');
+                }
+            });
+        }
+
         const attachPicker = (el, modeName, filterable) => {
             if (!el) return;
             el.addEventListener('focus', () => showJwRightPicker(modeName, ''));
@@ -1138,7 +1187,23 @@
                         const wSel = document.getElementById('jw-exp-worker');
                         const typed = el.value.trim().toLowerCase();
                         const exact = getWorkerPickerList('').find((w) => w.label.toLowerCase() === typed);
-                        if (wSel) wSel.value = exact ? exact.id : '';
+                        const nextId = exact ? String(exact.id) : '';
+                        const prevId = wSel ? String(wSel.value || '') : '';
+
+                        if (prevId && nextId !== prevId && movementType === 'aayi' && activeCategory !== 'dukan' && expressBatchItems.length > 0) {
+                            const prevW = getWorkerPickerList('').find((w) => String(w.id) === prevId);
+                            if (prevW) el.value = prevW.label;
+                            confirmClearBatchIfNeeded('Worker', () => {
+                                resetCurrentBatchPickerFields();
+                                if (wSel) wSel.value = nextId;
+                                el.value = exact ? exact.label : '';
+                                jwPickerActiveIdx = 0;
+                                showJwRightPicker(modeName, el.value);
+                            });
+                            return;
+                        }
+                        if (nextId !== prevId) resetCurrentBatchPickerFields();
+                        if (wSel) wSel.value = nextId;
                     }
                     jwPickerActiveIdx = 0;
                     showJwRightPicker(modeName, el.value);
@@ -1197,6 +1262,12 @@
             });
             makerInp.addEventListener('input', () => {
                 jwMakerArrowUsed = true;
+                selectedMaker = null;
+                selectedBatchKey = null;
+                const sInp = document.getElementById('jw-exp-stage-input');
+                const qInp = document.getElementById('jw-exp-qty-input');
+                if (sInp) sInp.value = '';
+                if (qInp) qInp.value = '';
                 jwPickerActiveIdx = (!makerInp.value.trim() && expressBatchItems.length > 0) ? -1 : 0;
                 showJwRightPicker('kariger', makerInp.value);
             });
@@ -1265,23 +1336,40 @@
         const acceptOpen = Boolean(acceptBar && acceptBar.style.display !== 'none');
 
         if (acceptOpen) {
+            if (e.key === 'Tab') {
+                const btns = Array.from(acceptBar.querySelectorAll('button')).filter((b) => b.offsetParent !== null);
+                if (btns.length) {
+                    e.preventDefault(); e.stopImmediatePropagation();
+                    const cur = btns.indexOf(document.activeElement);
+                    const nxt = e.shiftKey ? (cur - 1 + btns.length) % btns.length : (cur + 1) % btns.length;
+                    btns[nxt]?.focus();
+                }
+                return;
+            }
+
+            const noModifier = !e.ctrlKey && !e.metaKey && !e.altKey;
             const k = e.key.toLowerCase();
+
             if (pendingClearAction) {
-                if (k === 'y' || (e.key === 'Enter' && document.activeElement?.id === 'jw-exp-accept-yes')) {
+                if ((noModifier && k === 'y') || (e.key === 'Enter' && !e.ctrlKey && (!acceptBar.contains(document.activeElement) || document.activeElement?.id === 'jw-exp-accept-yes'))) {
                     e.preventDefault(); e.stopImmediatePropagation(); window.__jwConfirmClear(); return;
                 }
-                if (k === 'n' || e.key === 'Escape') {
+                if ((noModifier && k === 'n') || e.key === 'Escape') {
                     e.preventDefault(); e.stopImmediatePropagation(); window.__jwCancelAccept(); return;
                 }
                 return;
             }
-            if (k === 'y') { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress(''); return; }
-            if (k === 'p') { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress('challan'); return; }
-            if (k === 'l' && isOutstationOutActive()) { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress('slip'); return; }
-            if (k === 'b' && isOutstationOutActive()) { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress('both'); return; }
-            if (k === 'n' || e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); window.__jwCancelAccept(); return; }
-            if ((e.key === 'Enter' && document.activeElement?.id === 'jw-exp-accept-yes') || (e.ctrlKey && e.key === 'Enter')) {
+
+            if (noModifier && k === 'y') { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress(''); return; }
+            if (noModifier && k === 'p') { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress('challan'); return; }
+            if (noModifier && k === 'l' && isOutstationOutActive()) { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress('slip'); return; }
+            if (noModifier && k === 'b' && isOutstationOutActive()) { e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress('both'); return; }
+            if ((noModifier && k === 'n') || e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); window.__jwCancelAccept(); return; }
+            if ((e.key === 'Enter' && (!acceptBar.contains(document.activeElement) || document.activeElement?.id === 'jw-exp-accept-yes')) || (e.ctrlKey && e.key === 'Enter')) {
                 e.preventDefault(); e.stopImmediatePropagation(); submitMasterJobWorkExpress(''); return;
+            }
+            if (e.key === 'Enter' && acceptBar.contains(document.activeElement)) {
+                return; // Let the currently focused accept button execute its own onclick
             }
         }
 
@@ -1313,12 +1401,18 @@
         const groups = getWorkGroups();
         if (['F1', 'F2', 'F3', 'F4'].includes(e.key)) {
             e.preventDefault(); e.stopImmediatePropagation();
+            if (acceptOpen && !pendingClearAction) showJwAcceptPrompt(false);
             const idx = parseInt(e.key.slice(1), 10) - 1;
             if (groups[idx]) switchJobWorkCategory(groups[idx].key, true);
             else if (e.key === 'F4') switchJobWorkCategory('dukan', true);
             return;
         }
-        if (e.key === 'F5') { e.preventDefault(); e.stopImmediatePropagation(); toggleMovementType(true); return; }
+        if (e.key === 'F5') {
+            e.preventDefault(); e.stopImmediatePropagation();
+            if (acceptOpen && !pendingClearAction) showJwAcceptPrompt(false);
+            toggleMovementType(true);
+            return;
+        }
         if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); window.askSaveMasterJobWorkExpress(); return; }
         if (e.altKey && (e.key === 'p' || e.key === 'P')) { e.preventDefault(); e.stopImmediatePropagation(); printLastSavedJobWorkChallan(); return; }
         if (e.altKey && (e.key === 'l' || e.key === 'L')) { e.preventDefault(); e.stopImmediatePropagation(); printLastSavedJobWorkPackingSlip(); }
@@ -1345,8 +1439,12 @@
     window.switchJobWorkCategory = (cat, advanceFocus = false) => {
         if (cat !== activeCategory) {
             if (!confirmClearBatchIfNeeded('Process', () => switchJobWorkCategory(cat, advanceFocus))) return false;
+            const prevCat = activeCategory;
             activeCategory = cat;
-            movementType = 'gayi';
+            // Work groups ke beech switch par user ka In/Out mode preserve rakhein; sirf dukan <-> group par reset karein
+            if (cat === 'dukan' || prevCat === 'dukan') {
+                movementType = 'gayi';
+            }
             expMeta = { jwNo: '', transport: '', lrNo: '', designNote: '' };
             resetCurrentBatchPickerFields();
             updateCategoryUI();
@@ -1355,7 +1453,11 @@
             renderExpressBatchGrid();
         }
         if (advanceFocus) {
-            focusFirstField(activeCategory === 'dukan' ? 'jw-exp-worker-input' : 'jw-exp-movement-input');
+            const targetId = activeCategory === 'dukan' ? 'jw-exp-worker-input' : 'jw-exp-movement-input';
+            focusFirstField(targetId);
+            if (document.activeElement?.id === targetId) {
+                showJwRightPicker(activeCategory === 'dukan' ? 'worker' : 'movement', '');
+            }
         }
         return true;
     };
@@ -1367,7 +1469,12 @@
         resetCurrentBatchPickerFields();
         updateMovementUI();
         renderExpressBatchGrid();
-        if (advanceFocus) focusFirstField('jw-exp-worker-input');
+        if (advanceFocus) {
+            focusFirstField('jw-exp-worker-input');
+            if (document.activeElement?.id === 'jw-exp-worker-input') {
+                showJwRightPicker('worker', '');
+            }
+        }
     };
 
     const updateCategoryUI = () => {
@@ -1391,7 +1498,18 @@
         const slipBtn = document.getElementById('jw-exp-last-slip-btn');
 
         if (movRow) movRow.style.display = activeCategory === 'dukan' ? 'none' : 'grid';
-        if (movInp) movInp.value = movementType === 'gayi' ? `${grpLabel(activeCategory)} Out (Bhejein)` : `${grpLabel(activeCategory)} In (Wapas Lein)`;
+        if (movInp) {
+            movInp.value = movementType === 'gayi' ? `${grpLabel(activeCategory)} Out (Bhejein)` : `${grpLabel(activeCategory)} In (Wapas Lein)`;
+            if (movementType === 'aayi') {
+                movInp.style.color = '#15803d';
+                movInp.style.background = '#f0fdf4';
+                movInp.style.borderColor = '#16a34a';
+            } else {
+                movInp.style.color = '#b45309';
+                movInp.style.background = '#fffbeb';
+                movInp.style.borderColor = '#f59e0b';
+            }
+        }
 
         const isOutst = isOutstationOutActive();
         if (outstBox) {
@@ -1403,7 +1521,7 @@
                 const tEl = document.getElementById('jw-exp-trans');
                 const lEl = document.getElementById('jw-exp-lr');
                 const nEl = document.getElementById('jw-exp-design');
-                if (fEl) fEl.value = `${firm.name}${firm.gst ? ` (GST: ${firm.gst})` : ''}`;
+                if (fEl) fEl.value = `${firm.name}${firm.gst ? ` (GST: ${esc(firm.gst)})` : ''}`;
                 if (!expMeta.jwNo) expMeta.jwNo = getNextChallanNo();
                 if (jEl) jEl.value = expMeta.jwNo;
                 if (tEl) tEl.value = expMeta.transport;
@@ -1553,6 +1671,7 @@
         const snapSheets = (!isDukan && workerId) ? JSON.parse(JSON.stringify(safeArr(getFromStore(`jobwork_sheets_${workerId}`)))) : null;
         const snapSeq = getFromStore(SEQ_STORE_KEY);
         let mutatedStorage = false;
+        let bumpedSeq = false;
 
         isSubmitting = true;
         window._lastExpSubmit = Date.now();
@@ -1661,7 +1780,7 @@
                 const targetLabel = `${wName} (${gLabel})`;
                 const isGayi = (movementType === 'gayi');
 
-                const jwNo = isOutstOut ? (expMeta.jwNo || getNextChallanNo()).trim() : '';
+                const jwNo = isOutstOut ? ((expMeta.jwNo || '').trim() || getNextChallanNo()) : '';
                 const transport = isOutstOut ? (expMeta.transport || '').trim() : '';
                 const lrNo = isOutstOut ? (expMeta.lrNo || '').trim() : '';
                 const designNote = isOutstOut ? (expMeta.designNote || '').trim() : '';
@@ -1776,7 +1895,10 @@
                 mutatedStorage = true;
                 setToStore('saree_history', sH);
                 setToStore(`jobwork_sheets_${workerId}`, sheets);
-                if (isOutstOut && jwNo) bumpChallanSeq(jwNo);
+                if (isOutstOut && jwNo) {
+                    bumpChallanSeq(jwNo);
+                    bumpedSeq = true;
+                }
 
                 if (isOutstOut) {
                     const sareeMap = new Map();
@@ -1864,7 +1986,9 @@
                     setToStore('saree_history', snapSaree);
                     if (isDukan && snapDukan !== null) setToStore('dukan_transfer_history', snapDukan);
                     if (!isDukan && workerId && snapSheets !== null) setToStore(`jobwork_sheets_${workerId}`, snapSheets);
-                    setToStore(SEQ_STORE_KEY, snapSeq);
+                    if (bumpedSeq && typeof snapSeq === 'number' && Number.isFinite(snapSeq)) {
+                        setToStore(SEQ_STORE_KEY, snapSeq);
+                    }
                 } catch (_) {}
                 if (window._JWT && window._JWT.s) window._JWT.s.cachedSnapshot = null;
                 if (typeof window.invalidateJobWorkCache === 'function') window.invalidateJobWorkCache(isDukan ? null : workerId);
